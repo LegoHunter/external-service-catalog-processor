@@ -1,7 +1,7 @@
 import-path: /dev/config
 
 spring:
-  profiles:
-    default: local,sandbox
   config:
     import: classpath:${import-path}/database/database-configuration.yml
+  datasource:
+    database-key-name: test
