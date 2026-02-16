@@ -12,7 +12,7 @@ spec:
             - name: processor
               env:
                 - name: SPRING_PROFILES_ACTIVE
-                  value: sandbox
+                  value: sandbox,kubernetes
               resources:
                 requests:
                   memory: 256Mi

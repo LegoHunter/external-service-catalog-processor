@@ -12,4 +12,4 @@ spec:
             - name: processor
               env:
                 - name: SPRING_PROFILES_ACTIVE
-                  value: dev
+                  value: dev,kubernetes

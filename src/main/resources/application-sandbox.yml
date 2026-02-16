@@ -1,0 +1,20 @@
+spring:
+  config:
+    import: file:${import-path}/database/database-configuration.yml
+  datasource:
+    database-key-name: rasppi5-01-lego-sandbox
+    hikari:
+      connection-timeout: 10000
+      idle-timeout: 30000
+      connection-test-query: SELECT 1
+      initialization-fail-timeout: 10000
+      auto-commit: false
+      login-timeout: 10000
+      minimum-idle: 10
+      maximum-pool-size: 10
+      validation-timeout: 10000
+      pool-name: rasppi5-01-mysql-jdbc-pool
+
+logging:
+  level:
+    com.zaxxer: DEBUG

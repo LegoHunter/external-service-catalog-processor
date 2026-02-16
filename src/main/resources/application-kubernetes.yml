@@ -1,0 +1,11 @@
+import-path: /etc/.credentials
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+spring:
+  main:
+    banner-mode: off

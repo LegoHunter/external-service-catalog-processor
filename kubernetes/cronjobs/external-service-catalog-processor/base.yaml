@@ -2,29 +2,47 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: external-service-catalog-processor
-  labels:
-    app: external-service-catalog-processor
 spec:
-  schedule: "0 */4 * * *"   # default
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  schedule: "0 */4 * * *"  # every 4 hours for sandbox/dev
   jobTemplate:
     spec:
-      backoffLimit: 2
       template:
+        metadata:
+          labels:
+            app: external-service-catalog-processor
         spec:
-          restartPolicy: OnFailure
           containers:
             - name: processor
               image: quay.io/tvattima/external-service-catalog-processor:latest
+              imagePullPolicy: Always
               env:
+                - name: JAVA_TOOL_OPTIONS
+                  value: >-
+                    -XX:MaxRAMPercentage=75
+                    -XX:InitialRAMPercentage=50
+                    -XX:+UseContainerSupport
                 - name: SPRING_PROFILES_ACTIVE
-                  value: sandbox
-              resources:
-                requests:
-                  memory: 256Mi
-                  cpu: 100m
-                limits:
-                  memory: 512Mi
-                  cpu: 250m
+                  value: sandbox,kubernetes
+              volumeMounts:
+                - name: bricklink
+                  mountPath: /etc/.credentials/bricklink
+                - name: database
+                  mountPath: /etc/.credentials/database
+          volumes:
+            - name: bricklink
+              projected:
+                sources:
+                  - secret:
+                      name: bricklink-client-api-keys-secret
+                      items:
+                        - key: bricklink-client-api-keys.yml
+                          path: bricklink-client-api-keys.yml
+                  - secret:
+                      name: bricklink-web-secret
+                      items:
+                        - key: bricklink-web.yml
+                          path: bricklink-web.yml
+            - name: database
+              secret:
+                secretName: database-configuration-secret
+          restartPolicy: OnFailure

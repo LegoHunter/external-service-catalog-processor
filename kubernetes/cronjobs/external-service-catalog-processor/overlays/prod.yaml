@@ -12,7 +12,7 @@ spec:
             - name: processor
               env:
                 - name: SPRING_PROFILES_ACTIVE
-                  value: prod
+                  value: prod,kubernetes
               resources:
                 requests:
                   memory: 512Mi
