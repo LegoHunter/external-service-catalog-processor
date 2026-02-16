@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: external-service-catalog-processor
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: processor
+              env:
+                - name: SPRING_PROFILES_ACTIVE
+                  value: prod
+              resources:
+                requests:
+                  memory: 512Mi
+                limits:
+                  memory: 1Gi

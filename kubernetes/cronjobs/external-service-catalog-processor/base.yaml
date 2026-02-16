@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: external-service-catalog-processor
+  labels:
+    app: external-service-catalog-processor
+spec:
+  schedule: "0 */4 * * *"   # default
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: processor
+              image: quay.io/tvattima/external-service-catalog-processor:latest
+              env:
+                - name: SPRING_PROFILES_ACTIVE
+                  value: sandbox
+              resources:
+                requests:
+                  memory: 256Mi
+                  cpu: 100m
+                limits:
+                  memory: 512Mi
+                  cpu: 250m
