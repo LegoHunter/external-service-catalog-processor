@@ -32,8 +32,10 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build Maven
-        run: mvn -DskipTests package
+      - name: Build and deploy Maven snapshot
+        run: mvn --update-snapshots deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Buildah Build
         id: buildah-build
