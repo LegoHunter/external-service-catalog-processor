@@ -89,11 +89,10 @@ jobs:
           echo "Deploying $JOB_NAME CronJob to $OVERLAY ($NAMESPACE)"
           
           # Build base + overlay patch, inject image
+          # Build kustomize output and inject dynamic image tag
           KUSTOMIZE_OUTPUT=$(kubectl kustomize kubernetes/cronjobs/$JOB_NAME | \
-            yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' - \
-              kubernetes/cronjobs/$JOB_NAME/overlays/$OVERLAY.yaml | \
-            sed "s|$IMAGE_REPO:.*|$IMAGE_REPO:$IMAGE_TAG|g")
-          
+          sed "s|$IMAGE_REPO:.*|$IMAGE_REPO:$IMAGE_TAG|g")
+  
           echo "$KUSTOMIZE_OUTPUT" | kubectl apply -n $NAMESPACE -f -
           
           echo "CronJob deployed successfully"
