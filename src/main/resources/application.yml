@@ -3,7 +3,3 @@ spring:
     default: local,sandbox
   application:
     name: External Service Catalog Processor
-
-lego:
-  data:
-    enabled: true
