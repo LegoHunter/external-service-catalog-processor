@@ -1,10 +1,10 @@
-package io.legohunter.job;
+package io.legohunter.ingress;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 @SpringBootTest
-class ExternalServiceCatalogProcessorApplicationTests {
+class LegoDataIngressTests {
 
 	@Test
 	void contextLoads() {

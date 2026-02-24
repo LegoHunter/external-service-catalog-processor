@@ -1,0 +1,8 @@
+lego:
+  kafka:
+    consumer:
+      username: kafkauser
+      password: password
+    producer:
+      username: kafkauser
+      password: password

@@ -11,7 +11,7 @@
     <groupId>io.legohunter</groupId>
     <artifactId>lego-data-ingress</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>Lego External Service Data Ingestion</name>
+    <name>Lego :: Data Ingress</name>
     <description>Ingests data from external Lego data providers.</description>
 
     <properties>

@@ -1,0 +1,4 @@
+lego:
+  minio:
+    accessKey: abcd-1234
+    secretKey: xxyyzz
