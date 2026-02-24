@@ -3,7 +3,7 @@ kind: CronJob
 metadata:
   name: external-service-catalog-processor
 spec:
-  schedule: "0 */4 * * *"
+  schedule: "*/3 * * * *"
   jobTemplate:
     spec:
       template:

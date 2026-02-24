@@ -1,4 +1,4 @@
-package io.legohunter.job;
+package io.legohunter.ingress;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

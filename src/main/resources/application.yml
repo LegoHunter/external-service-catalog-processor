@@ -3,3 +3,21 @@ spring:
     default: local,sandbox
   application:
     name: External Service Catalog Processor
+  kafka:
+    properties:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      security:
+        protocol: SASL_SSL
+      sasl:
+        mechanism: SCRAM-SHA-512
+    consumer:
+      properties:
+        sasl:
+          jaas:
+            config: "org.apache.kafka.common.security.scram.ScramLoginModule required username='${lego.kafka.consumer.username}' password='${lego.kafka.consumer.password}';"
+    producer:
+      properties:
+        sasl:
+          jaas:
+            config: "org.apache.kafka.common.security.scram.ScramLoginModule required username='${lego.kafka.producer.username}' password='${lego.kafka.producer.password}';"

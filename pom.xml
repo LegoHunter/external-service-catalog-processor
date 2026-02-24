@@ -9,16 +9,16 @@
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>io.legohunter</groupId>
-    <artifactId>external-service-catalog-processor</artifactId>
+    <artifactId>lego-data-ingress</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>External Service Catalog Processor</name>
-    <description>Processes External Service Catalogs</description>
+    <name>Lego External Service Data Ingestion</name>
+    <description>Ingests data from external Lego data providers.</description>
 
     <properties>
         <java.version>21</java.version>
         <spring-cloud.version>2025.0.1</spring-cloud.version>
         <github.organization>LegoHunter</github.organization>
-        <github.repo.url>https://github.com/${github.organization}/external-service-catalog-processor.git
+        <github.repo.url>https://github.com/${github.organization}/lego-data-ingress.git
         </github.repo.url>
     </properties>
 
@@ -26,7 +26,7 @@
         <repository>
             <id>github</id>
             <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/${github.organization}/external-service-catalog-processor</url>
+            <url>https://maven.pkg.github.com/${github.organization}/lego-data-ingress</url>
         </repository>
     </distributionManagement>
 
@@ -69,6 +69,46 @@
             <artifactId>lego-data-model</artifactId>
             <version>1.0.0-SNAPSHOT</version>
         </dependency>
+
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+            <version>8.6.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-xml</artifactId>
+            <version>2.19.2</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fasterxml.woodstox</groupId>
+            <artifactId>woodstox-core</artifactId>
+            <version>7.1.1</version>
+        </dependency>
+
+        <!-- ShedLock Spring Boot starter -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+            <version>5.5.0</version>
+        </dependency>
+
+        <!-- JDBC lock provider -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-jdbc-template</artifactId>
+            <version>5.5.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>1.14.1</version>
+        </dependency>
+
+
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing-bridge-brave</artifactId>
@@ -149,6 +189,10 @@
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
         </dependency>
     </dependencies>
     <dependencyManagement>
