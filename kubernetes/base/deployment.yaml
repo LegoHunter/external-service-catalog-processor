@@ -67,6 +67,10 @@ spec:
               mountPath: /etc/.credentials/bricklink
             - name: database
               mountPath: /etc/.credentials/database
+            - name: minio
+              mountPath: /etc/.credentials/minio
+            - name: kafka
+              mountPath: /etc/.credentials/kafka
       volumes:
         - name: bricklink
           projected:
@@ -84,4 +88,10 @@ spec:
         - name: database
           secret:
             secretName: database-configuration-secret
+        - name: minio
+          secret:
+            secretName: minio-configuration-secret
+        - name: kafka
+          secret:
+            secretName: kafka-configuration-secret
       restartPolicy: Always
