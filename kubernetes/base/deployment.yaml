@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lego-data-ingress
+  labels:
+    app: lego-data-ingress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lego-data-ingress
+  template:
+    metadata:
+      name: lego-data-ingress
+      labels:
+        app: lego-data-ingress   # selector label (required)
+        app.kubernetes.io/name: lego-data-ingress
+        app.kubernetes.io/instance: sandbox
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: lego-platform
+    spec:
+      containers:
+        - name: lego-data-ingress
+          image: quay.io/tvattima/lego-data-ingress
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+
+#          startupProbe:
+#            httpGet:
+#              path: /actuator/health/liveness
+#              port: 8080
+#            failureThreshold: 60   # 60 × 5s = 300s max startup
+#            periodSeconds: 5
+#            timeoutSeconds: 2
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 10
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 5
+
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: >-
+                -XX:MaxRAMPercentage=75
+                -XX:InitialRAMPercentage=50
+                -XX:+UseContainerSupport
+            - name: ABC
+              value: "1234"
+          volumeMounts:
+            - name: bricklink
+              mountPath: /etc/.credentials/bricklink
+            - name: database
+              mountPath: /etc/.credentials/database
+      volumes:
+        - name: bricklink
+          projected:
+            sources:
+              - secret:
+                  name: bricklink-client-api-keys-secret
+                  items:
+                    - key: bricklink-client-api-keys.yml
+                      path: bricklink-client-api-keys.yml
+              - secret:
+                  name: bricklink-web-secret
+                  items:
+                    - key: bricklink-web.yml
+                      path: bricklink-web.yml
+        - name: database
+          secret:
+            secretName: database-configuration-secret
+      restartPolicy: Always

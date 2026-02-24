@@ -7,10 +7,10 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 @SpringBootApplication(exclude = {
         DataSourceAutoConfiguration.class
 })
-public class ExternalServiceCatalogProcessorApplication {
+public class LegoDataIngress {
 
 	public static void main(String[] args) {
-		SpringApplication.run(ExternalServiceCatalogProcessorApplication.class, args);
+		SpringApplication.run(LegoDataIngress.class, args);
 	}
 
 }

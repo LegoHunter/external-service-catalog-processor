@@ -16,3 +16,27 @@ spring:
       maximum-pool-size: 10
       validation-timeout: 10000
       pool-name: rasppi5-01-mysql-jdbc-pool
+
+lego:
+  minio:
+    url: https://api.minio.dev.internal.legohunter.io
+  kafka:
+    topic:
+      bricklink-category-upload: dev-bricklink-category-upload
+      bricklink-category-entry: dev-bricklink-category-entry
+      bricklink-catalog-upload: dev-bricklink-catalog-upload
+      bricklink-catalog-entry: dev-bricklink-catalog-entry
+      rebrickable-catalog-upload: dev-rebrickable-catalog-upload
+      rebrickable-catalog-entry: dev-rebrickable-catalog-entry
+      rebrickable-theme-upload: dev-rebrickable-category-upload
+      rebrickable-theme-entry: dev-rebrickable-category-entry
+    consumer:
+      group-id:
+        bricklink-category-upload: dev-bricklink-category-upload-group
+        bricklink-category-entry: dev-bricklink-category-entry-group
+        bricklink-catalog-upload: dev-bricklink-catalog-upload-group
+        bricklink-catalog-entry: dev-bricklink-catalog-entry-group
+        rebrickable-catalog-upload: dev-rebrickable-catalog-upload-group
+        rebrickable-catalog-entry: dev-rebrickable-catalog-entry-group
+        rebrickable-theme-upload: dev-rebrickable-category-upload-group
+        rebrickable-theme-entry: dev-rebrickable-category-entry-group

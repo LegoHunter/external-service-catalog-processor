@@ -1,0 +1,23 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: lego-data-ingress
+  annotations:
+    kubernetes.io/ingress.class: traefik-external
+  labels:
+    app.kubernetes.io/name: lego-data-ingress
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: lego-platform
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`lego-data-ingress.sandbox.internal.legohunter.io`)
+      kind: Rule
+      services:
+        - name: lego-data-ingress
+          port: 8080
+      middlewares:
+        - name: default-headers
+  tls:
+    secretName: sandbox-internal-legohunter-io-tls

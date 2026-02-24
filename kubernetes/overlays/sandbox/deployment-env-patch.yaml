@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lego-data-ingress
+spec:
+  template:
+    spec:
+      containers:
+        - name: lego-data-ingress
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: kubernetes,sandbox
