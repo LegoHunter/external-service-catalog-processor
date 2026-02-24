@@ -12,13 +12,16 @@ on:
       - closed
 
 jobs:
-  build-and-push:
+
+  # -----------------------------------------
+  # 1️⃣ Maven Build & Deploy
+  # -----------------------------------------
+  maven-build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    outputs:
-      image-tag: ${{ steps.buildah-build.outputs.image }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -33,12 +36,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # -----------------------------------------
+  # 2️⃣ Container Build & Push
+  # -----------------------------------------
+  container-build:
+    runs-on: ubuntu-latest
+    needs: maven-build
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image-tags: ${{ steps.buildah-build.outputs.tags }}
+
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Buildah Build
         id: buildah-build
         uses: redhat-actions/buildah-build@v2
         with:
           image: quay.io/tvattima/lego-data-ingress
-          # Tags: SHA + snapshot + latest for feature branch
           tags: ${{ github.sha }} snapshot latest
           platforms: linux/arm64
           containerfiles: ./kubernetes/Containerfile
@@ -52,23 +70,24 @@ jobs:
           username: ${{ vars.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_TOKEN }}
 
+  # -----------------------------------------
+  # 3️⃣ Deploy
+  # -----------------------------------------
   deploy:
-    needs: build-and-push
+    needs: container-build
     runs-on: [arc-runner]
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Deploy via Kustomize
-        id: deploy
         run: |
           set -euo pipefail
-  
-          # Determine overlay, namespace, and image tag
+
           OVERLAY=""
           NAMESPACE=""
           IMAGE_TAG=""
-  
+
           if [[ "${GITHUB_REF}" == refs/heads/feature/* ]]; then
             OVERLAY="sandbox"
             NAMESPACE="services-sandbox"
@@ -87,23 +106,14 @@ jobs:
             echo "No deployment needed for ref $GITHUB_REF"
             exit 0
           fi
-  
+
           echo "Deploying overlay '$OVERLAY' to namespace '$NAMESPACE' with image tag '$IMAGE_TAG'"
-  
-          # Check that the overlay directory exists
-          if [[ ! -d "kubernetes/overlays/$OVERLAY" ]]; then
-            echo "ERROR: Overlay directory 'kubernetes/overlays/$OVERLAY' does not exist"
-            exit 1
-          fi
-  
-          # Optional dry-run to validate resources
+
           kubectl apply -k "kubernetes/overlays/$OVERLAY" -n "$NAMESPACE" --dry-run=client
-  
-          # Build Kustomize output and inject dynamic image tag
+
           KUSTOMIZE_OUTPUT=$(kubectl kustomize "kubernetes/overlays/$OVERLAY" | \
             sed "s|quay.io/tvattima/lego-data-ingress:.*|quay.io/tvattima/lego-data-ingress:$IMAGE_TAG|g")
-  
-          # Apply to cluster
+
           echo "$KUSTOMIZE_OUTPUT" | kubectl apply -f -
-  
-          echo "Deployment of overlay '$OVERLAY' complete!"
+
+          echo "Deployment complete!"
