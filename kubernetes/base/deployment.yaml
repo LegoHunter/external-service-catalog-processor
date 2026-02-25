@@ -63,35 +63,11 @@ spec:
             - name: ABC
               value: "1234"
           volumeMounts:
-            - name: bricklink
-              mountPath: /etc/.credentials/bricklink
-            - name: database
-              mountPath: /etc/.credentials/database
-            - name: kafka
-              mountPath: /etc/.credentials/kafka
-            - name: minio
-              mountPath: /etc/.credentials/minio
+            - name: services-sandbox-external-secret
+              mountPath: /etc/.credentials
+              readOnly: true
       volumes:
-        - name: bricklink
-          projected:
-            sources:
-              - secret:
-                  name: bricklink-client-api-keys-secret
-                  items:
-                    - key: bricklink-client-api-keys.yml
-                      path: bricklink-client-api-keys.yml
-              - secret:
-                  name: bricklink-web-secret
-                  items:
-                    - key: bricklink-web.yml
-                      path: bricklink-web.yml
-        - name: database
+        - name: services-sandbox-external-secret
           secret:
-            secretName: database-configuration-secret
-        - name: kafka
-          secret:
-            secretName: kafka-configuration-secret
-        - name: minio
-          secret:
-            secretName: minio-configuration-secret
+            secretName: services-sandbox-external-secret
       restartPolicy: Always

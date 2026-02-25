@@ -2,7 +2,7 @@ spring:
   kafka:
     bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092
   config:
-    import: file:${import-path}/database/database-configuration.yml, file:${import-path}/kafka/kafka-configuration.yml, file:${import-path}/minio/minio-configuration.yml
+    import: file:${import-path}/database-configuration.yml, file:${import-path}/kafka-configuration.yml, file:${import-path}/minio-configuration.yml
   datasource:
     database-key-name: rasppi5-01-lego-sandbox
     hikari:
