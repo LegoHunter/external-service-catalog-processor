@@ -21,6 +21,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
 
 @Component
@@ -66,20 +67,25 @@ public class RebrickableCatalogS3EventListener {
 
             CSVParser csvParser = null;
             try {
+                log.info("Processing gzip input stream");
                 GZIPInputStream gzipStream = new GZIPInputStream(inputStream);
                 Reader reader = new InputStreamReader(gzipStream, StandardCharsets.UTF_8);
+                log.info("Processing csv file");
                 csvParser = new CSVParser(reader,
                         CSVFormat.DEFAULT
                                 .withFirstRecordAsHeader()
                                 .withIgnoreHeaderCase()
                                 .withTrim());
 
+                AtomicInteger count = new AtomicInteger();
                 for (CSVRecord csvRecord : csvParser) {
 
                     RebrickableCatalogEntry entry = mapRecord(csvRecord);
                     kafkaTemplate.send(topic, entry.getSetNum(), objectMapper.writeValueAsString(entry));
+                    count.getAndIncrement();
                 }
 
+                log.info("Processed {} Rebrickable catalog entries.", count.get());
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }

@@ -57,7 +57,7 @@ spec:
           env:
             - name: JAVA_TOOL_OPTIONS
               value: >-
-                -XX:MaxRAMPercentage=75
+                -XX:MaxRAMPercentage=60
                 -XX:InitialRAMPercentage=50
                 -XX:+UseContainerSupport
             - name: ABC

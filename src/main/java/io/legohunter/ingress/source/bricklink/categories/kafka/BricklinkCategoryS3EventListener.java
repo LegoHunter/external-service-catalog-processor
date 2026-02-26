@@ -17,6 +17,7 @@ import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 @RequiredArgsConstructor
@@ -61,13 +62,18 @@ public class BricklinkCategoryS3EventListener {
                 GetObjectArgs.builder().bucket(bucket).object(key).build())) {
 
             try (JsonParser parser = xmlMapper.getFactory().createParser(inputStream)) {
+                log.info("Processing xml input stream");
+                AtomicInteger count = new AtomicInteger();
+
                 while (parser.nextToken() != null) {
                     if (parser.currentToken() == JsonToken.FIELD_NAME && "ITEM".equals(parser.getCurrentName())) {
                         parser.nextToken();
                         CategoryEntry entry = xmlMapper.readValue(parser, CategoryEntry.class);
                         kafkaTemplate.send(topic, String.valueOf(entry.getCategory()), objectMapper.writeValueAsString(entry));
+                        count.getAndIncrement();
                     }
                 }
+                log.info("Processed {} Bricklink category entries.", count.get());
             }
 
         } catch (Exception e) {
