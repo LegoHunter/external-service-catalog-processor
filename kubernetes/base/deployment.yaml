@@ -56,7 +56,7 @@ spec:
 
           env:
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xmx1.5g -Xms1g -XX:+UseContainerSupport"
+              value: "-XX:MaxRAMPercentage=60 -XX:InitialRAMPercentage=60 -XX:+UseContainerSupport"
             - name: ABC
               value: "1234"
           volumeMounts:
