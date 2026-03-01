@@ -5,3 +5,7 @@ management:
     metrics:
       export:
         enabled: false
+
+lego:
+  minio:
+    url: https://api.minio.dev.internal.legohunter.io

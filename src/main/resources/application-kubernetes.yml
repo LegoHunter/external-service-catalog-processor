@@ -9,3 +9,7 @@ management:
 spring:
   main:
     banner-mode: off
+
+lego:
+  minio:
+    url: http://minio.minio-dev.svc.cluster.local:9000

@@ -18,8 +18,6 @@ spring:
       pool-name: rasppi5-01-mysql-jdbc-pool
 
 lego:
-  minio:
-    url: https://api.minio.dev.internal.legohunter.io
   kafka:
     topic:
       bricklink-category-upload: dev-bricklink-category-upload
