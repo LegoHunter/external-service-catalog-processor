@@ -13,7 +13,7 @@ spring:
       auto-commit: false
       login-timeout: 10000
       minimum-idle: 10
-      maximum-pool-size: 10
+      maximum-pool-size: 40
       validation-timeout: 10000
       pool-name: rasppi5-01-mysql-jdbc-pool
 

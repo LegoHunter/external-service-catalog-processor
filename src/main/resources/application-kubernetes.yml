@@ -13,6 +13,8 @@ management:
 spring:
   main:
     banner-mode: off
+  kafka:
+    bootstrap-servers: redpanda-dev.redpanda-dev.svc.cluster.local:9092
 
 lego:
   minio:
