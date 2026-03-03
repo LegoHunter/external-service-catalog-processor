@@ -1,6 +1,10 @@
 import-path: /etc/.credentials
 
 management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
   endpoint:
     health:
       probes:
@@ -12,4 +16,4 @@ spring:
 
 lego:
   minio:
-    url: http://minio.minio-dev.svc.cluster.local:9000
+    url: http://minio.minio-dev.svc.cluster.local
