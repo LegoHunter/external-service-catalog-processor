@@ -32,9 +32,6 @@ import java.util.zip.GZIPInputStream;
 public class RebrickableThemeS3EventListener {
 
     private final MinioClient minioClient;
-
-    @Qualifier("rebrickableThemeEntryKafkaTemplate")
-    @NonNull
     private final KafkaTemplate<String, RebrickableThemeEntry> rebrickableThemeEntryKafkaTemplate;
 
     @Value("${kafka.topic-configuration.rebrickable-theme-entry.topic}")
