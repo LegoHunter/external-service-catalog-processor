@@ -3,40 +3,9 @@ spring:
     default: local,sandbox
   application:
     name: Lego Data Ingress Service
-  kafka:
-    properties:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
-      security:
-        protocol: SASL_SSL
-      sasl:
-        mechanism: SCRAM-SHA-512
-    consumer:
-      properties:
-        sasl:
-          jaas:
-            config: "org.apache.kafka.common.security.scram.ScramLoginModule required username='${lego.kafka.consumer.username}' password='${lego.kafka.consumer.password}';"
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
-      # How many retries for failed sends (idempotence allows safe retries)
-      retries: 10
-      properties:
-        # Reduce noisy INFO logs from NetworkClient
-        log.level.org.apache.kafka.clients.NetworkClient: WARN
-        # Maximum time to wait for a request to complete
-        request.timeout.ms: 60000
-        # How long to wait for a broker connection before timing out
-        max.block.ms: 60000
-        # Enable idempotence to avoid duplicate messages on retries
-        enable.idempotence: true
-        # Backoff between retries
-        retry.backoff.ms: 500
-        # Reduce aggressive reconnect attempts on slow connections
-        connections.max.idle.ms: 300000
-        # Metadata refresh interval (longer interval reduces churn)
-        metadata.max.age.ms: 300000
-        sasl:
-          jaas:
-            config: "org.apache.kafka.common.security.scram.ScramLoginModule required username='${lego.kafka.producer.username}' password='${lego.kafka.producer.password}';"
 
+kafka:
+  bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092
+  properties:
+    security.protocol: SASL_SSL
+    sasl.mechanism: SCRAM-SHA-512

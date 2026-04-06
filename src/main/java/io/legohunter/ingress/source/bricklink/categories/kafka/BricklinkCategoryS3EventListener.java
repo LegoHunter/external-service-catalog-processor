@@ -2,14 +2,15 @@ package io.legohunter.ingress.source.bricklink.categories.kafka;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
-import io.legohunter.ingress.common.storage.model.s3.minio.S3Event;
+import io.legohunter.ingress.common.kafka.event.UploadObjectEvent;
 import io.legohunter.ingress.source.bricklink.categories.model.CategoryEntry;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
+import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -25,59 +26,51 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class BricklinkCategoryS3EventListener {
 
     private final MinioClient minioClient;
-    private final ObjectMapper objectMapper;
     private final XmlMapper xmlMapper;
-    private final KafkaTemplate<String, String> kafkaTemplate;
 
-    @Value("${lego.kafka.topic.bricklink-category-entry}")
+    @Qualifier("bricklinkCategoryEntryKafkaTemplate")
+    @NonNull
+    private final KafkaTemplate<String, CategoryEntry> bricklinkCategoryEntryKafkaTemplate;
+
+    @Value("${kafka.topic-configuration.bricklink-category-entry.topic}")
     private String topic;
 
     @KafkaListener(
-            topics = "${lego.kafka.topic.bricklink-category-upload}",
-            groupId = "${lego.kafka.consumer.group-id.bricklink-category-upload}",
-            containerFactory = "kafkaListenerContainerFactory")
-    public void listen(@Payload String payload) {
+            topics = "${kafka.topic-configuration.upload-bricklink-category.topic}",
+            groupId = "${kafka.topic-configuration.upload-bricklink-category.consumer.group-id}",
+            containerFactory = "uploadBricklinkCategoryContainerFactory")
+    public void listen(@Payload UploadObjectEvent event) {
 
         try {
-            S3Event event = objectMapper.readValue(payload, S3Event.class);
+            String bucket = event.getBucket();
+            String key = event.getKey();
 
-            log.info("Received S3Event: {}", event);
+            log.info("Processing S3 PUT: bucket={}, key={}", bucket, key);
 
-            event.Records().stream()
-                    .filter(r -> "s3:ObjectCreated:Put".equals(r.eventName()))
-                    .forEach(r -> processS3Record(r));
+            try (InputStream inputStream = minioClient.getObject(
+                    GetObjectArgs.builder().bucket(bucket).object(key).build())) {
 
-        } catch (Exception e) {
-            log.error("Failed to deserialize S3 event", e);
-        }
-    }
+                try (JsonParser parser = xmlMapper.getFactory().createParser(inputStream)) {
+                    log.info("Processing xml input stream");
+                    AtomicInteger count = new AtomicInteger();
 
-    private void processS3Record(S3Event.Record record) {
-        String bucket = record.s3().bucket().name();
-        String key = record.s3().object().key();
-
-        log.info("Processing S3 PUT: bucket={}, key={}", bucket, key);
-
-        try (InputStream inputStream = minioClient.getObject(
-                GetObjectArgs.builder().bucket(bucket).object(key).build())) {
-
-            try (JsonParser parser = xmlMapper.getFactory().createParser(inputStream)) {
-                log.info("Processing xml input stream");
-                AtomicInteger count = new AtomicInteger();
-
-                while (parser.nextToken() != null) {
-                    if (parser.currentToken() == JsonToken.FIELD_NAME && "ITEM".equals(parser.getCurrentName())) {
-                        parser.nextToken();
-                        CategoryEntry entry = xmlMapper.readValue(parser, CategoryEntry.class);
-                        kafkaTemplate.send(topic, String.valueOf(entry.getCategory()), objectMapper.writeValueAsString(entry));
-                        count.getAndIncrement();
+                    while (parser.nextToken() != null) {
+                        if (parser.currentToken() == JsonToken.FIELD_NAME && "ITEM".equals(parser.getCurrentName())) {
+                            parser.nextToken();
+                            CategoryEntry entry = xmlMapper.readValue(parser, CategoryEntry.class);
+                            bricklinkCategoryEntryKafkaTemplate.send(topic, entry);
+                            count.getAndIncrement();
+                        }
                     }
+                    log.info("Processed {} Bricklink category entries.", count.get());
                 }
-                log.info("Processed {} Bricklink category entries.", count.get());
+
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
 
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            log.error("Failed to deserialize S3 event", e);
         }
     }
 }

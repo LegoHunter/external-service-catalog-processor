@@ -1,7 +1,6 @@
 package io.legohunter.ingress.source.rebrickable.catalog.kafka;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.legohunter.ingress.common.storage.model.s3.minio.S3Event;
+import io.legohunter.ingress.common.kafka.event.UploadObjectEvent;
 import io.legohunter.ingress.source.rebrickable.catalog.model.RebrickableCatalogEntry;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
@@ -30,68 +29,66 @@ import java.util.zip.GZIPInputStream;
 public class RebrickableCatalogS3EventListener {
 
     private final MinioClient minioClient;
-    private final ObjectMapper objectMapper;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final KafkaTemplate<String, RebrickableCatalogEntry> rebrickableCatalogEntryKafkaTemplate;
 
-    @Value("${lego.kafka.topic.rebrickable-catalog-entry}")
+    @Value("${kafka.topic-configuration.rebrickable-catalog-entry.topic}")
     private String topic;
 
     @KafkaListener(
-            topics = "${lego.kafka.topic.rebrickable-catalog-upload}",
-            groupId = "${lego.kafka.consumer.group-id.rebrickable-catalog-upload}",
-            containerFactory = "kafkaListenerContainerFactory")
-    public void listen(@Payload String payload) {
+            topics = "${kafka.topic-configuration.upload-rebrickable-catalog.topic}",
+            groupId = "${kafka.topic-configuration.upload-rebrickable-catalog.consumer.group-id}",
+            containerFactory = "uploadRebrickableCatalogContainerFactory")
+    public void listen(@Payload UploadObjectEvent event) {
 
         try {
-            S3Event event = objectMapper.readValue(payload, S3Event.class);
+            String bucket = event.getBucket();
+            String key = event.getKey();
 
-            log.info("Received S3Event: {}", event);
+            log.info("Processing S3 PUT: bucket={}, key={}", bucket, key);
 
-            event.Records().stream()
-                    .filter(r -> "s3:ObjectCreated:Put".equals(r.eventName()))
-                    .forEach(r -> processS3Record(r));
+            try (InputStream inputStream = minioClient.getObject(
+                    GetObjectArgs.builder().bucket(bucket).object(key).build())) {
+
+                CSVParser csvParser = null;
+                try {
+                    log.info("Processing gzip input stream");
+                    GZIPInputStream gzipStream = new GZIPInputStream(inputStream);
+                    Reader reader = new InputStreamReader(gzipStream, StandardCharsets.UTF_8);
+                    log.info("Processing csv file");
+                    csvParser = new CSVParser(reader,
+                            CSVFormat.DEFAULT
+                                    .withFirstRecordAsHeader()
+                                    .withIgnoreHeaderCase()
+                                    .withTrim());
+
+                    AtomicInteger count = new AtomicInteger();
+                    for (CSVRecord csvRecord : csvParser) {
+
+                        RebrickableCatalogEntry entry = mapRecord(csvRecord);
+                        rebrickableCatalogEntryKafkaTemplate.send(topic, entry);
+                        count.getAndIncrement();
+                    }
+
+                    log.info("Processed {} Rebrickable catalog entries.", count.get());
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
 
         } catch (Exception e) {
             log.error("Failed to deserialize S3 event", e);
         }
     }
 
-    private void processS3Record(S3Event.Record record) {
-        String bucket = record.s3().bucket().name();
-        String key = record.s3().object().key();
-
-        log.info("Processing S3 PUT: bucket={}, key={}", bucket, key);
-
-        try (InputStream inputStream = minioClient.getObject(
-                GetObjectArgs.builder().bucket(bucket).object(key).build())) {
-
-            CSVParser csvParser = null;
-            try {
-                log.info("Processing gzip input stream");
-                GZIPInputStream gzipStream = new GZIPInputStream(inputStream);
-                Reader reader = new InputStreamReader(gzipStream, StandardCharsets.UTF_8);
-                log.info("Processing csv file");
-                csvParser = new CSVParser(reader,
-                        CSVFormat.DEFAULT
-                                .withFirstRecordAsHeader()
-                                .withIgnoreHeaderCase()
-                                .withTrim());
-
-                AtomicInteger count = new AtomicInteger();
-                for (CSVRecord csvRecord : csvParser) {
-
-                    RebrickableCatalogEntry entry = mapRecord(csvRecord);
-                    kafkaTemplate.send(topic, entry.getSetNum(), objectMapper.writeValueAsString(entry));
-                    count.getAndIncrement();
-                }
-
-                log.info("Processed {} Rebrickable catalog entries.", count.get());
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+    private Integer parseInteger(String value) {
+        try {
+            return value == null || value.isBlank() ? null : Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            log.warn("Unable to parse integer: {}", value);
+            return null;
         }
     }
 
@@ -107,14 +104,5 @@ public class RebrickableCatalogS3EventListener {
         entry.setImgUrl(csvRecord.get("IMG_URL"));
 
         return entry;
-    }
-
-    private Integer parseInteger(String value) {
-        try {
-            return value == null || value.isBlank() ? null : Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            log.warn("Unable to parse integer: {}", value);
-            return null;
-        }
     }
 }

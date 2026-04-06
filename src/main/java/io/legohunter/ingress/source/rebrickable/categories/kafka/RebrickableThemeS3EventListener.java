@@ -1,15 +1,17 @@
 package io.legohunter.ingress.source.rebrickable.categories.kafka;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import io.legohunter.ingress.common.kafka.event.UploadObjectEvent;
 import io.legohunter.ingress.common.storage.model.s3.minio.S3Event;
 import io.legohunter.ingress.source.rebrickable.categories.model.RebrickableThemeEntry;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
+import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -30,35 +32,21 @@ import java.util.zip.GZIPInputStream;
 public class RebrickableThemeS3EventListener {
 
     private final MinioClient minioClient;
-    private final ObjectMapper objectMapper;
-    private final KafkaTemplate<String, String> kafkaTemplate;
 
-    @Value("${lego.kafka.topic.rebrickable-theme-entry}")
+    @Qualifier("rebrickableThemeEntryKafkaTemplate")
+    @NonNull
+    private final KafkaTemplate<String, RebrickableThemeEntry> rebrickableThemeEntryKafkaTemplate;
+
+    @Value("${kafka.topic-configuration.rebrickable-theme-entry.topic}")
     private String topic;
 
     @KafkaListener(
-            topics = "${lego.kafka.topic.rebrickable-theme-upload}",
-            groupId = "${lego.kafka.consumer.group-id.rebrickable-theme-upload}",
-            containerFactory = "kafkaListenerContainerFactory")
-    public void listen(@Payload String payload) {
-
-        try {
-            S3Event event = objectMapper.readValue(payload, S3Event.class);
-
-            log.info("Received S3Event: {}", event);
-
-            event.Records().stream()
-                    .filter(r -> "s3:ObjectCreated:Put".equals(r.eventName()))
-                    .forEach(r -> processS3Record(r));
-
-        } catch (Exception e) {
-            log.error("Failed to deserialize S3 event", e);
-        }
-    }
-
-    private void processS3Record(S3Event.Record record) {
-        String bucket = record.s3().bucket().name();
-        String key = record.s3().object().key();
+            topics = "${kafka.topic-configuration.upload-rebrickable-theme.topic}",
+            groupId = "${kafka.topic-configuration.upload-rebrickable-theme.consumer.group-id}",
+            containerFactory = "uploadRebrickableThemeContainerFactory")
+    public void listen(@Payload UploadObjectEvent event) {
+        String bucket = event.getBucket();
+        String key = event.getKey();
 
         log.info("Processing S3 PUT: bucket={}, key={}", bucket, key);
 
@@ -81,7 +69,7 @@ public class RebrickableThemeS3EventListener {
                 for (CSVRecord csvRecord : csvParser) {
 
                     RebrickableThemeEntry entry = mapRecord(csvRecord);
-                    kafkaTemplate.send(topic, String.valueOf(entry.getId()), objectMapper.writeValueAsString(entry));
+                    rebrickableThemeEntryKafkaTemplate.send(topic, entry);
                     count.getAndIncrement();
                 }
 
