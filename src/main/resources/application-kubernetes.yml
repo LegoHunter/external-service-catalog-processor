@@ -10,7 +10,9 @@ management:
   otlp:
     tracing:
       endpoint: http://otel-collector.observability.svc.cluster.local:4318
-
+    metrics:
+      export:
+        url:  http://otel-collector.observability.svc.cluster.local:4318
   endpoints:
     web:
       exposure:
