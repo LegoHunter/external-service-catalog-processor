@@ -9,3 +9,5 @@ management:
 lego:
   minio:
     url: https://api.minio.dev.internal.legohunter.io
+
+debug: true

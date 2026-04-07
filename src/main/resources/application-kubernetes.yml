@@ -24,6 +24,9 @@ management:
     prometheus:
       access: unrestricted
 
+otel:
+
+
 lego:
   minio:
     url: http://minio.minio-dev.svc.cluster.local
