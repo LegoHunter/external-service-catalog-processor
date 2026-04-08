@@ -24,6 +24,17 @@ management:
     prometheus:
       access: unrestricted
 
+otel:
+  exporter:
+    otlp:
+      endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+  resource:
+    attributes:
+      service.version: 1.0.0
+      deployment.environment: sandbox
+  traces:
+    exporter: otlp
+
 lego:
   minio:
     url: http://minio.minio-dev.svc.cluster.local
