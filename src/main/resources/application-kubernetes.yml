@@ -9,10 +9,10 @@ spring:
 management:
   otlp:
     tracing:
-      endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+      endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/tracees
     metrics:
       export:
-        url:  http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+        url:  http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/metrics
   endpoints:
     web:
       exposure:
@@ -23,9 +23,6 @@ management:
         enabled: true
     prometheus:
       access: unrestricted
-
-otel:
-
 
 lego:
   minio:
