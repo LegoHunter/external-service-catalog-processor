@@ -23,10 +23,8 @@ management:
         enabled: true
     metrics:
       access: unrestricted
-      enabled: true
     prometheus:
       access: unrestricted
-      enabled: true
 
 otel:
   exporter:
