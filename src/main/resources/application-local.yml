@@ -1,13 +1,17 @@
 import-path: /dev/config
 
 management:
-  otlp:
-    metrics:
-      export:
-        enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+
+logging:
+  level:
+    org.springframework.core.env: TRACE
+    org.springframework.boot.context.config: DEBUG
+    com.zaxxer: DEBUG
 
 lego:
   minio:
     url: https://api.minio.dev.internal.legohunter.io
-
-debug: true
