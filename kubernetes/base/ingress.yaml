@@ -4,10 +4,6 @@ metadata:
   name: lego-data-ingress
   annotations:
     kubernetes.io/ingress.class: traefik-external
-    prometheus.io/scrape: "true"
-    prometheus.io/path: "/actuator/prometheus"
-    prometheus.io/port: "8080"
-    prometheus.io/scheme: "http"
   labels:
     app.kubernetes.io/name: lego-data-ingress
     app.kubernetes.io/component: api
