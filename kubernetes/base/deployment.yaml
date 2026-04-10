@@ -49,9 +49,10 @@ spec:
             httpGet:
               path: /actuator/health/liveness
               port: 8080
-            periodSeconds: 20
-            failureThreshold: 3
+            initialDelaySeconds: 60
+            periodSeconds: 10
             timeoutSeconds: 5
+            failureThreshold: 10
 
           env:
             - name: JAVA_TOOL_OPTIONS
