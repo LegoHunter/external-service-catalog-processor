@@ -19,9 +19,10 @@
     <!-- KUBERNETES profile: JSON logs -->
     <springProfile name="kubernetes">
 
-        <appender name="JSON_CONSOLE"
+        <appender name="JSON"
                   class="ch.qos.logback.core.ConsoleAppender">
             <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdc>true</includeMdc>
                 <customFields>
                     {
                     "app":"${appName}",
@@ -32,7 +33,7 @@
         </appender>
 
         <root level="INFO">
-            <appender-ref ref="JSON_CONSOLE"/>
+            <appender-ref ref="JSON"/>
         </root>
     </springProfile>
 
