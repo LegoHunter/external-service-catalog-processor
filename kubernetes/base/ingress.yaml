@@ -20,4 +20,4 @@ spec:
       middlewares:
         - name: default-headers
   tls:
-    secretName: internal-legohunter-io-staging-tls
+    secretName: sandbox-internal-legohunter-io-tls

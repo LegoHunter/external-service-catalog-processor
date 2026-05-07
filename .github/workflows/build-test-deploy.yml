@@ -53,7 +53,7 @@ jobs:
       packages: write
 
     outputs:
-      image-tags: ${{ steps.buildah-build.outputs.tags }}
+      image-tag: ${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +69,7 @@ jobs:
         uses: redhat-actions/buildah-build@v2
         with:
           image: quay.io/tvattima/lego-data-ingress
-          tags: ${{ github.sha }} snapshot latest
+          tags: ${{ github.sha }}
           platforms: linux/arm64
           containerfiles: ./kubernetes/Containerfile
 
@@ -78,7 +78,7 @@ jobs:
         with:
           registry: quay.io
           image: tvattima/lego-data-ingress
-          tags: ${{ steps.buildah-build.outputs.tags }}
+          tags: ${{ github.sha }}
           username: ${{ vars.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_TOKEN }}
 
@@ -95,6 +95,8 @@ jobs:
       - name: Deploy via Kustomize
         run: |
           set -euo pipefail
+
+          IMAGE_TAG="${{ needs.container-build.outputs.image-tag }}"
 
           OVERLAY=""
           NAMESPACE=""
