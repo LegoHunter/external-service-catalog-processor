@@ -3,7 +3,7 @@ kind: IngressRoute
 metadata:
   name: lego-data-ingress
   annotations:
-    kubernetes.io/ingress.class: traefik-external
+    kubernetes.io/ingress.class: traefik
   labels:
     app.kubernetes.io/name: lego-data-ingress
     app.kubernetes.io/component: api
@@ -20,4 +20,4 @@ spec:
       middlewares:
         - name: default-headers
   tls:
-    secretName: sandbox-internal-legohunter-io-tls
+    secretName: internal-legohunter-io-staging-tls

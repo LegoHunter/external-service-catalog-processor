@@ -18,8 +18,7 @@
         <java.version>21</java.version>
         <spring-cloud.version>2025.0.1</spring-cloud.version>
         <github.organization>LegoHunter</github.organization>
-        <github.repo.url>https://github.com/${github.organization}/lego-data-ingress.git
-        </github.repo.url>
+        <github.repo.url>https://github.com/${github.organization}/lego-data-ingress.git</github.repo.url>
     </properties>
 
     <distributionManagement>
