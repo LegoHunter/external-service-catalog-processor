@@ -100,7 +100,6 @@ jobs:
 
           OVERLAY=""
           NAMESPACE=""
-          IMAGE_TAG=""
 
           if [[ "${GITHUB_REF}" == refs/heads/feature/* ]]; then
             OVERLAY="sandbox"
