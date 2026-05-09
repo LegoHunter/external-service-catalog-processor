@@ -16,7 +16,7 @@ spring:
       pool-name: rasppi5-01-mysql-jdbc-pool
 
 kafka:
-  bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092
+  bootstrap-servers: redpanda-dev-0.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-1.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-2.redpanda-dev.redpanda-dev.svc.cluster.local:9092
   properties:
     security.protocol: SASL_SSL
     sasl.mechanism: SCRAM-SHA-512

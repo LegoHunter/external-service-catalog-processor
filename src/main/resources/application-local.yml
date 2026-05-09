@@ -25,3 +25,6 @@ logging:
 lego:
   minio:
     url: https://api.minio.dev.internal.legohunter.io
+
+kafka:
+  bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092
