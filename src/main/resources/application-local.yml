@@ -5,12 +5,22 @@ management:
     web:
       exposure:
         include: "*"
+  tracing:
+    enabled: false
+  defaults:
+    metrics:
+      export:
+        enabled: false
+
+otel:
+  sdk:
+    disabled: true
 
 logging:
   level:
+    root: INFO
     org.springframework.core.env: TRACE
     org.springframework.boot.context.config: DEBUG
-    com.zaxxer: DEBUG
 
 lego:
   minio:

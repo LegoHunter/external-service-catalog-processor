@@ -24,16 +24,15 @@ public class BricklinkCatalogEntryConsumer {
             containerFactory = "bricklinkCatalogEntryContainerFactory")
     public void listen(@Payload CatalogEntry entry) {
         try {
-            ExternalItem externalItem = ExternalItem.builder()
-                    .serviceId(bricklinkServiceId)
-                    .number(entry.getItemId())
-                    .uniqueId(0L)
-                    .name(entry.getItemName())
-                    .itemType(entry.getItemType())
-                    .categoryId(entry.getCategory())
-                    .yearReleased(entry.getItemYear())
-                    .url(buildBricklinkItemUrl(entry.getItemId()))
-                    .build();
+            ExternalItem externalItem = new ExternalItem();
+            externalItem.setServiceId(bricklinkServiceId);
+            externalItem.setExternalNumber(entry.getItemId());
+            externalItem.setUniqueId(0L);
+            externalItem.setName(entry.getItemName());
+            externalItem.setItemType(entry.getItemType());
+            externalItem.setCategoryId(entry.getCategory());
+            externalItem.setYearReleased(entry.getItemYear());
+            externalItem.setUrl(buildBricklinkItemUrl(entry.getItemId()));
 
             // Upsert into MySQL
             externalItemDao.upsert(externalItem);

@@ -7,35 +7,26 @@ spring:
     bootstrap-servers: redpanda-dev.redpanda-dev.svc.cluster.local:9092
 
 management:
-  otlp:
-    tracing:
-      endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/tracees
-    metrics:
-      export:
-        url:  http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/metrics
   endpoints:
     web:
       exposure:
         include: health,info,prometheus,metrics
+
   endpoint:
     health:
       probes:
         enabled: true
-    metrics:
-      access: unrestricted
-    prometheus:
-      access: unrestricted
 
-otel:
-  exporter:
-    otlp:
-      endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
-  resource:
-    attributes:
-      service.version: 1.0.0
-      deployment.environment: sandbox
-  traces:
-    exporter: otlp
+  tracing:
+    sampling:
+      probability: 1.0
+
+  otlp:
+    tracing:
+      endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/traces
+    metrics:
+      export:
+        url: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/metrics
 
 lego:
   minio:

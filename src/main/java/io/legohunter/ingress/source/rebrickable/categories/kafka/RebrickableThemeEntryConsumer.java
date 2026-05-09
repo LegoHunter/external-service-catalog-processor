@@ -26,12 +26,11 @@ public class RebrickableThemeEntryConsumer {
         try {
 
             // Map CatalogEntry → ExternalItem
-            Category category = Category.builder()
-                    .externalServiceId(rebrickableServiceId)
-                    .externalCategoryId(entry.getId())
-                    .categoryName(entry.getName())
-                    .parentId(entry.getParentId())
-                    .build();
+            Category category = new Category();
+            category.setExternalServiceId(rebrickableServiceId);
+            category.setExternalCategoryId(entry.getId());
+            category.setCategoryName(entry.getName());
+            category.setParentId(entry.getParentId());
 
             // Upsert into MySQL
             categoryDao.upsert(category);

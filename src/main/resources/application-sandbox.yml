@@ -15,10 +15,6 @@ spring:
       validation-timeout: 10000
       pool-name: rasppi5-01-mysql-jdbc-pool
 
-logging:
-  level:
-    com.zaxxer: DEBUG
-
 kafka:
   bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092
   properties:

@@ -24,16 +24,15 @@ public class RebrickableCatalogEntryConsumer {
             containerFactory = "rebrickableCatalogEntryContainerFactory")
     public void listen(@Payload RebrickableCatalogEntry entry) {
         try {
-            ExternalItem externalItem = ExternalItem.builder()
-                    .serviceId(rebrickableServiceId)
-                    .number(entry.getSetNum())
-                    .uniqueId(0L)
-                    .name(entry.getName())
-                    .itemType("S")
-                    .categoryId(entry.getThemeId())   // or whatever matches your CSV
-                    .yearReleased(entry.getYear())
-                    .url(String.format("https://rebrickable.com/sets/%s/", entry.getSetNum()))
-                    .build();
+            ExternalItem externalItem = new ExternalItem();
+            externalItem.setServiceId(rebrickableServiceId);
+            externalItem.setExternalNumber(entry.getSetNum());
+            externalItem.setUniqueId(0L);
+            externalItem.setName(entry.getName());
+            externalItem.setItemType("S");
+            externalItem.setCategoryId(entry.getThemeId());
+            externalItem.setYearReleased(entry.getYear());
+            externalItem.setUrl(String.format("https://rebrickable.com/sets/%s/", entry.getSetNum()));
 
             // Upsert into MySQL
             externalItemDao.upsert(externalItem);

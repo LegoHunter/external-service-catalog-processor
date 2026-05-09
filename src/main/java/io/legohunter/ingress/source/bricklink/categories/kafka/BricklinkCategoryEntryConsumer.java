@@ -24,12 +24,11 @@ public class BricklinkCategoryEntryConsumer {
             containerFactory = "bricklinkCategoryEntryContainerFactory")
     public void listen(@Payload CategoryEntry entry) {
         try {
-            Category category = Category.builder()
-                    .externalServiceId(bricklinkServiceId)
-                    .externalCategoryId(entry.getCategory())
-                    .categoryName(entry.getCategoryName())
-                    .parentId(null)
-                    .build();
+            Category category = new Category();
+            category.setExternalServiceId(bricklinkServiceId);
+            category.setExternalCategoryId(entry.getCategory());
+            category.setCategoryName(entry.getCategoryName());
+            category.setParentId(null);
 
             // Upsert into MySQL
             categoryDao.upsert(category);

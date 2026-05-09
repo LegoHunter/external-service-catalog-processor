@@ -16,7 +16,7 @@ public class CatalogEntryProjectionService {
 
     public void upsert(CatalogEntry entry) {
         ExternalItem externalItem = new ExternalItem();
-        externalItem.setNumber(entry.getItemId());
+        externalItem.setExternalNumber(entry.getItemId());
         externalItem.setUniqueId(0L);
         externalItem.setName(entry.getItemName());
         externalItem.setItemType(entry.getItemType());

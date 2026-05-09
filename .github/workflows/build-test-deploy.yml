@@ -104,17 +104,18 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/heads/feature/* ]]; then
             OVERLAY="sandbox"
             NAMESPACE="services-sandbox"
-            IMAGE_TAG="snapshot"
+
           elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" ]]; then
+
             if [[ "${{ github.event.pull_request.base.ref }}" == "develop" ]]; then
               OVERLAY="dev"
               NAMESPACE="services-dev"
-              IMAGE_TAG="${GITHUB_SHA}"
+
             elif [[ "${{ github.event.pull_request.base.ref }}" == "main" ]]; then
               OVERLAY="prod"
               NAMESPACE="services-prod"
-              IMAGE_TAG="${GITHUB_SHA}"
             fi
+
           else
             echo "No deployment needed for ref $GITHUB_REF"
             exit 0
@@ -122,11 +123,12 @@ jobs:
 
           echo "Deploying overlay '$OVERLAY' to namespace '$NAMESPACE' with image tag '$IMAGE_TAG'"
 
-          kubectl apply -k "kubernetes/overlays/$OVERLAY" -n "$NAMESPACE" --dry-run=client
+          # Ensure kustomize output uses correct image tag
+          kubectl kustomize "kubernetes/overlays/$OVERLAY" \
+            | sed "s|quay.io/tvattima/lego-data-ingress:.*|quay.io/tvattima/lego-data-ingress:$IMAGE_TAG|g" \
+            | kubectl apply -n "$NAMESPACE" -f -
 
-          KUSTOMIZE_OUTPUT=$(kubectl kustomize "kubernetes/overlays/$OVERLAY" | \
-            sed "s|quay.io/tvattima/lego-data-ingress:.*|quay.io/tvattima/lego-data-ingress:$IMAGE_TAG|g")
-
-          echo "$KUSTOMIZE_OUTPUT" | kubectl apply -f -
+          # Force rollout if needed (guarantees update even if caching occurs)
+          kubectl rollout restart deployment lego-data-ingress -n "$NAMESPACE"
 
           echo "Deployment complete!"
