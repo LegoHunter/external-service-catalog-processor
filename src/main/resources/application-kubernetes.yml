@@ -3,8 +3,6 @@ import-path: /etc/.credentials
 spring:
   main:
     banner-mode: off
-  kafka:
-    bootstrap-servers: redpanda-dev.redpanda-dev.svc.cluster.local:9092
 
 management:
   endpoints:
@@ -21,12 +19,12 @@ management:
     sampling:
       probability: 1.0
 
-  otlp:
-    tracing:
-      endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/traces
-    metrics:
-      export:
-        url: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/metrics
+#  otlp:
+#    tracing:
+#      endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/traces
+#    metrics:
+#      export:
+#        url: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/metrics
 
 lego:
   minio:
