@@ -1,6 +1,7 @@
 package io.legohunter.ingress.upload.router;
 
 import io.legohunter.ingress.common.kafka.event.UploadObjectEvent;
+import io.legohunter.ingress.source.photo.model.PhotoUploadEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -54,16 +55,13 @@ public class UploadRouter {
     }
 
     private void routeMediaUpload(UploadObjectEvent event) {
-
         String bucket = event.getBucket();
         String key = event.getKey();
-
         if (key.startsWith("photos/")) {
             log.info("Routing event {} with key {} to {}", event, key, PHOTO_TOPIC);
             uploadMinioS3KafkaTemplate.send(PHOTO_TOPIC, key, event);
             return;
         }
-
         throw new IllegalArgumentException("Unsupported bucket [%s] and key [%s] for upload routing".formatted(bucket, key));
     }
 

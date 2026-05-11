@@ -64,6 +64,10 @@ kafka:
         value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     upload-photo:
       topic: sandbox-upload-photo
+      consumer:
+        group-id: sandbox-upload-photo-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.UploadObjectEvent
       producer:
         retries: 3
     upload-bricklink-catalog:
