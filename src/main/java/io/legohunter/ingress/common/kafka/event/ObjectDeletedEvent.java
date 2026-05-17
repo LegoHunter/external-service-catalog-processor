@@ -1,6 +1,11 @@
 package io.legohunter.ingress.common.kafka.event;
 
-import lombok.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import lombok.ToString;
 
 @Setter
 @Getter
@@ -8,7 +13,7 @@ import lombok.*;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class UploadObjectEvent {
+public class ObjectDeletedEvent {
     private String bucket;
     private String key;
     private String eventName;

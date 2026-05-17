@@ -1,4 +1,4 @@
-package io.legohunter.ingress.source.photo.service;
+package io.legohunter.ingress.s3.api;
 
 import java.io.InputStream;
 

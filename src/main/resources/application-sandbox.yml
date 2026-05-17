@@ -58,7 +58,7 @@ kafka:
       producer:
         retries: 3
     upload-minio-s3:
-      topics: sandbox-upload-photo, sandbox-upload-bricklink-catalog, sandbox-upload-bricklink-category, sandbox-upload-rebrickable-catalog, sandbox-upload-rebrickable-theme
+      topics: sandbox-upload-photo, sandbox-delete-photo, sandbox-upload-bricklink-catalog, sandbox-upload-bricklink-category, sandbox-upload-rebrickable-catalog, sandbox-upload-rebrickable-theme
       producer:
         retries: 3
         value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -67,7 +67,15 @@ kafka:
       consumer:
         group-id: sandbox-upload-photo-group
         properties:
-          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.UploadObjectEvent
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    delete-photo:
+      topic: sandbox-delete-photo
+      consumer:
+        group-id: sandbox-delete-photo-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent
       producer:
         retries: 3
     upload-bricklink-catalog:
@@ -75,7 +83,7 @@ kafka:
       consumer:
         group-id: sandbox-upload-bricklink-catalog-group
         properties:
-          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.UploadObjectEvent
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
     upload-bricklink-category:
@@ -83,7 +91,7 @@ kafka:
       consumer:
         group-id: sandbox-upload-bricklink-category-group
         properties:
-          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.UploadObjectEvent
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
     upload-rebrickable-catalog:
@@ -91,7 +99,7 @@ kafka:
       consumer:
         group-id: sandbox-upload-rebrickable-catalog-group
         properties:
-          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.UploadObjectEvent
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
     upload-rebrickable-theme:
@@ -99,7 +107,7 @@ kafka:
       consumer:
         group-id: sandbox-upload-rebrickable-theme-group
         properties:
-          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.UploadObjectEvent
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
     photo-upload-entry:

@@ -3,7 +3,7 @@ package io.legohunter.ingress.source.bricklink.catalog.kafka;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
-import io.legohunter.ingress.common.kafka.event.UploadObjectEvent;
+import io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent;
 import io.legohunter.ingress.source.bricklink.catalog.model.CatalogEntry;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
@@ -35,7 +35,7 @@ public class BricklinkCatalogS3EventListener {
             topics = "${kafka.topic-configuration.upload-bricklink-catalog.topic}",
             groupId = "${kafka.topic-configuration.upload-bricklink-catalog.consumer.group-id}",
             containerFactory = "uploadBricklinkCatalogContainerFactory")
-    public void listen(@Payload UploadObjectEvent event) {
+    public void listen(@Payload ObjectUploadedEvent event) {
 
         try {
             String bucket = event.getBucket();

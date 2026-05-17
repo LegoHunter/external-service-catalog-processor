@@ -1,5 +1,6 @@
-package io.legohunter.ingress.source.photo.service;
+package io.legohunter.ingress.s3.service;
 
+import io.legohunter.ingress.s3.api.MinioService;
 import io.minio.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

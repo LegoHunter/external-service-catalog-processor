@@ -1,6 +1,6 @@
 package io.legohunter.ingress.source.rebrickable.categories.kafka;
 
-import io.legohunter.ingress.common.kafka.event.UploadObjectEvent;
+import io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent;
 import io.legohunter.ingress.common.storage.model.s3.minio.S3Event;
 import io.legohunter.ingress.source.rebrickable.categories.model.RebrickableThemeEntry;
 import io.minio.GetObjectArgs;
@@ -41,7 +41,7 @@ public class RebrickableThemeS3EventListener {
             topics = "${kafka.topic-configuration.upload-rebrickable-theme.topic}",
             groupId = "${kafka.topic-configuration.upload-rebrickable-theme.consumer.group-id}",
             containerFactory = "uploadRebrickableThemeContainerFactory")
-    public void listen(@Payload UploadObjectEvent event) {
+    public void listen(@Payload ObjectUploadedEvent event) {
         String bucket = event.getBucket();
         String key = event.getKey();
 

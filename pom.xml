@@ -58,7 +58,7 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-<!--            &lt;!&ndash; Import OTel BOM BEFORE spring-boot-dependencies &ndash;&gt;-->
+            <!--            &lt;!&ndash; Import OTel BOM BEFORE spring-boot-dependencies &ndash;&gt;-->
             <!--            <dependency>-->
             <!--                <groupId>io.opentelemetry.instrumentation</groupId>-->
             <!--                <artifactId>opentelemetry-instrumentation-bom</artifactId>-->
@@ -95,6 +95,12 @@
             <groupId>io-legohunter</groupId>
             <artifactId>lego-data-model</artifactId>
             <version>1.0.0-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.legohunter</groupId>
+            <artifactId>lego-imaging</artifactId>
+            <version>1.4.0-SNAPSHOT</version>
         </dependency>
 
         <dependency>
@@ -175,12 +181,6 @@
             <version>2.19.0</version>
         </dependency>
 
-        <!-- Metrics via OTLP -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-registry-otlp</artifactId>
-        </dependency>
-
         <!-- Tracing bridge -->
         <dependency>
             <groupId>io.micrometer</groupId>
@@ -191,16 +191,6 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
-
-<!--        <dependency>-->
-<!--            <groupId>io.opentelemetry</groupId>-->
-<!--            <artifactId>opentelemetry-exporter-otlp</artifactId>-->
-<!--        </dependency>-->
-
-<!--        <dependency>-->
-<!--            <groupId>io.opentelemetry.instrumentation</groupId>-->
-<!--            <artifactId>opentelemetry-spring-boot-starter</artifactId>-->
-<!--        </dependency>-->
 
         <dependency>
             <groupId>ch.qos.logback</groupId>

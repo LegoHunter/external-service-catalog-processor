@@ -1,4 +1,4 @@
-package io.legohunter.ingress.source.photo.exception;
+package io.legohunter.ingress.util.exception;
 
 @FunctionalInterface
 public interface ThrowingSupplier<T> {
