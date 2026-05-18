@@ -1,0 +1,135 @@
+import-path: /dev/config
+
+spring:
+  config:
+    import: classpath:${import-path}/database/database-configuration.yml,classpath:${import-path}/minio/minio-configuration.yml,classpath:${import-path}/kafka/kafka-configuration.yml
+  datasource:
+    database-key-name: test
+
+lego:
+  minio:
+    url: http://localhost
+
+kafka:
+  bootstrap-servers: localhost:31092
+  properties:
+    security.protocol: SASL_SSL
+    sasl.mechanism: SCRAM-SHA-512
+  consumer-defaults:
+    key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+    properties:
+      sasl.jaas.config: "org.apache.kafka.common.security.scram.ScramLoginModule required username='${lego.kafka.consumer.username}' password='${lego.kafka.consumer.password}';"
+      spring.json.trusted.packages: "*"
+      spring.json.use.type.headers: true
+  producer-defaults:
+    key-serializer: org.apache.kafka.common.serialization.StringSerializer
+    value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    retries: 10
+    properties:
+      spring.json.trusted.packages: "*"
+      sasl.jaas.config: "org.apache.kafka.common.security.scram.ScramLoginModule required username='${lego.kafka.producer.username}' password='${lego.kafka.producer.password}';"
+      # Reduce noisy INFO logs from NetworkClient
+      log.level.org.apache.kafka.clients.NetworkClient: WARN
+      # Maximum time to wait for a request to complete
+      request.timeout.ms: 60000
+      # How long to wait for a broker connection before timing out
+      max.block.ms: 60000
+      # Enable idempotence to avoid duplicate messages on retries
+      enable.idempotence: true
+      # Backoff between retries
+      retry.backoff.ms: 500
+      # Reduce aggressive reconnect attempts on slow connections
+      connections.max.idle.ms: 300000
+      # Metadata refresh interval (longer interval reduces churn)
+      metadata.max.age.ms: 300000
+  topic-configuration:
+    minio-s3:
+      topics: sandbox-minio-s3-events
+      consumer:
+        group-id: sandbox-minio-s3-events-group
+        properties:
+          value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      producer:
+        retries: 3
+    upload-minio-s3:
+      topics: sandbox-upload-photo, sandbox-delete-photo, sandbox-upload-bricklink-catalog, sandbox-upload-bricklink-category, sandbox-upload-rebrickable-catalog, sandbox-upload-rebrickable-theme
+      producer:
+        retries: 3
+        value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    upload-photo:
+      topic: sandbox-upload-photo
+      consumer:
+        group-id: sandbox-upload-photo-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    delete-photo:
+      topic: sandbox-delete-photo
+      consumer:
+        group-id: sandbox-delete-photo-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent
+      producer:
+        retries: 3
+    upload-bricklink-catalog:
+      topic: sandbox-upload-bricklink-catalog
+      consumer:
+        group-id: sandbox-upload-bricklink-catalog-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    upload-bricklink-category:
+      topic: sandbox-upload-bricklink-category
+      consumer:
+        group-id: sandbox-upload-bricklink-category-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    upload-rebrickable-catalog:
+      topic: sandbox-upload-rebrickable-catalog
+      consumer:
+        group-id: sandbox-upload-rebrickable-catalog-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    upload-rebrickable-theme:
+      topic: sandbox-upload-rebrickable-theme
+      consumer:
+        group-id: sandbox-upload-rebrickable-theme-group
+        properties:
+          spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
+      producer:
+        retries: 3
+    photo-upload-entry:
+      topic: sandbox-photo-upload-entry
+      consumer:
+        group-id: sandbox-photo-upload-entry-group
+    bricklink-catalog-entry:
+      topic: sandbox-bricklink-catalog-entry
+      consumer:
+        group-id: sandbox-bricklink-catalog-entry-group
+      producer:
+        retries: 3
+    bricklink-category-entry:
+      topic: sandbox-bricklink-category-entry
+      consumer:
+        group-id: sandbox-bricklink-category-entry-group
+      producer:
+        retries: 3
+    rebrickable-catalog-entry:
+      topic: sandbox-rebrickable-catalog-entry
+      consumer:
+        group-id: sandbox-rebrickable-catalog-entry-group
+      producer:
+        retries: 3
+    rebrickable-theme-entry:
+      topic: sandbox-rebrickable-theme-entry
+      consumer:
+        group-id: sandbox-rebrickable-theme-entry-group
+      producer:
+        retries: 3

@@ -1,0 +1,40 @@
+<configuration>
+
+    <!-- Spring Boot defaults -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <springProperty scope="context"
+                    name="appName"
+                    source="spring.application.name"/>
+
+    <!-- LOCAL profile: standard console logging -->
+    <springProfile name="local">
+        <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- KUBERNETES profile: JSON logs -->
+    <springProfile name="kubernetes">
+
+        <appender name="JSON"
+                  class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdc>true</includeMdc>
+                <customFields>
+                    {
+                    "app":"${appName}",
+                    "host":"${HOSTNAME:-unknown}"
+                    }
+                </customFields>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="JSON"/>
+        </root>
+    </springProfile>
+
+</configuration>

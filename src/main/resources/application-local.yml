@@ -1,0 +1,30 @@
+import-path: /dev/config
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  tracing:
+    enabled: false
+  defaults:
+    metrics:
+      export:
+        enabled: false
+
+#otel:
+#  sdk:
+#    disabled: true
+
+logging:
+  level:
+    root: INFO
+    org.springframework.core.env: TRACE
+    org.springframework.boot.context.config: DEBUG
+
+lego:
+  minio:
+    url: https://api.minio.dev.internal.legohunter.io
+
+kafka:
+  bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092

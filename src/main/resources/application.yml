@@ -1,0 +1,11 @@
+spring:
+  profiles:
+    default: local,sandbox
+  application:
+    name: Lego Data Ingress Service
+
+kafka:
+  bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092
+  properties:
+    security.protocol: SASL_SSL
+    sasl.mechanism: SCRAM-SHA-512

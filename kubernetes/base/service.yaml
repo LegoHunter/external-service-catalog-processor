@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: lego-data-ingress
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/actuator/prometheus"
+    prometheus.io/port: "8080"
+    prometheus.io/scheme: "http"
+  labels:
+    app.kubernetes.io/name: lego-data-ingress
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: lego-platform
+spec:
+  type: ClusterIP
+  selector:
+    app: lego-data-ingress
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace for this overlay
+namespace: services-sandbox
+
+labels:
+  - pairs:
+      app.kubernetes.io/instance: sandbox
+
+# Base resources
+resources:
+  - ../../base
+
+# Image tag injection
+images:
+  - name: quay.io/tvattima/lego-data-ingress
+    newTag: snapshot
+
+# Replica override
+replicas:
+  - name: lego-data-ingress
+    count: 1
+
+# File-based strategic merge patches
+patches:
+  - path: deployment-env-patch.yaml
+  - path: deployment-resources-patch.yaml
+

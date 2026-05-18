@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lego-data-ingress
+  labels:
+    app: lego-data-ingress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lego-data-ingress
+  template:
+    metadata:
+      name: lego-data-ingress
+      labels:
+        app: lego-data-ingress   # selector label (required)
+        app.kubernetes.io/name: lego-data-ingress
+        app.kubernetes.io/instance: sandbox
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: lego-platform
+    spec:
+      containers:
+        - name: lego-data-ingress
+          image: quay.io/tvattima/lego-data-ingress
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 5
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+            timeoutSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 10
+
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: >-
+                -Xms1g
+                -Xmx1g
+                -XX:MaxDirectMemorySize=256m
+                -XX:+UseG1GC
+                -XX:MaxGCPauseMillis=200
+                -XX:+UseContainerSupport
+            - name: ABC
+              value: "1234"
+          volumeMounts:
+            - name: services-sandbox-external-secret
+              mountPath: /etc/.credentials
+              readOnly: true
+      volumes:
+        - name: services-sandbox-external-secret
+          secret:
+            secretName: services-sandbox-external-secret
+      restartPolicy: Always
