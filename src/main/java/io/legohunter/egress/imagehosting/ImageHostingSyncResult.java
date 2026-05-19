@@ -11,6 +11,7 @@ import java.util.List;
 public class ImageHostingSyncResult {
     private Integer itemInventoryId;
     private Integer externalServiceId;
+    private boolean dryRun;
     private int photosDiscovered;
     private int photosUploaded;
     private int photosSkipped;

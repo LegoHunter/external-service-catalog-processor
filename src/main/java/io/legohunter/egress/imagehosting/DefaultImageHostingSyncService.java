@@ -74,10 +74,20 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         ItemInventory inventory = itemInventoryDao.findByItemInventoryId(request.getItemInventoryId())
                 .orElseThrow(() -> new IllegalArgumentException("No item inventory found for id [%s]".formatted(request.getItemInventoryId())));
         List<ItemInventoryPhoto> photos = sortedPhotos(itemInventoryPhotoDao.findByItemInventoryId(inventory.getItemInventoryId()));
-        SyncAccumulator accumulator = new SyncAccumulator(inventory.getItemInventoryId(), externalServiceId, photos.size());
+        SyncAccumulator accumulator = new SyncAccumulator(inventory.getItemInventoryId(), externalServiceId, request.isDryRun(), photos.size());
 
         if (photos.isEmpty()) {
             log.info("image_hosting.sync.no_photos itemInventoryId={} externalServiceId={}", inventory.getItemInventoryId(), externalServiceId);
+            return accumulator.toResult();
+        }
+
+        if (request.isDryRun()) {
+            log.info(
+                    "image_hosting.sync.dry_run itemInventoryId={} externalServiceId={} photosDiscovered={}",
+                    inventory.getItemInventoryId(),
+                    externalServiceId,
+                    photos.size()
+            );
             return accumulator.toResult();
         }
 
@@ -148,6 +158,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         Files.createDirectories(properties.getTempDirectory());
         Path tempFile = Files.createTempFile(properties.getTempDirectory(), "photo-%s-".formatted(photo.getItemInventoryPhotoId()), TEMP_FILE_SUFFIX);
         try {
+            // lego-imaging currently uploads from files; keep this as the only temp-file adapter point.
             try (InputStream inputStream = minioService.getObject(photo.getS3Bucket(), photo.getS3Key())) {
                 Files.copy(inputStream, tempFile, StandardCopyOption.REPLACE_EXISTING);
             }
@@ -373,6 +384,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     private static class SyncAccumulator {
         private final Integer itemInventoryId;
         private final Integer externalServiceId;
+        private final boolean dryRun;
         private final int photosDiscovered;
         private final List<String> failureMessages = new ArrayList<>();
         private int photosUploaded;
@@ -381,9 +393,10 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         private boolean albumCreated;
         private boolean membershipUpdated;
 
-        private SyncAccumulator(Integer itemInventoryId, Integer externalServiceId, int photosDiscovered) {
+        private SyncAccumulator(Integer itemInventoryId, Integer externalServiceId, boolean dryRun, int photosDiscovered) {
             this.itemInventoryId = itemInventoryId;
             this.externalServiceId = externalServiceId;
+            this.dryRun = dryRun;
             this.photosDiscovered = photosDiscovered;
         }
 
@@ -396,6 +409,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             return ImageHostingSyncResult.builder()
                     .itemInventoryId(itemInventoryId)
                     .externalServiceId(externalServiceId)
+                    .dryRun(dryRun)
                     .photosDiscovered(photosDiscovered)
                     .photosUploaded(photosUploaded)
                     .photosSkipped(photosSkipped)

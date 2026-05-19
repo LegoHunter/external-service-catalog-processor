@@ -235,6 +235,28 @@ class DefaultImageHostingSyncServiceTest {
         verifyNoInteractions(imageHostingService, externalImageDao, externalImageAlbumDao, externalImageAlbumImageDao);
     }
 
+    @Test
+    void sync_dryRunDiscoversPhotosWithoutProviderCallsOrExternalImageWrites() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+
+        ImageHostingSyncResult result = service.sync(ImageHostingSyncRequest.builder()
+                .itemInventoryId(100)
+                .dryRun(true)
+                .build());
+
+        assertThat(result.isDryRun()).isTrue();
+        assertThat(result.getPhotosDiscovered()).isEqualTo(1);
+        assertThat(result.getPhotosUploaded()).isZero();
+        assertThat(result.isAlbumCreated()).isFalse();
+        assertThat(result.isMembershipUpdated()).isFalse();
+
+        verifyNoInteractions(imageHostingService, minioService, externalImageDao, externalImageAlbumDao, externalImageAlbumImageDao);
+    }
+
     private static ItemInventory inventory() {
         ItemInventory inventory = new ItemInventory();
         inventory.setItemInventoryId(100);

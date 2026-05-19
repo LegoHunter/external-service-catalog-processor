@@ -8,4 +8,6 @@ import lombok.Data;
 public class ImageHostingSyncRequest {
     private Integer itemInventoryId;
     private Integer externalServiceId;
+    @Builder.Default
+    private boolean dryRun = false;
 }
