@@ -12,12 +12,12 @@ import io.legohunter.ingress.source.photo.model.PhotoUploadEvent;
 import io.legohunter.ingress.util.exception.Unchecked;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.lego.data.v2.dao.ExternalItemDao;
-import net.lego.data.v2.dao.ItemInventoryDao;
-import net.lego.data.v2.dao.ItemInventoryPhotoDao;
-import net.lego.data.v2.dto.ExternalItem;
-import net.lego.data.v2.dto.ItemInventory;
-import net.lego.data.v2.dto.ItemInventoryPhoto;
+import io.legohunter.data.dao.ExternalItemDao;
+import io.legohunter.data.dao.ItemInventoryDao;
+import io.legohunter.data.dao.ItemInventoryPhotoDao;
+import io.legohunter.data.dto.ExternalItem;
+import io.legohunter.data.dto.ItemInventory;
+import io.legohunter.data.dto.ItemInventoryPhoto;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -28,8 +28,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 
-import static net.lego.data.v2.dto.ExternalService.ExternalServiceType.BRICKLINK;
-import static net.lego.data.v2.enums.PhotoStatus.PROCESSED;
+import static io.legohunter.data.dto.ExternalService.ExternalServiceType.BRICKLINK;
+import static io.legohunter.data.enums.PhotoStatus.PROCESSED;
 
 @Slf4j
 @Service

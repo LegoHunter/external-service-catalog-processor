@@ -2,8 +2,8 @@ package io.legohunter.ingress.source.bricklink.catalog.service;
 
 import io.legohunter.ingress.source.bricklink.catalog.model.CatalogEntry;
 import lombok.RequiredArgsConstructor;
-import net.lego.data.v2.dao.ExternalItemDao;
-import net.lego.data.v2.dto.ExternalItem;
+import io.legohunter.data.dao.ExternalItemDao;
+import io.legohunter.data.dto.ExternalItem;
 import org.springframework.stereotype.Service;
 
 @Service

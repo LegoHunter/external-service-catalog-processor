@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 @SpringBootApplication(
         scanBasePackages = {
                 "io.legohunter.ingress",
+                "io.legohunter.egress",
                 "io.legohunter.imaging.metadata",
                 "io.legohunter.imaging.scaling"
         },
