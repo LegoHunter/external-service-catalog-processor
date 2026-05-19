@@ -30,8 +30,11 @@ import java.nio.file.Path;
 import java.util.Optional;
 import java.util.Set;
 
-import static io.legohunter.data.enums.ExternalSyncStatus.FAILED;
 import static io.legohunter.data.enums.ExternalSyncStatus.SYNCED;
+import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.DRY_RUN;
+import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.FAILED;
+import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.PARTIAL_FAILURE;
+import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.SUCCESS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -114,6 +117,7 @@ class DefaultImageHostingSyncServiceTest {
 
         ImageHostingSyncResult result = service.syncItemInventory(100);
 
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
         assertThat(result.getPhotosDiscovered()).isEqualTo(1);
         assertThat(result.getPhotosUploaded()).isEqualTo(1);
         assertThat(result.isAlbumCreated()).isTrue();
@@ -174,6 +178,7 @@ class DefaultImageHostingSyncServiceTest {
 
         ImageHostingSyncResult result = service.syncItemInventory(100);
 
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
         assertThat(result.getPhotosSkipped()).isEqualTo(1);
         assertThat(result.getPhotosUploaded()).isZero();
         assertThat(result.isAlbumCreated()).isFalse();
@@ -201,6 +206,7 @@ class DefaultImageHostingSyncServiceTest {
 
         ImageHostingSyncResult result = service.syncItemInventory(100);
 
+        assertThat(result.getOutcome()).isEqualTo(FAILED);
         assertThat(result.getPhotosFailed()).isEqualTo(1);
         assertThat(result.getFailureMessages()).containsExactly("Photo [11] failed: provider rejected upload");
         assertThat(result.isAlbumCreated()).isFalse();
@@ -210,12 +216,44 @@ class DefaultImageHostingSyncServiceTest {
         verify(externalImageDao).upsert(imageCaptor.capture());
         assertThat(imageCaptor.getValue())
                 .extracting(ExternalImage::getSyncStatus, ExternalImage::getErrorMessage)
-                .containsExactly(FAILED, "provider rejected upload");
+                .containsExactly(ExternalSyncStatus.FAILED, "provider rejected upload");
 
         verify(imageHostingService, never()).createAlbum(any());
         verify(imageHostingService, never()).updateAlbumMembership(any());
         verify(externalImageAlbumDao).update(album);
-        assertThat(album.getSyncStatus()).isEqualTo(FAILED);
+        assertThat(album.getSyncStatus()).isEqualTo(ExternalSyncStatus.FAILED);
+    }
+
+    @Test
+    void syncItemInventory_reportsPartialFailureWhenAlbumCreationFailsAfterUpload() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImageAlbum album = album(null);
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+        when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.empty());
+        when(minioService.getObject("photos", "100/front.jpg"))
+                .thenReturn(new ByteArrayInputStream("image".getBytes()));
+        when(imageHostingService.uploadPhoto(any())).thenReturn(response("flickr-photo-11"));
+        when(externalImageDao.upsert(any())).thenAnswer(invocation -> {
+            ExternalImage externalImage = invocation.getArgument(0);
+            externalImage.setExternalImageId(201L);
+            return externalImage;
+        });
+        when(imageHostingService.createAlbum(any())).thenReturn(errorResponse(98, "provider rejected album"));
+
+        ImageHostingSyncResult result = service.syncItemInventory(100);
+
+        assertThat(result.getOutcome()).isEqualTo(PARTIAL_FAILURE);
+        assertThat(result.getPhotosUploaded()).isEqualTo(1);
+        assertThat(result.getFailureMessages()).containsExactly("provider rejected album");
+        assertThat(result.isAlbumCreated()).isFalse();
+        assertThat(result.isMembershipUpdated()).isFalse();
+
+        verify(imageHostingService, never()).updateAlbumMembership(any());
     }
 
     @Test
@@ -227,6 +265,7 @@ class DefaultImageHostingSyncServiceTest {
 
         ImageHostingSyncResult result = service.syncItemInventory(100);
 
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
         assertThat(result.getPhotosDiscovered()).isZero();
         assertThat(result.getPhotosUploaded()).isZero();
         assertThat(result.isAlbumCreated()).isFalse();
@@ -249,6 +288,7 @@ class DefaultImageHostingSyncServiceTest {
                 .build());
 
         assertThat(result.isDryRun()).isTrue();
+        assertThat(result.getOutcome()).isEqualTo(DRY_RUN);
         assertThat(result.getPhotosDiscovered()).isEqualTo(1);
         assertThat(result.getPhotosUploaded()).isZero();
         assertThat(result.isAlbumCreated()).isFalse();

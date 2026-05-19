@@ -5,6 +5,7 @@
 Phase 1 exposes a temporary internal endpoint for manually syncing one item inventory record at a time to the configured image hosting provider.
 
 The endpoint defaults to dry-run mode and does not make provider calls or write `external_image` tables unless `dryRun=false` is supplied.
+Responses include an `outcome` field intended for future low-cardinality sync metrics: `SUCCESS`, `PARTIAL_FAILURE`, `FAILED`, or `DRY_RUN`.
 
 ```http
 POST /internal/image-hosting/item-inventories/{itemInventoryId}/sync

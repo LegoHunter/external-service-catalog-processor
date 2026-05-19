@@ -410,6 +410,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     .itemInventoryId(itemInventoryId)
                     .externalServiceId(externalServiceId)
                     .dryRun(dryRun)
+                    .outcome(outcome())
                     .photosDiscovered(photosDiscovered)
                     .photosUploaded(photosUploaded)
                     .photosSkipped(photosSkipped)
@@ -418,6 +419,19 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     .membershipUpdated(membershipUpdated)
                     .failureMessages(failureMessages)
                     .build();
+        }
+
+        private ImageHostingSyncOutcome outcome() {
+            if (dryRun) {
+                return ImageHostingSyncOutcome.DRY_RUN;
+            }
+            if (failureMessages.isEmpty()) {
+                return ImageHostingSyncOutcome.SUCCESS;
+            }
+            if (photosUploaded + photosSkipped > 0) {
+                return ImageHostingSyncOutcome.PARTIAL_FAILURE;
+            }
+            return ImageHostingSyncOutcome.FAILED;
         }
     }
 }

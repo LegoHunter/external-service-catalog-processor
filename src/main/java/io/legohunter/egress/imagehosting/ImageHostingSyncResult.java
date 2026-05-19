@@ -12,6 +12,7 @@ public class ImageHostingSyncResult {
     private Integer itemInventoryId;
     private Integer externalServiceId;
     private boolean dryRun;
+    private ImageHostingSyncOutcome outcome;
     private int photosDiscovered;
     private int photosUploaded;
     private int photosSkipped;
