@@ -3,8 +3,8 @@ package io.legohunter.ingress.source.photo.service;
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.lego.data.v2.dao.ItemInventoryPhotoDao;
-import net.lego.data.v2.dto.ItemInventoryPhoto;
+import io.legohunter.data.dao.ItemInventoryPhotoDao;
+import io.legohunter.data.dto.ItemInventoryPhoto;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 

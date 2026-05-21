@@ -4,6 +4,13 @@ spring:
   application:
     name: Lego Data Ingress Service
 
+lego:
+  image-hosting:
+    flickr:
+      enabled: false
+    sync:
+      external-service-id: 10
+
 kafka:
   bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092
   properties:

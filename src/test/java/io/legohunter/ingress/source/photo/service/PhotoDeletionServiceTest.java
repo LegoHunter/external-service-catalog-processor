@@ -1,9 +1,9 @@
 package io.legohunter.ingress.source.photo.service;
 
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
-import net.lego.data.v2.dao.ItemInventoryPhotoDao;
-import net.lego.data.v2.dto.ItemInventoryPhoto;
-import net.lego.data.v2.enums.PhotoStatus;
+import io.legohunter.data.dao.ItemInventoryPhotoDao;
+import io.legohunter.data.dto.ItemInventoryPhoto;
+import io.legohunter.data.enums.PhotoStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
