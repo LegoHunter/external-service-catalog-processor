@@ -52,6 +52,28 @@ public class ImageHostingSyncProperties {
     public static class Sync {
         private Integer externalServiceId = 10;
         private Path tempDirectory = Path.of(System.getProperty("java.io.tmpdir"), "lego-data-ingress-image-hosting");
+        private Scheduled scheduled = new Scheduled();
+    }
+
+    @Getter
+    @Setter
+    public static class Scheduled {
+        private boolean enabled = false;
+        private int batchSize = 25;
+        private int concurrency = 2;
+        private boolean retryFailed = false;
+        private long fixedDelayMs = 300_000L;
+        private long initialDelayMs = 30_000L;
+        private String lockAtMostFor = "10m";
+        private String lockAtLeastFor = "0s";
+
+        public int effectiveBatchSize() {
+            return Math.max(1, batchSize);
+        }
+
+        public int effectiveConcurrency() {
+            return Math.max(1, concurrency);
+        }
     }
 
     @Getter

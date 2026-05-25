@@ -54,4 +54,29 @@ public class ImageHostingSyncMetricsService {
                 .register(meterRegistry)
                 .increment();
     }
+
+    public void recordScheduledSync(String providerTag, String outcome, long elapsedMillis) {
+        Counter.builder("image_hosting_scheduled_sync")
+                .tag(PROVIDER_TAG, providerTag)
+                .tag(OUTCOME_TAG, outcome)
+                .register(meterRegistry)
+                .increment();
+
+        Timer.builder("image_hosting_scheduled_sync_duration")
+                .tag(PROVIDER_TAG, providerTag)
+                .tag(OUTCOME_TAG, outcome)
+                .register(meterRegistry)
+                .record(elapsedMillis, TimeUnit.MILLISECONDS);
+    }
+
+    public void recordScheduledSyncInventory(String providerTag, String result, double count) {
+        if (count <= 0) {
+            return;
+        }
+        Counter.builder("image_hosting_scheduled_sync_inventory")
+                .tag(PROVIDER_TAG, providerTag)
+                .tag(RESULT_TAG, result)
+                .register(meterRegistry)
+                .increment(count);
+    }
 }
