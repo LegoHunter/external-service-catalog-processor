@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 
 @Configuration
-@ConditionalOnProperty(prefix = "lego.image-hosting.flickr", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(prefix = "lego.image-hosting.providers.flickr", name = "enabled", havingValue = "true")
 @Import({
         FlickrProperties.class,
         FlickrConfiguration.class,

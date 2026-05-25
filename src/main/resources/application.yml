@@ -6,8 +6,13 @@ spring:
 
 lego:
   image-hosting:
-    flickr:
-      enabled: false
+    default-provider: flickr
+    providers:
+      flickr:
+        enabled: false
+        external-service-id: 10
+        display-name: Flickr
+        metrics-tag: flickr
     sync:
       external-service-id: 10
 

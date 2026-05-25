@@ -23,7 +23,7 @@ class ImageHostingSyncControllerTest {
                 .build();
         when(syncService.sync(org.mockito.ArgumentMatchers.any())).thenReturn(serviceResult);
 
-        ResponseEntity<ImageHostingSyncResult> response = controller.syncItemInventory(100, true, null);
+        ResponseEntity<ImageHostingSyncResult> response = controller.syncItemInventory(100, true, null, null, false);
 
         assertThat(response.getStatusCode().value()).isEqualTo(202);
         assertThat(response.getBody()).isSameAs(serviceResult);
@@ -33,10 +33,12 @@ class ImageHostingSyncControllerTest {
         assertThat(requestCaptor.getValue())
                 .extracting(
                         ImageHostingSyncRequest::getItemInventoryId,
+                        ImageHostingSyncRequest::getProvider,
                         ImageHostingSyncRequest::getExternalServiceId,
-                        ImageHostingSyncRequest::isDryRun
+                        ImageHostingSyncRequest::isDryRun,
+                        ImageHostingSyncRequest::isRetryFailed
                 )
-                .containsExactly(100, null, true);
+                .containsExactly(100, null, null, true, false);
     }
 
     @Test
@@ -50,16 +52,18 @@ class ImageHostingSyncControllerTest {
                 .build();
         when(syncService.sync(org.mockito.ArgumentMatchers.any())).thenReturn(serviceResult);
 
-        controller.syncItemInventory(100, false, 10);
+        controller.syncItemInventory(100, false, "flickr", 10, true);
 
         ArgumentCaptor<ImageHostingSyncRequest> requestCaptor = ArgumentCaptor.forClass(ImageHostingSyncRequest.class);
         verify(syncService).sync(requestCaptor.capture());
         assertThat(requestCaptor.getValue())
                 .extracting(
                         ImageHostingSyncRequest::getItemInventoryId,
+                        ImageHostingSyncRequest::getProvider,
                         ImageHostingSyncRequest::getExternalServiceId,
-                        ImageHostingSyncRequest::isDryRun
+                        ImageHostingSyncRequest::isDryRun,
+                        ImageHostingSyncRequest::isRetryFailed
                 )
-                .containsExactly(100, 10, false);
+                .containsExactly(100, "flickr", 10, false, true);
     }
 }

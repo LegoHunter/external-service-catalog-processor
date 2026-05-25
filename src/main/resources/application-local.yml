@@ -12,15 +12,9 @@ management:
       export:
         enabled: false
 
-#otel:
-#  sdk:
-#    disabled: true
-
 logging:
   level:
     root: INFO
-    org.springframework.core.env: TRACE
-    org.springframework.boot.context.config: DEBUG
 
 lego:
   minio:

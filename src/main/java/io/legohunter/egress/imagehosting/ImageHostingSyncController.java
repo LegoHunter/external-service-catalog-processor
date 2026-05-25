@@ -18,12 +18,16 @@ public class ImageHostingSyncController {
     public ResponseEntity<ImageHostingSyncResult> syncItemInventory(
             @PathVariable Integer itemInventoryId,
             @RequestParam(defaultValue = "true") boolean dryRun,
-            @RequestParam(required = false) Integer externalServiceId
+            @RequestParam(required = false) String provider,
+            @RequestParam(required = false) Integer externalServiceId,
+            @RequestParam(defaultValue = "false") boolean retryFailed
     ) {
         ImageHostingSyncResult result = imageHostingSyncService.sync(ImageHostingSyncRequest.builder()
                 .itemInventoryId(itemInventoryId)
+                .provider(provider)
                 .externalServiceId(externalServiceId)
                 .dryRun(dryRun)
+                .retryFailed(retryFailed)
                 .build());
         return ResponseEntity.accepted().body(result);
     }

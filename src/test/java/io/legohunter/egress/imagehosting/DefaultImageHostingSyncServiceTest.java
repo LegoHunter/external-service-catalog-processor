@@ -13,10 +13,12 @@ import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.ExternalSyncStatus;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
+import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
 import io.legohunter.imaging.model.PhotoServiceRequest;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.service.hosting.api.ImageHostingService;
 import io.legohunter.ingress.s3.api.MinioService;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -70,13 +72,21 @@ class DefaultImageHostingSyncServiceTest {
     @TempDir
     private Path tempDirectory;
 
+    private SimpleMeterRegistry meterRegistry;
     private DefaultImageHostingSyncService service;
 
     @BeforeEach
     void setUp() {
         ImageHostingSyncProperties properties = new ImageHostingSyncProperties();
-        properties.setExternalServiceId(FLICKR_SERVICE_ID);
-        properties.setTempDirectory(tempDirectory);
+        properties.getSync().setExternalServiceId(FLICKR_SERVICE_ID);
+        properties.getSync().setTempDirectory(tempDirectory);
+        ImageHostingSyncProperties.Provider flickr = new ImageHostingSyncProperties.Provider();
+        flickr.setEnabled(true);
+        flickr.setExternalServiceId(FLICKR_SERVICE_ID);
+        flickr.setDisplayName("Flickr");
+        flickr.setMetricsTag("flickr");
+        properties.getProviders().put("flickr", flickr);
+        meterRegistry = new SimpleMeterRegistry();
 
         service = new DefaultImageHostingSyncService(
                 Optional.of(imageHostingService),
@@ -86,7 +96,8 @@ class DefaultImageHostingSyncServiceTest {
                 externalImageDao,
                 externalImageAlbumDao,
                 externalImageAlbumImageDao,
-                properties
+                properties,
+                new ImageHostingSyncMetricsService(meterRegistry)
         );
     }
 
@@ -120,8 +131,30 @@ class DefaultImageHostingSyncServiceTest {
         assertThat(result.getOutcome()).isEqualTo(SUCCESS);
         assertThat(result.getPhotosDiscovered()).isEqualTo(1);
         assertThat(result.getPhotosUploaded()).isEqualTo(1);
+        assertThat(result.getUploadedPhotoIds()).containsExactly(11);
+        assertThat(result.getProvider()).isEqualTo("flickr");
+        assertThat(result.getExternalImageAlbumId()).isEqualTo(301L);
+        assertThat(result.getAlbumId()).isEqualTo("flickr-album-100");
+        assertThat(result.getAlbumUrl()).isEqualTo("https://flickr.example/albums/100");
         assertThat(result.isAlbumCreated()).isTrue();
         assertThat(result.isMembershipUpdated()).isTrue();
+        assertThat(meterRegistry.counter(
+                "image_hosting_sync",
+                "provider", "flickr",
+                "outcome", "success",
+                "dry_run", "false"
+        ).count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter(
+                "image_hosting_photo_upload",
+                "provider", "flickr",
+                "result", "uploaded"
+        ).count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter(
+                "image_hosting_album_operation",
+                "provider", "flickr",
+                "operation", "create",
+                "result", "success"
+        ).count()).isEqualTo(1.0);
 
         ArgumentCaptor<ExternalImage> imageCaptor = ArgumentCaptor.forClass(ExternalImage.class);
         verify(externalImageDao).upsert(imageCaptor.capture());
@@ -131,9 +164,10 @@ class DefaultImageHostingSyncServiceTest {
                         ExternalImage::getItemInventoryPhotoId,
                         ExternalImage::getExternalServiceImageId,
                         ExternalImage::getMd5AtUpload,
+                        ExternalImage::getMetadataHashAtSync,
                         ExternalImage::getSyncStatus
                 )
-                .containsExactly(FLICKR_SERVICE_ID, 11, "flickr-photo-11", "md5-11", SYNCED);
+                .containsExactly(FLICKR_SERVICE_ID, 11, "flickr-photo-11", "md5-11", "metadata-11", SYNCED);
 
         ArgumentCaptor<PhotoServiceRequest<HostedAlbumMembershipRequest>> membershipCaptor =
                 ArgumentCaptor.forClass(PhotoServiceRequest.class);
@@ -165,6 +199,9 @@ class DefaultImageHostingSyncServiceTest {
                 .externalServiceId(FLICKR_SERVICE_ID)
                 .itemInventoryPhotoId(11)
                 .externalServiceImageId("flickr-photo-11")
+                .title("front.jpg")
+                .md5AtUpload("md5-11")
+                .metadataHashAtSync("metadata-11")
                 .syncStatus(SYNCED)
                 .build();
         ExternalImageAlbum album = album("flickr-album-100");
@@ -180,13 +217,73 @@ class DefaultImageHostingSyncServiceTest {
 
         assertThat(result.getOutcome()).isEqualTo(SUCCESS);
         assertThat(result.getPhotosSkipped()).isEqualTo(1);
+        assertThat(result.getSkippedPhotoIds()).containsExactly(11);
         assertThat(result.getPhotosUploaded()).isZero();
+        assertThat(result.getAlbumId()).isEqualTo("flickr-album-100");
         assertThat(result.isAlbumCreated()).isFalse();
         assertThat(result.isMembershipUpdated()).isTrue();
 
         verify(imageHostingService, never()).uploadPhoto(any());
         verify(imageHostingService, never()).createAlbum(any());
         verify(externalImageDao, never()).upsert(any());
+    }
+
+    @Test
+    void syncItemInventory_updatesHostedMetadataWhenMetadataHashChanges() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+        photo.setCaption("Updated caption");
+        ExternalImage existingImage = ExternalImage.builder()
+                .externalImageId(201L)
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .itemInventoryPhotoId(11)
+                .externalServiceImageId("flickr-photo-11")
+                .title("Old caption")
+                .md5AtUpload("old-md5")
+                .metadataHashAtSync("old-metadata")
+                .syncStatus(SYNCED)
+                .build();
+        ExternalImageAlbum album = album("flickr-album-100");
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+        when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.of(existingImage));
+        when(imageHostingService.updatePhotoMetadata(any())).thenReturn(response(null));
+        when(externalImageDao.upsert(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
+
+        ImageHostingSyncResult result = service.syncItemInventory(100);
+
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
+        assertThat(result.getPhotosUploaded()).isZero();
+        assertThat(result.getPhotosMetadataUpdated()).isEqualTo(1);
+        assertThat(result.getMetadataUpdatedPhotoIds()).containsExactly(11);
+        assertThat(result.getPhotosSkipped()).isZero();
+
+        ArgumentCaptor<PhotoServiceRequest<HostedPhotoMetadataUpdate>> metadataCaptor =
+                ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).updatePhotoMetadata(metadataCaptor.capture());
+        assertThat(metadataCaptor.getValue().get())
+                .extracting(
+                        HostedPhotoMetadataUpdate::getPhotoId,
+                        HostedPhotoMetadataUpdate::getTitle,
+                        HostedPhotoMetadataUpdate::getDescription
+                )
+                .containsExactly("flickr-photo-11", "Updated caption", "Updated caption");
+
+        ArgumentCaptor<ExternalImage> imageCaptor = ArgumentCaptor.forClass(ExternalImage.class);
+        verify(externalImageDao).upsert(imageCaptor.capture());
+        assertThat(imageCaptor.getValue())
+                .extracting(
+                        ExternalImage::getMd5AtUpload,
+                        ExternalImage::getMetadataHashAtSync,
+                        ExternalImage::getTitle,
+                        ExternalImage::getSyncStatus
+                )
+                .containsExactly("md5-11", "metadata-11", "Updated caption", SYNCED);
+        verify(imageHostingService, never()).uploadPhoto(any());
     }
 
     @Test
@@ -208,6 +305,7 @@ class DefaultImageHostingSyncServiceTest {
 
         assertThat(result.getOutcome()).isEqualTo(FAILED);
         assertThat(result.getPhotosFailed()).isEqualTo(1);
+        assertThat(result.getFailedPhotoIds()).containsExactly(11);
         assertThat(result.getFailureMessages()).containsExactly("Photo [11] failed: provider rejected upload");
         assertThat(result.isAlbumCreated()).isFalse();
         assertThat(result.isMembershipUpdated()).isFalse();
@@ -222,6 +320,83 @@ class DefaultImageHostingSyncServiceTest {
         verify(imageHostingService, never()).updateAlbumMembership(any());
         verify(externalImageAlbumDao).update(album);
         assertThat(album.getSyncStatus()).isEqualTo(ExternalSyncStatus.FAILED);
+    }
+
+    @Test
+    void sync_skipsPreviouslyFailedImageUnlessRetryFailedIsRequested() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImage failedImage = ExternalImage.builder()
+                .externalImageId(201L)
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .itemInventoryPhotoId(11)
+                .syncStatus(ExternalSyncStatus.FAILED)
+                .errorMessage("previous failure")
+                .build();
+        ExternalImageAlbum album = album(null);
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+        when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.of(failedImage));
+
+        ImageHostingSyncResult result = service.sync(ImageHostingSyncRequest.builder()
+                .itemInventoryId(100)
+                .retryFailed(false)
+                .build());
+
+        assertThat(result.getOutcome()).isEqualTo(FAILED);
+        assertThat(result.getPhotosFailed()).isEqualTo(1);
+        assertThat(result.getFailureMessages())
+                .containsExactly("Photo [11] failed: Previous failed image sync exists and retryFailed=false");
+
+        verifyNoInteractions(minioService);
+        verify(imageHostingService, never()).uploadPhoto(any());
+        verify(externalImageDao, never()).upsert(any());
+        verify(externalImageAlbumDao).update(album);
+    }
+
+    @Test
+    void sync_retriesPreviouslyFailedImageWhenRetryFailedIsRequested() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImage failedImage = ExternalImage.builder()
+                .externalImageId(201L)
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .itemInventoryPhotoId(11)
+                .syncStatus(ExternalSyncStatus.FAILED)
+                .errorMessage("previous failure")
+                .build();
+        ExternalImageAlbum album = album(null);
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+        when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.of(failedImage));
+        when(minioService.getObject("photos", "100/front.jpg"))
+                .thenReturn(new ByteArrayInputStream("image".getBytes()));
+        when(imageHostingService.uploadPhoto(any())).thenReturn(response("flickr-photo-11"));
+        when(externalImageDao.upsert(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(imageHostingService.createAlbum(any())).thenReturn(response(HostedAlbum.builder()
+                .id("flickr-album-100")
+                .url("https://flickr.example/albums/100")
+                .build()));
+        when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
+
+        ImageHostingSyncResult result = service.sync(ImageHostingSyncRequest.builder()
+                .itemInventoryId(100)
+                .retryFailed(true)
+                .build());
+
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
+        assertThat(result.isRetryFailed()).isTrue();
+        assertThat(result.getPhotosUploaded()).isEqualTo(1);
+        assertThat(result.getUploadedPhotoIds()).containsExactly(11);
+
+        verify(imageHostingService).uploadPhoto(any());
+        verify(externalImageDao).upsert(failedImage);
     }
 
     @Test
@@ -312,6 +487,7 @@ class DefaultImageHostingSyncServiceTest {
                 .s3Bucket("photos")
                 .s3Key("100/front.jpg")
                 .md5("md5-" + itemInventoryPhotoId)
+                .metadataHash("metadata-" + itemInventoryPhotoId)
                 .fileName("front.jpg")
                 .primary(primary)
                 .build();
