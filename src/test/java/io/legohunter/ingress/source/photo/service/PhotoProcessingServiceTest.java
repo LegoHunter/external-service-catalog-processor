@@ -1,6 +1,7 @@
 package io.legohunter.ingress.source.photo.service;
 
 import io.legohunter.imaging.exception.PhotoProcessingException;
+import io.legohunter.imaging.metadata.MetadataFingerprintService;
 import io.legohunter.imaging.metadata.impl.MetadataExtractorService;
 import io.legohunter.imaging.metadata.model.ConditionEnum;
 import io.legohunter.imaging.metadata.model.ImageMetadata;
@@ -39,6 +40,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -54,6 +56,9 @@ class PhotoProcessingServiceTest {
 
     @Mock
     private MetadataExtractorService metadataExtractorService;
+
+    @Mock
+    private MetadataFingerprintService metadataFingerprintService;
 
     @Mock
     private PhotoMetricsService photoMetricsService;
@@ -77,6 +82,7 @@ class PhotoProcessingServiceTest {
     void setUp() {
         originalBytes = "original-image".getBytes();
         scaledBytes = "scaled-image".getBytes();
+        lenient().when(metadataFingerprintService.calculateHash(any())).thenReturn("metadata-hash");
     }
 
     @Test
@@ -136,6 +142,7 @@ class PhotoProcessingServiceTest {
         verify(itemInventoryPhotoDao).insertPhoto(
                 999,
                 "md5-1",
+                "metadata-hash",
                 "test.jpg",
                 "lego-photos-sandbox",
                 "3001/uuid-1/md5-1.jpg",
@@ -178,6 +185,7 @@ class PhotoProcessingServiceTest {
         verify(itemInventoryPhotoDao).insertPhoto(
                 200,
                 "md5-2",
+                "metadata-hash",
                 "photo.jpg",
                 "lego-photos-sandbox",
                 "3002/uuid-2/md5-2.jpg",
@@ -222,6 +230,7 @@ class PhotoProcessingServiceTest {
                 10,
                 "test.jpg",
                 "new-md5",
+                "metadata-hash",
                 "lego-photos-sandbox",
                 "3001/uuid-1/new-md5.jpg",
                 scaledBytes.length,
@@ -256,6 +265,7 @@ class PhotoProcessingServiceTest {
                 10,
                 "test.jpg",
                 "new-md5",
+                "metadata-hash",
                 "lego-photos-sandbox",
                 "3001/uuid-1/new-md5.jpg",
                 scaledBytes.length,
@@ -267,6 +277,7 @@ class PhotoProcessingServiceTest {
         verify(minioService).deleteObject("lego-photos-sandbox", "3001/uuid-1/old-md5.jpg");
         verify(minioService).deleteObject("lego-uploads-sandbox", "photos/nested/test.jpg");
         verify(itemInventoryPhotoDao, never()).insertPhoto(
+                any(),
                 any(),
                 any(),
                 any(),
@@ -308,14 +319,15 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.of(existingPhoto));
         when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
                 .thenReturn(Optional.of(externalItem(123)));
-        when(itemInventoryPhotoDao.updateMetadata(10, "test.jpg", false, "Metadata-only caption", PROCESSED))
+        when(itemInventoryPhotoDao.updateMetadata(10, "test.jpg", "metadata-hash", false, "Metadata-only caption", PROCESSED))
                 .thenReturn(1);
 
         service.process(event);
 
         verify(minioService, never()).putObject(any(), any(), any(), anyLong(), any());
-        verify(itemInventoryPhotoDao).updateMetadata(10, "test.jpg", false, "Metadata-only caption", PROCESSED);
+        verify(itemInventoryPhotoDao).updateMetadata(10, "test.jpg", "metadata-hash", false, "Metadata-only caption", PROCESSED);
         verify(itemInventoryPhotoDao, never()).replaceStoredObject(
+                any(),
                 any(),
                 any(),
                 any(),
@@ -381,6 +393,7 @@ class PhotoProcessingServiceTest {
                 10,
                 "test.jpg",
                 "new-md5",
+                "metadata-hash",
                 "lego-photos-sandbox",
                 "3001/uuid-1/new-md5.jpg",
                 scaledBytes.length,
@@ -478,11 +491,13 @@ class PhotoProcessingServiceTest {
         verify(itemInventoryPhotoDao, never()).updateMetadata(
                 any(),
                 any(),
+                any(),
                 anyBoolean(),
                 any(),
                 any(PhotoStatus.class)
         );
         verify(itemInventoryPhotoDao, never()).replaceStoredObject(
+                any(),
                 any(),
                 any(),
                 any(),
@@ -640,6 +655,7 @@ class PhotoProcessingServiceTest {
                 any(),
                 any(),
                 any(),
+                any(),
                 anyLong(),
                 anyBoolean(),
                 any(),
@@ -670,9 +686,10 @@ class PhotoProcessingServiceTest {
         doThrow(new RuntimeException("db insert failed"))
                 .when(itemInventoryPhotoDao)
                 .insertPhoto(
-                        500,
-                        "md5-rollback",
-                        "photo.jpg",
+                500,
+                "md5-rollback",
+                "metadata-hash",
+                "photo.jpg",
                         "lego-photos-sandbox",
                         "3001/uuid-1/md5-rollback.jpg",
                         scaledBytes.length,
@@ -748,6 +765,7 @@ class PhotoProcessingServiceTest {
                 .itemInventoryPhotoId(itemInventoryPhotoId)
                 .itemInventoryId(itemInventoryId)
                 .md5(md5)
+                .metadataHash("metadata-hash")
                 .fileName(fileName)
                 .s3Bucket(s3Bucket)
                 .s3Key(s3Key)

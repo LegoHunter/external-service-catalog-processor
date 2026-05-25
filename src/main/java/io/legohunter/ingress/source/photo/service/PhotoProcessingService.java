@@ -1,6 +1,7 @@
 package io.legohunter.ingress.source.photo.service;
 
 import io.legohunter.imaging.exception.PhotoProcessingException;
+import io.legohunter.imaging.metadata.MetadataFingerprintService;
 import io.legohunter.imaging.metadata.impl.MetadataExtractorService;
 import io.legohunter.imaging.metadata.model.ConditionEnum;
 import io.legohunter.imaging.metadata.model.ImageMetadata;
@@ -44,6 +45,7 @@ public class PhotoProcessingService {
     private final MinioService minioService;
     private final ImageScalingService imageScalingService;
     private final MetadataExtractorService metadataExtractorService;
+    private final MetadataFingerprintService metadataFingerprintService;
     private final PhotoMetricsService photoMetricsService;
 
     private final ItemInventoryDao itemInventoryDao;
@@ -230,6 +232,9 @@ public class PhotoProcessingService {
         String description =
                 metadata.caption();
 
+        String metadataHash =
+                metadataFingerprintService.calculateHash(metadata);
+
         String uuid;
 
         try {
@@ -307,10 +312,12 @@ public class PhotoProcessingService {
         }
 
         MDC.put("md5", md5);
+        MDC.put("metadataHash", metadataHash);
 
         log.info(
-                "photo.hash.computed md5={}",
-                md5
+                "photo.hash.computed md5={} metadataHash={}",
+                md5,
+                metadataHash
         );
 
         Optional<ItemInventory> existingItemInventory =
@@ -380,6 +387,11 @@ public class PhotoProcessingService {
                         .map(photo -> !md5.equals(photo.getMd5()))
                         .orElse(true);
 
+        boolean metadataChanged =
+                existingLogicalPhoto
+                        .map(photo -> !metadataHash.equals(photo.getMetadataHash()))
+                        .orElse(true);
+
         // =========================================================
         // BUILD DB STATE
         // =========================================================
@@ -405,6 +417,7 @@ public class PhotoProcessingService {
 
         if (replaceExistingPhoto
                 && !contentChanged
+                && !metadataChanged
                 && hasNoEffectiveMetadataChanges(
                 existingItemInventory.orElseThrow(),
                 itemInventory,
@@ -507,6 +520,7 @@ public class PhotoProcessingService {
                 updateExistingPhoto(
                         existingLogicalPhoto.orElseThrow(),
                         md5,
+                        metadataHash,
                         normalizedFileName,
                         destinationKey,
                         scaledBytes.length,
@@ -520,6 +534,7 @@ public class PhotoProcessingService {
                 itemInventoryPhotoDao.insertPhoto(
                         itemInventory.getItemInventoryId(),
                         md5,
+                        metadataHash,
                         normalizedFileName,
                         FINAL_BUCKET,
                         destinationKey,
@@ -766,6 +781,7 @@ public class PhotoProcessingService {
     private void updateExistingPhoto(
             ItemInventoryPhoto existingPhoto,
             String md5,
+            String metadataHash,
             String normalizedFileName,
             String destinationKey,
             long fileSize,
@@ -783,6 +799,7 @@ public class PhotoProcessingService {
                             existingPhoto.getItemInventoryPhotoId(),
                             normalizedFileName,
                             md5,
+                            metadataHash,
                             FINAL_BUCKET,
                             destinationKey,
                             fileSize,
@@ -797,6 +814,7 @@ public class PhotoProcessingService {
                     itemInventoryPhotoDao.updateMetadata(
                             existingPhoto.getItemInventoryPhotoId(),
                             normalizedFileName,
+                            metadataHash,
                             primaryPhoto,
                             caption,
                             PROCESSED

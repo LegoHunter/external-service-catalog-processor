@@ -14,6 +14,7 @@ import io.legohunter.data.enums.ExternalSyncStatus;
 import io.legohunter.imaging.model.AlbumManifest;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
+import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
 import io.legohunter.imaging.model.PhotoMetaDataV1;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.model.SimplePhotoServiceRequest;
@@ -35,6 +36,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static io.legohunter.data.enums.ExternalSyncStatus.FAILED;
@@ -55,6 +57,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     private final ExternalImageAlbumDao externalImageAlbumDao;
     private final ExternalImageAlbumImageDao externalImageAlbumImageDao;
     private final ImageHostingSyncProperties properties;
+    private final ImageHostingSyncMetricsService metricsService;
 
     @Override
     public ImageHostingSyncResult syncItemInventory(Integer itemInventoryId) {
@@ -69,21 +72,103 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             throw new IllegalArgumentException("itemInventoryId is required");
         }
 
-        Integer externalServiceId = Optional.ofNullable(request.getExternalServiceId())
-                .orElse(properties.getExternalServiceId());
+        ImageHostingSyncProperties.ResolvedProvider provider = properties.resolveProvider(
+                request.getProvider(),
+                request.getExternalServiceId()
+        );
+        long startedAt = System.currentTimeMillis();
+        log.info(
+                "image_hosting.sync.started provider={} externalServiceId={} itemInventoryId={} dryRun={} retryFailed={}",
+                provider.provider(),
+                provider.externalServiceId(),
+                request.getItemInventoryId(),
+                request.isDryRun(),
+                request.isRetryFailed()
+        );
+
+        try {
+            ImageHostingSyncResult result = syncInternal(request, provider);
+            long elapsedMillis = System.currentTimeMillis() - startedAt;
+            metricsService.recordSync(result, provider.metricsTag(), elapsedMillis);
+            metricsService.recordPhotoUpload(provider.metricsTag(), "uploaded", result.getPhotosUploaded());
+            metricsService.recordPhotoUpload(provider.metricsTag(), "metadata_updated", result.getPhotosMetadataUpdated());
+            metricsService.recordPhotoUpload(provider.metricsTag(), "skipped", result.getPhotosSkipped());
+            metricsService.recordPhotoUpload(provider.metricsTag(), "failed", result.getPhotosFailed());
+            log.info(
+                    "image_hosting.sync.completed provider={} externalServiceId={} itemInventoryId={} outcome={} dryRun={} retryFailed={} photosDiscovered={} photosUploaded={} photosMetadataUpdated={} photosSkipped={} photosFailed={} albumId={} albumUrl={} elapsedMillis={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    result.getItemInventoryId(),
+                    result.getOutcome(),
+                    result.isDryRun(),
+                    result.isRetryFailed(),
+                    result.getPhotosDiscovered(),
+                    result.getPhotosUploaded(),
+                    result.getPhotosMetadataUpdated(),
+                    result.getPhotosSkipped(),
+                    result.getPhotosFailed(),
+                    result.getAlbumId(),
+                    result.getAlbumUrl(),
+                    elapsedMillis
+            );
+            return result;
+        } catch (RuntimeException e) {
+            long elapsedMillis = System.currentTimeMillis() - startedAt;
+            ImageHostingSyncResult result = ImageHostingSyncResult.builder()
+                    .itemInventoryId(request.getItemInventoryId())
+                    .provider(provider.provider())
+                    .externalServiceId(provider.externalServiceId())
+                    .dryRun(request.isDryRun())
+                    .retryFailed(request.isRetryFailed())
+                    .outcome(ImageHostingSyncOutcome.FAILED)
+                    .failureMessage(e.getMessage())
+                    .build();
+            metricsService.recordSync(result, provider.metricsTag(), elapsedMillis);
+            log.error(
+                    "image_hosting.sync.failed provider={} externalServiceId={} itemInventoryId={} dryRun={} retryFailed={} elapsedMillis={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    request.getItemInventoryId(),
+                    request.isDryRun(),
+                    request.isRetryFailed(),
+                    elapsedMillis,
+                    e
+            );
+            throw e;
+        }
+    }
+
+    private ImageHostingSyncResult syncInternal(
+            ImageHostingSyncRequest request,
+            ImageHostingSyncProperties.ResolvedProvider provider
+    ) {
+        Integer externalServiceId = provider.externalServiceId();
         ItemInventory inventory = itemInventoryDao.findByItemInventoryId(request.getItemInventoryId())
                 .orElseThrow(() -> new IllegalArgumentException("No item inventory found for id [%s]".formatted(request.getItemInventoryId())));
         List<ItemInventoryPhoto> photos = sortedPhotos(itemInventoryPhotoDao.findByItemInventoryId(inventory.getItemInventoryId()));
-        SyncAccumulator accumulator = new SyncAccumulator(inventory.getItemInventoryId(), externalServiceId, request.isDryRun(), photos.size());
+        SyncAccumulator accumulator = new SyncAccumulator(
+                inventory.getItemInventoryId(),
+                provider.provider(),
+                externalServiceId,
+                request.isDryRun(),
+                request.isRetryFailed(),
+                photos.size()
+        );
 
         if (photos.isEmpty()) {
-            log.info("image_hosting.sync.no_photos itemInventoryId={} externalServiceId={}", inventory.getItemInventoryId(), externalServiceId);
+            log.info(
+                    "image_hosting.sync.no_photos provider={} itemInventoryId={} externalServiceId={}",
+                    provider.provider(),
+                    inventory.getItemInventoryId(),
+                    externalServiceId
+            );
             return accumulator.toResult();
         }
 
         if (request.isDryRun()) {
             log.info(
-                    "image_hosting.sync.dry_run itemInventoryId={} externalServiceId={} photosDiscovered={}",
+                    "image_hosting.sync.dry_run provider={} itemInventoryId={} externalServiceId={} photosDiscovered={}",
+                    provider.provider(),
                     inventory.getItemInventoryId(),
                     externalServiceId,
                     photos.size()
@@ -100,49 +185,121 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
 
         List<SyncedPhoto> syncedPhotos = new ArrayList<>();
         for (ItemInventoryPhoto photo : photos) {
-            syncPhoto(externalServiceId, photo, accumulator).ifPresent(syncedPhotos::add);
+            syncPhoto(provider, photo, request.isRetryFailed(), accumulator).ifPresent(syncedPhotos::add);
         }
 
         if (syncedPhotos.isEmpty()) {
             markAlbumFailed(album, "No photos were available to link after upload sync");
+            accumulator.setAlbum(album);
             return accumulator.toResult();
         }
 
         if (isBlank(album.getExternalAlbumId())) {
-            createAlbum(album, inventory, syncedPhotos, accumulator);
+            createAlbum(provider, album, inventory, syncedPhotos, accumulator);
+        } else {
+            accumulator.setAlbum(album);
+            log.info(
+                    "image_hosting.album.reused provider={} externalServiceId={} itemInventoryId={} externalImageAlbumId={} albumId={} albumUrl={}",
+                    provider.provider(),
+                    externalServiceId,
+                    inventory.getItemInventoryId(),
+                    album.getExternalImageAlbumId(),
+                    album.getExternalAlbumId(),
+                    album.getAlbumUrl()
+            );
         }
 
         if (!isBlank(album.getExternalAlbumId())) {
-            updateAlbumMembership(album, syncedPhotos, accumulator);
+            updateAlbumMembership(provider, album, syncedPhotos, accumulator);
         }
 
         return accumulator.toResult();
     }
 
-    private Optional<SyncedPhoto> syncPhoto(Integer externalServiceId, ItemInventoryPhoto photo, SyncAccumulator accumulator) {
+    private Optional<SyncedPhoto> syncPhoto(
+            ImageHostingSyncProperties.ResolvedProvider provider,
+            ItemInventoryPhoto photo,
+            boolean retryFailed,
+            SyncAccumulator accumulator
+    ) {
+        Integer externalServiceId = provider.externalServiceId();
         Optional<ExternalImage> existing = externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(
                 externalServiceId,
                 photo.getItemInventoryPhotoId()
         );
 
-        if (existing.map(ExternalImage::getExternalServiceImageId).filter(id -> !isBlank(id)).isPresent()) {
-            accumulator.photosSkipped++;
-            return existing.map(externalImage -> new SyncedPhoto(photo, externalImage));
+        Optional<ExternalImage> syncedExisting = existing
+                .filter(externalImage -> !isBlank(externalImage.getExternalServiceImageId()));
+        if (syncedExisting.isPresent()) {
+            ExternalImage externalImage = syncedExisting.orElseThrow();
+            if (requiresMetadataUpdate(photo, externalImage)) {
+                return updateHostedPhotoMetadata(provider, photo, externalImage, accumulator);
+            }
+
+            accumulator.recordPhotoSkipped(photo);
+            refreshSyncedImageState(externalServiceId, photo, externalImage);
+            log.info(
+                    "image_hosting.photo_upload.skipped provider={} externalServiceId={} itemInventoryPhotoId={} externalImageId={} externalServiceImageId={} reason=already_synced",
+                    provider.provider(),
+                    externalServiceId,
+                    photo.getItemInventoryPhotoId(),
+                    externalImage.getExternalImageId(),
+                    externalImage.getExternalServiceImageId()
+            );
+            return Optional.of(new SyncedPhoto(photo, externalImage));
+        }
+
+        if (existing.map(ExternalImage::getSyncStatus).filter(FAILED::equals).isPresent() && !retryFailed) {
+            String message = "Previous failed image sync exists and retryFailed=false";
+            accumulator.recordPhotoFailure(photo, message);
+            existing.ifPresent(externalImage -> log.info(
+                    "image_hosting.photo_upload.skipped provider={} externalServiceId={} itemInventoryPhotoId={} externalImageId={} reason=previous_failure retryFailed=false",
+                    provider.provider(),
+                    externalServiceId,
+                    photo.getItemInventoryPhotoId(),
+                    externalImage.getExternalImageId()
+            ));
+            return Optional.empty();
         }
 
         try {
             PhotoMetaDataV1 photoMetaData = loadPhotoMetaData(photo);
             try {
+                log.info(
+                        "image_hosting.photo_upload.started provider={} externalServiceId={} itemInventoryPhotoId={} s3Bucket={} s3Key={} retryFailed={}",
+                        provider.provider(),
+                        externalServiceId,
+                        photo.getItemInventoryPhotoId(),
+                        photo.getS3Bucket(),
+                        photo.getS3Key(),
+                        retryFailed
+                );
                 PhotoServiceResponse<String> response = imageHostingService().uploadPhoto(new SimplePhotoServiceRequest<>(photoMetaData));
                 if (response.isError()) {
                     String message = responseMessage(response);
                     saveFailedImage(externalServiceId, photo, existing, message);
                     accumulator.recordPhotoFailure(photo, message);
+                    log.warn(
+                            "image_hosting.photo_upload.failed provider={} externalServiceId={} itemInventoryPhotoId={} responseCode={} message={}",
+                            provider.provider(),
+                            externalServiceId,
+                            photo.getItemInventoryPhotoId(),
+                            response.responseCode(),
+                            message
+                    );
                     return Optional.empty();
                 }
 
                 ExternalImage externalImage = saveSyncedImage(externalServiceId, photo, existing, response.get());
-                accumulator.photosUploaded++;
+                accumulator.recordPhotoUploaded(photo);
+                log.info(
+                        "image_hosting.photo_upload.completed provider={} externalServiceId={} itemInventoryPhotoId={} externalImageId={} externalServiceImageId={}",
+                        provider.provider(),
+                        externalServiceId,
+                        photo.getItemInventoryPhotoId(),
+                        externalImage.getExternalImageId(),
+                        externalImage.getExternalServiceImageId()
+                );
                 return Optional.of(new SyncedPhoto(photo, externalImage));
             } finally {
                 Files.deleteIfExists(photoMetaData.getAbsolutePath());
@@ -150,6 +307,82 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         } catch (Exception e) {
             saveFailedImage(externalServiceId, photo, existing, e.getMessage());
             accumulator.recordPhotoFailure(photo, e.getMessage());
+            log.warn(
+                    "image_hosting.photo_upload.failed provider={} externalServiceId={} itemInventoryPhotoId={} message={}",
+                    provider.provider(),
+                    externalServiceId,
+                    photo.getItemInventoryPhotoId(),
+                    e.getMessage(),
+                    e
+            );
+            return Optional.empty();
+        }
+    }
+
+    private Optional<SyncedPhoto> updateHostedPhotoMetadata(
+            ImageHostingSyncProperties.ResolvedProvider provider,
+            ItemInventoryPhoto photo,
+            ExternalImage externalImage,
+            SyncAccumulator accumulator
+    ) {
+        HostedPhotoMetadataUpdate metadataUpdate = HostedPhotoMetadataUpdate.builder()
+                .photoId(externalImage.getExternalServiceImageId())
+                .title(photoTitle(photo))
+                .description(photoDescription(photo))
+                .build();
+
+        try {
+            log.info(
+                    "image_hosting.photo_metadata_update.started provider={} externalServiceId={} itemInventoryPhotoId={} externalImageId={} externalServiceImageId={} metadataHash={} previousMetadataHash={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    photo.getItemInventoryPhotoId(),
+                    externalImage.getExternalImageId(),
+                    externalImage.getExternalServiceImageId(),
+                    photo.getMetadataHash(),
+                    externalImage.getMetadataHashAtSync()
+            );
+            PhotoServiceResponse<Void> response = imageHostingService().updatePhotoMetadata(new SimplePhotoServiceRequest<>(metadataUpdate));
+            if (response.isError()) {
+                String message = responseMessage(response);
+                saveFailedImage(provider.externalServiceId(), photo, Optional.of(externalImage), message);
+                accumulator.recordPhotoFailure(photo, message);
+                log.warn(
+                        "image_hosting.photo_metadata_update.failed provider={} externalServiceId={} itemInventoryPhotoId={} externalImageId={} responseCode={} message={}",
+                        provider.provider(),
+                        provider.externalServiceId(),
+                        photo.getItemInventoryPhotoId(),
+                        externalImage.getExternalImageId(),
+                        response.responseCode(),
+                        message
+                );
+                return Optional.empty();
+            }
+
+            refreshSyncedImageState(provider.externalServiceId(), photo, externalImage);
+            accumulator.recordPhotoMetadataUpdated(photo);
+            log.info(
+                    "image_hosting.photo_metadata_update.completed provider={} externalServiceId={} itemInventoryPhotoId={} externalImageId={} externalServiceImageId={} metadataHash={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    photo.getItemInventoryPhotoId(),
+                    externalImage.getExternalImageId(),
+                    externalImage.getExternalServiceImageId(),
+                    photo.getMetadataHash()
+            );
+            return Optional.of(new SyncedPhoto(photo, externalImage));
+        } catch (Exception e) {
+            saveFailedImage(provider.externalServiceId(), photo, Optional.of(externalImage), e.getMessage());
+            accumulator.recordPhotoFailure(photo, e.getMessage());
+            log.warn(
+                    "image_hosting.photo_metadata_update.failed provider={} externalServiceId={} itemInventoryPhotoId={} externalImageId={} message={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    photo.getItemInventoryPhotoId(),
+                    externalImage.getExternalImageId(),
+                    e.getMessage(),
+                    e
+            );
             return Optional.empty();
         }
     }
@@ -187,11 +420,36 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         externalImage.setExternalServiceImageId(externalServiceImageId);
         externalImage.setTitle(photoTitle(photo));
         externalImage.setMd5AtUpload(photo.getMd5());
+        externalImage.setMetadataHashAtSync(photo.getMetadataHash());
         externalImage.setSyncStatus(SYNCED);
         externalImage.setErrorMessage(null);
         externalImage.setUploadedAt(Optional.ofNullable(externalImage.getUploadedAt()).orElse(now));
         externalImage.setLastSyncedAt(now);
         return Optional.ofNullable(externalImageDao.upsert(externalImage)).orElse(externalImage);
+    }
+
+    private void refreshSyncedImageState(
+            Integer externalServiceId,
+            ItemInventoryPhoto photo,
+            ExternalImage externalImage
+    ) {
+        boolean changed = !Objects.equals(externalImage.getMd5AtUpload(), photo.getMd5())
+                || !Objects.equals(externalImage.getMetadataHashAtSync(), photo.getMetadataHash())
+                || !Objects.equals(externalImage.getTitle(), photoTitle(photo))
+                || !SYNCED.equals(externalImage.getSyncStatus());
+        if (!changed) {
+            return;
+        }
+
+        externalImage.setExternalServiceId(externalServiceId);
+        externalImage.setItemInventoryPhotoId(photo.getItemInventoryPhotoId());
+        externalImage.setTitle(photoTitle(photo));
+        externalImage.setMd5AtUpload(photo.getMd5());
+        externalImage.setMetadataHashAtSync(photo.getMetadataHash());
+        externalImage.setSyncStatus(SYNCED);
+        externalImage.setErrorMessage(null);
+        externalImage.setLastSyncedAt(ZonedDateTime.now());
+        externalImageDao.upsert(externalImage);
     }
 
     private void saveFailedImage(
@@ -213,12 +471,21 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     }
 
     private void createAlbum(
+            ImageHostingSyncProperties.ResolvedProvider provider,
             ExternalImageAlbum album,
             ItemInventory inventory,
             List<SyncedPhoto> syncedPhotos,
             SyncAccumulator accumulator
     ) {
         try {
+            log.info(
+                    "image_hosting.album.create.started provider={} externalServiceId={} itemInventoryId={} externalImageAlbumId={} photos={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    inventory.getItemInventoryId(),
+                    album.getExternalImageAlbumId(),
+                    syncedPhotos.size()
+            );
             AlbumManifest manifest = new AlbumManifest();
             manifest.setUuid(inventory.getUuid());
             manifest.setTitle(albumTitle(inventory));
@@ -231,7 +498,17 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             if (response.isError()) {
                 String message = responseMessage(response);
                 markAlbumFailed(album, message);
-                accumulator.failureMessages.add(message);
+                accumulator.recordAlbumFailure(album, message);
+                metricsService.recordAlbumOperation(provider.metricsTag(), "create", "failed");
+                log.warn(
+                        "image_hosting.album.create.failed provider={} externalServiceId={} itemInventoryId={} externalImageAlbumId={} responseCode={} message={}",
+                        provider.provider(),
+                        provider.externalServiceId(),
+                        inventory.getItemInventoryId(),
+                        album.getExternalImageAlbumId(),
+                        response.responseCode(),
+                        message
+                );
                 return;
             }
 
@@ -243,13 +520,35 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             album.setLastSyncedAt(ZonedDateTime.now());
             externalImageAlbumDao.update(album);
             accumulator.albumCreated = true;
+            accumulator.setAlbum(album);
+            metricsService.recordAlbumOperation(provider.metricsTag(), "create", "success");
+            log.info(
+                    "image_hosting.album.create.completed provider={} externalServiceId={} itemInventoryId={} externalImageAlbumId={} albumId={} albumUrl={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    inventory.getItemInventoryId(),
+                    album.getExternalImageAlbumId(),
+                    album.getExternalAlbumId(),
+                    album.getAlbumUrl()
+            );
         } catch (Exception e) {
             markAlbumFailed(album, e.getMessage());
-            accumulator.failureMessages.add(e.getMessage());
+            accumulator.recordAlbumFailure(album, e.getMessage());
+            metricsService.recordAlbumOperation(provider.metricsTag(), "create", "failed");
+            log.warn(
+                    "image_hosting.album.create.failed provider={} externalServiceId={} itemInventoryId={} externalImageAlbumId={} message={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    inventory.getItemInventoryId(),
+                    album.getExternalImageAlbumId(),
+                    e.getMessage(),
+                    e
+            );
         }
     }
 
     private void updateAlbumMembership(
+            ImageHostingSyncProperties.ResolvedProvider provider,
             ExternalImageAlbum album,
             List<SyncedPhoto> syncedPhotos,
             SyncAccumulator accumulator
@@ -265,6 +564,15 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                 .orElseGet(() -> photoIds.stream().findFirst().orElseThrow());
 
         try {
+            log.info(
+                    "image_hosting.album_membership.update.started provider={} externalServiceId={} externalImageAlbumId={} albumId={} photoCount={} primaryPhotoId={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    album.getExternalImageAlbumId(),
+                    album.getExternalAlbumId(),
+                    photoIds.size(),
+                    primaryPhotoId
+            );
             HostedAlbumMembershipRequest membershipRequest = HostedAlbumMembershipRequest.builder()
                     .albumId(album.getExternalAlbumId())
                     .primaryPhotoId(primaryPhotoId)
@@ -274,7 +582,17 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             if (response.isError()) {
                 String message = responseMessage(response);
                 markAlbumFailed(album, message);
-                accumulator.failureMessages.add(message);
+                accumulator.recordAlbumFailure(album, message);
+                metricsService.recordAlbumOperation(provider.metricsTag(), "membership", "failed");
+                log.warn(
+                        "image_hosting.album_membership.update.failed provider={} externalServiceId={} externalImageAlbumId={} albumId={} responseCode={} message={}",
+                        provider.provider(),
+                        provider.externalServiceId(),
+                        album.getExternalImageAlbumId(),
+                        album.getExternalAlbumId(),
+                        response.responseCode(),
+                        message
+                );
                 return;
             }
 
@@ -284,9 +602,30 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             album.setLastSyncedAt(ZonedDateTime.now());
             externalImageAlbumDao.update(album);
             accumulator.membershipUpdated = true;
+            accumulator.setAlbum(album);
+            metricsService.recordAlbumOperation(provider.metricsTag(), "membership", "success");
+            log.info(
+                    "image_hosting.album_membership.update.completed provider={} externalServiceId={} externalImageAlbumId={} albumId={} photoCount={} primaryPhotoId={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    album.getExternalImageAlbumId(),
+                    album.getExternalAlbumId(),
+                    photoIds.size(),
+                    primaryPhotoId
+            );
         } catch (Exception e) {
             markAlbumFailed(album, e.getMessage());
-            accumulator.failureMessages.add(e.getMessage());
+            accumulator.recordAlbumFailure(album, e.getMessage());
+            metricsService.recordAlbumOperation(provider.metricsTag(), "membership", "failed");
+            log.warn(
+                    "image_hosting.album_membership.update.failed provider={} externalServiceId={} externalImageAlbumId={} albumId={} message={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    album.getExternalImageAlbumId(),
+                    album.getExternalAlbumId(),
+                    e.getMessage(),
+                    e
+            );
         }
     }
 
@@ -300,8 +639,10 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             SyncedPhoto syncedPhoto = syncedPhotos.get(i);
             Long externalImageId = syncedPhoto.externalImage().getExternalImageId();
             if (externalImageId == null) {
-                accumulator.failureMessages.add("Cannot persist album membership for photo [%s] because externalImageId is missing"
-                        .formatted(syncedPhoto.photo().getItemInventoryPhotoId()));
+                accumulator.recordPhotoFailure(
+                        syncedPhoto.photo(),
+                        "Cannot persist album membership because externalImageId is missing"
+                );
                 continue;
             }
 
@@ -363,6 +704,18 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         return "photo-%s.jpg".formatted(photo.getItemInventoryPhotoId());
     }
 
+    private String photoDescription(ItemInventoryPhoto photo) {
+        if (!isBlank(photo.getCaption())) {
+            return photo.getCaption();
+        }
+        return photoTitle(photo);
+    }
+
+    private boolean requiresMetadataUpdate(ItemInventoryPhoto photo, ExternalImage externalImage) {
+        return !isBlank(photo.getMetadataHash())
+                && !Objects.equals(photo.getMetadataHash(), externalImage.getMetadataHashAtSync());
+    }
+
     private String responseMessage(PhotoServiceResponse<?> response) {
         if (!isBlank(response.responseMessage())) {
             return response.responseMessage();
@@ -383,40 +736,96 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
 
     private static class SyncAccumulator {
         private final Integer itemInventoryId;
+        private final String provider;
         private final Integer externalServiceId;
         private final boolean dryRun;
+        private final boolean retryFailed;
         private final int photosDiscovered;
         private final List<String> failureMessages = new ArrayList<>();
+        private final List<Integer> uploadedPhotoIds = new ArrayList<>();
+        private final List<Integer> metadataUpdatedPhotoIds = new ArrayList<>();
+        private final List<Integer> skippedPhotoIds = new ArrayList<>();
+        private final List<Integer> failedPhotoIds = new ArrayList<>();
         private int photosUploaded;
+        private int photosMetadataUpdated;
         private int photosSkipped;
         private int photosFailed;
+        private Long externalImageAlbumId;
+        private String albumId;
+        private String albumUrl;
         private boolean albumCreated;
         private boolean membershipUpdated;
 
-        private SyncAccumulator(Integer itemInventoryId, Integer externalServiceId, boolean dryRun, int photosDiscovered) {
+        private SyncAccumulator(
+                Integer itemInventoryId,
+                String provider,
+                Integer externalServiceId,
+                boolean dryRun,
+                boolean retryFailed,
+                int photosDiscovered
+        ) {
             this.itemInventoryId = itemInventoryId;
+            this.provider = provider;
             this.externalServiceId = externalServiceId;
             this.dryRun = dryRun;
+            this.retryFailed = retryFailed;
             this.photosDiscovered = photosDiscovered;
+        }
+
+        private void recordPhotoUploaded(ItemInventoryPhoto photo) {
+            photosUploaded++;
+            uploadedPhotoIds.add(photo.getItemInventoryPhotoId());
+        }
+
+        private void recordPhotoMetadataUpdated(ItemInventoryPhoto photo) {
+            photosMetadataUpdated++;
+            metadataUpdatedPhotoIds.add(photo.getItemInventoryPhotoId());
+        }
+
+        private void recordPhotoSkipped(ItemInventoryPhoto photo) {
+            photosSkipped++;
+            skippedPhotoIds.add(photo.getItemInventoryPhotoId());
         }
 
         private void recordPhotoFailure(ItemInventoryPhoto photo, String message) {
             photosFailed++;
+            failedPhotoIds.add(photo.getItemInventoryPhotoId());
             failureMessages.add("Photo [%s] failed: %s".formatted(photo.getItemInventoryPhotoId(), message));
+        }
+
+        private void recordAlbumFailure(ExternalImageAlbum album, String message) {
+            setAlbum(album);
+            failureMessages.add(message);
+        }
+
+        private void setAlbum(ExternalImageAlbum album) {
+            externalImageAlbumId = album.getExternalImageAlbumId();
+            albumId = album.getExternalAlbumId();
+            albumUrl = album.getAlbumUrl();
         }
 
         private ImageHostingSyncResult toResult() {
             return ImageHostingSyncResult.builder()
                     .itemInventoryId(itemInventoryId)
+                    .provider(provider)
                     .externalServiceId(externalServiceId)
                     .dryRun(dryRun)
+                    .retryFailed(retryFailed)
                     .outcome(outcome())
                     .photosDiscovered(photosDiscovered)
                     .photosUploaded(photosUploaded)
+                    .photosMetadataUpdated(photosMetadataUpdated)
                     .photosSkipped(photosSkipped)
                     .photosFailed(photosFailed)
+                    .externalImageAlbumId(externalImageAlbumId)
+                    .albumId(albumId)
+                    .albumUrl(albumUrl)
                     .albumCreated(albumCreated)
                     .membershipUpdated(membershipUpdated)
+                    .uploadedPhotoIds(uploadedPhotoIds)
+                    .metadataUpdatedPhotoIds(metadataUpdatedPhotoIds)
+                    .skippedPhotoIds(skippedPhotoIds)
+                    .failedPhotoIds(failedPhotoIds)
                     .failureMessages(failureMessages)
                     .build();
         }
