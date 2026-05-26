@@ -3,17 +3,23 @@ package io.legohunter.egress.imagehosting;
 import io.legohunter.data.dao.ExternalImageAlbumDao;
 import io.legohunter.data.dao.ExternalImageAlbumImageDao;
 import io.legohunter.data.dao.ExternalImageDao;
+import io.legohunter.data.dao.ExternalItemDao;
+import io.legohunter.data.dao.ExternalItemInventoryDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
+import io.legohunter.data.dto.ExternalItem;
+import io.legohunter.data.dto.ExternalItemInventory;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.ExternalSyncStatus;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
+import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
 import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
+import io.legohunter.imaging.model.AlbumManifest;
 import io.legohunter.imaging.model.PhotoServiceRequest;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.service.hosting.api.ImageHostingService;
@@ -29,6 +35,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.ByteArrayInputStream;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -40,6 +47,7 @@ import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.SUCCESS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -59,6 +67,12 @@ class DefaultImageHostingSyncServiceTest {
 
     @Mock
     private ItemInventoryPhotoDao itemInventoryPhotoDao;
+
+    @Mock
+    private ExternalItemDao externalItemDao;
+
+    @Mock
+    private ExternalItemInventoryDao externalItemInventoryDao;
 
     @Mock
     private ExternalImageDao externalImageDao;
@@ -93,6 +107,8 @@ class DefaultImageHostingSyncServiceTest {
                 minioService,
                 itemInventoryDao,
                 itemInventoryPhotoDao,
+                externalItemDao,
+                externalItemInventoryDao,
                 externalImageDao,
                 externalImageAlbumDao,
                 externalImageAlbumImageDao,
@@ -191,6 +207,48 @@ class DefaultImageHostingSyncServiceTest {
     }
 
     @Test
+    void syncItemInventory_usesBricklinkExternalItemForCreatedAlbumTitle() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImageAlbum album = album(null);
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of(ExternalItemInventory.builder()
+                .externalItemId(501)
+                .itemInventoryId(100)
+                .build()));
+        when(externalItemDao.findByExternalItemId(501)).thenReturn(Optional.of(externalItem(501, 2, "4558-1", "Metroliner")));
+        when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.empty());
+        when(minioService.getObject("photos", "100/front.jpg"))
+                .thenReturn(new ByteArrayInputStream("image".getBytes()));
+        when(imageHostingService.uploadPhoto(any())).thenReturn(response("flickr-photo-11"));
+        when(externalImageDao.upsert(any())).thenAnswer(invocation -> {
+            ExternalImage externalImage = invocation.getArgument(0);
+            externalImage.setExternalImageId(201L);
+            return externalImage;
+        });
+        when(imageHostingService.createAlbum(any())).thenReturn(response(HostedAlbum.builder()
+                .id("flickr-album-100")
+                .url("https://flickr.example/albums/100")
+                .build()));
+        when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
+
+        ImageHostingSyncResult result = service.syncItemInventory(100);
+
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
+        ArgumentCaptor<ExternalImageAlbum> albumCaptor = ArgumentCaptor.forClass(ExternalImageAlbum.class);
+        verify(externalImageAlbumDao).findOrCreateForItem(albumCaptor.capture());
+        assertThat(albumCaptor.getValue().getTitle()).isEqualTo("4558-1 - Metroliner");
+
+        ArgumentCaptor<PhotoServiceRequest<AlbumManifest>> manifestCaptor = ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).createAlbum(manifestCaptor.capture());
+        assertThat(manifestCaptor.getValue().get().getTitle()).isEqualTo("4558-1 - Metroliner");
+    }
+
+    @Test
     void syncItemInventory_reusesExistingExternalImageWithoutUploadingAgain() {
         ItemInventory inventory = inventory();
         ItemInventoryPhoto photo = photo(11, true);
@@ -226,6 +284,53 @@ class DefaultImageHostingSyncServiceTest {
         verify(imageHostingService, never()).uploadPhoto(any());
         verify(imageHostingService, never()).createAlbum(any());
         verify(externalImageDao, never()).upsert(any());
+    }
+
+    @Test
+    void syncItemInventory_updatesExistingHostedAlbumTitleWhenExternalItemTitleDiffers() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImage existingImage = ExternalImage.builder()
+                .externalImageId(201L)
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .itemInventoryPhotoId(11)
+                .externalServiceImageId("flickr-photo-11")
+                .title("front.jpg")
+                .md5AtUpload("md5-11")
+                .metadataHashAtSync("metadata-11")
+                .syncStatus(SYNCED)
+                .build();
+        ExternalImageAlbum album = album("flickr-album-100");
+        album.setTitle("Box: Good, Instructions: Excellent&nbsp;</br>[(5) Photos]");
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of(ExternalItemInventory.builder()
+                .externalItemId(501)
+                .itemInventoryId(100)
+                .build()));
+        when(externalItemDao.findByExternalItemId(501)).thenReturn(Optional.of(externalItem(501, 2, "4558-1", "Metroliner")));
+        when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.of(existingImage));
+        when(imageHostingService.updateAlbumMetadata(any())).thenReturn(response(null));
+        when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
+
+        ImageHostingSyncResult result = service.syncItemInventory(100);
+
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
+        ArgumentCaptor<PhotoServiceRequest<HostedAlbumMetadataUpdate>> metadataCaptor =
+                ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).updateAlbumMetadata(metadataCaptor.capture());
+        assertThat(metadataCaptor.getValue().get())
+                .extracting(
+                        HostedAlbumMetadataUpdate::getAlbumId,
+                        HostedAlbumMetadataUpdate::getTitle,
+                        HostedAlbumMetadataUpdate::getDescription
+                )
+                .containsExactly("flickr-album-100", "4558-1 - Metroliner", "Inventory item [inventory-uuid]");
+        verify(externalImageAlbumDao, atLeastOnce()).update(album);
+        assertThat(album.getTitle()).isEqualTo("4558-1 - Metroliner");
     }
 
     @Test
@@ -502,6 +607,15 @@ class DefaultImageHostingSyncServiceTest {
                 .title("Inventory album")
                 .syncStatus(ExternalSyncStatus.PENDING)
                 .build();
+    }
+
+    private static ExternalItem externalItem(Integer externalItemId, Integer serviceId, String externalNumber, String name) {
+        ExternalItem externalItem = new ExternalItem();
+        externalItem.setExternalItemId(externalItemId);
+        externalItem.setServiceId(serviceId);
+        externalItem.setExternalNumber(externalNumber);
+        externalItem.setName(name);
+        return externalItem;
     }
 
     private static <T> PhotoServiceResponse<T> response(T value) {
