@@ -21,6 +21,7 @@ import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
 import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
 import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
 import io.legohunter.imaging.model.PhotoMetaDataV1;
+import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.model.SimplePhotoServiceRequest;
 import io.legohunter.imaging.service.hosting.api.ImageHostingService;
@@ -209,20 +210,30 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             createAlbum(provider, album, inventory, syncedPhotos, accumulator);
         } else {
             accumulator.setAlbum(album);
-            updateAlbumMetadataIfNeeded(provider, album, inventory, albumTitleChanged, albumTitle, accumulator);
-            log.info(
-                    "image_hosting.album.reused provider={} externalServiceId={} itemInventoryId={} externalImageAlbumId={} albumId={} albumUrl={}",
-                    provider.provider(),
-                    externalServiceId,
-                    inventory.getItemInventoryId(),
-                    album.getExternalImageAlbumId(),
-                    album.getExternalAlbumId(),
-                    album.getAlbumUrl()
-            );
+            AlbumOperationResult metadataResult = updateAlbumMetadataIfNeeded(provider, album, inventory, albumTitleChanged, albumTitle, accumulator);
+            if (AlbumOperationResult.ALBUM_NOT_FOUND.equals(metadataResult)) {
+                recreateAlbum(provider, album, inventory, syncedPhotos, accumulator, "metadata update");
+            } else {
+                log.info(
+                        "image_hosting.album.reused provider={} externalServiceId={} itemInventoryId={} externalImageAlbumId={} albumId={} albumUrl={}",
+                        provider.provider(),
+                        externalServiceId,
+                        inventory.getItemInventoryId(),
+                        album.getExternalImageAlbumId(),
+                        album.getExternalAlbumId(),
+                        album.getAlbumUrl()
+                );
+            }
         }
 
         if (!isBlank(album.getExternalAlbumId())) {
-            updateAlbumMembership(provider, album, syncedPhotos, accumulator);
+            AlbumOperationResult membershipResult = updateAlbumMembership(provider, album, syncedPhotos, accumulator);
+            if (AlbumOperationResult.ALBUM_NOT_FOUND.equals(membershipResult)) {
+                recreateAlbum(provider, album, inventory, syncedPhotos, accumulator, "membership update");
+                if (!isBlank(album.getExternalAlbumId())) {
+                    updateAlbumMembership(provider, album, syncedPhotos, accumulator);
+                }
+            }
         }
 
         return accumulator.toResult();
@@ -559,7 +570,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         }
     }
 
-    private void updateAlbumMembership(
+    private AlbumOperationResult updateAlbumMembership(
             ImageHostingSyncProperties.ResolvedProvider provider,
             ExternalImageAlbum album,
             List<SyncedPhoto> syncedPhotos,
@@ -593,6 +604,19 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             PhotoServiceResponse<Void> response = imageHostingService().updateAlbumMembership(new SimplePhotoServiceRequest<>(membershipRequest));
             if (response.isError()) {
                 String message = responseMessage(response);
+                if (isAlbumNotFound(response)) {
+                    metricsService.recordAlbumOperation(provider.metricsTag(), "membership", "album_not_found");
+                    log.warn(
+                            "image_hosting.album_membership.update.remote_missing provider={} externalServiceId={} externalImageAlbumId={} albumId={} responseCode={} message={}",
+                            provider.provider(),
+                            provider.externalServiceId(),
+                            album.getExternalImageAlbumId(),
+                            album.getExternalAlbumId(),
+                            response.responseCode(),
+                            message
+                    );
+                    return AlbumOperationResult.ALBUM_NOT_FOUND;
+                }
                 markAlbumFailed(album, message);
                 accumulator.recordAlbumFailure(album, message);
                 metricsService.recordAlbumOperation(provider.metricsTag(), "membership", "failed");
@@ -605,7 +629,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                         response.responseCode(),
                         message
                 );
-                return;
+                return AlbumOperationResult.FAILED;
             }
 
             persistAlbumMembership(album, syncedPhotos, primaryPhotoId, accumulator);
@@ -625,6 +649,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     photoIds.size(),
                     primaryPhotoId
             );
+            return AlbumOperationResult.SUCCESS;
         } catch (Exception e) {
             markAlbumFailed(album, e.getMessage());
             accumulator.recordAlbumFailure(album, e.getMessage());
@@ -638,10 +663,11 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     e.getMessage(),
                     e
             );
+            return AlbumOperationResult.FAILED;
         }
     }
 
-    private void updateAlbumMetadataIfNeeded(
+    private AlbumOperationResult updateAlbumMetadataIfNeeded(
             ImageHostingSyncProperties.ResolvedProvider provider,
             ExternalImageAlbum album,
             ItemInventory inventory,
@@ -650,7 +676,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             SyncAccumulator accumulator
     ) {
         if (isBlank(album.getExternalAlbumId()) || !albumTitleChanged) {
-            return;
+            return AlbumOperationResult.SKIPPED;
         }
 
         String desiredDescription = albumDescription(inventory);
@@ -672,6 +698,19 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             ));
             if (response.isError()) {
                 String message = responseMessage(response);
+                if (isAlbumNotFound(response)) {
+                    metricsService.recordAlbumOperation(provider.metricsTag(), "metadata", "album_not_found");
+                    log.warn(
+                            "image_hosting.album_metadata.update.remote_missing provider={} externalServiceId={} externalImageAlbumId={} albumId={} responseCode={} message={}",
+                            provider.provider(),
+                            provider.externalServiceId(),
+                            album.getExternalImageAlbumId(),
+                            album.getExternalAlbumId(),
+                            response.responseCode(),
+                            message
+                    );
+                    return AlbumOperationResult.ALBUM_NOT_FOUND;
+                }
                 markAlbumFailed(album, message);
                 accumulator.recordAlbumFailure(album, message);
                 metricsService.recordAlbumOperation(provider.metricsTag(), "metadata", "failed");
@@ -684,7 +723,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                         response.responseCode(),
                         message
                 );
-                return;
+                return AlbumOperationResult.FAILED;
             }
 
             album.setTitle(desiredTitle);
@@ -701,6 +740,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     album.getExternalAlbumId(),
                     desiredTitle
             );
+            return AlbumOperationResult.SUCCESS;
         } catch (Exception e) {
             markAlbumFailed(album, e.getMessage());
             accumulator.recordAlbumFailure(album, e.getMessage());
@@ -714,7 +754,42 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     e.getMessage(),
                     e
             );
+            return AlbumOperationResult.FAILED;
         }
+    }
+
+    private void recreateAlbum(
+            ImageHostingSyncProperties.ResolvedProvider provider,
+            ExternalImageAlbum album,
+            ItemInventory inventory,
+            List<SyncedPhoto> syncedPhotos,
+            SyncAccumulator accumulator,
+            String reason
+    ) {
+        clearStaleAlbumReference(provider, album, reason);
+        createAlbum(provider, album, inventory, syncedPhotos, accumulator);
+    }
+
+    private void clearStaleAlbumReference(
+            ImageHostingSyncProperties.ResolvedProvider provider,
+            ExternalImageAlbum album,
+            String reason
+    ) {
+        String staleAlbumId = album.getExternalAlbumId();
+        album.setExternalAlbumId(null);
+        album.setAlbumUrl(null);
+        album.setSyncStatus(PENDING);
+        album.setErrorMessage(null);
+        album.setLastSyncedAt(ZonedDateTime.now());
+        externalImageAlbumDao.update(album);
+        log.warn(
+                "image_hosting.album.remote_missing provider={} externalServiceId={} externalImageAlbumId={} staleAlbumId={} reason={}",
+                provider.provider(),
+                provider.externalServiceId(),
+                album.getExternalImageAlbumId(),
+                staleAlbumId,
+                reason
+        );
     }
 
     private void persistAlbumMembership(
@@ -823,6 +898,10 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         return "Image hosting provider returned response code [%s]".formatted(response.responseCode());
     }
 
+    private boolean isAlbumNotFound(PhotoServiceResponse<?> response) {
+        return PhotoServiceErrorType.ALBUM_NOT_FOUND.equals(response.errorType());
+    }
+
     private ImageHostingService imageHostingService() {
         return imageHostingService.orElseThrow(() -> new IllegalStateException("No ImageHostingService bean is configured"));
     }
@@ -832,6 +911,13 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     }
 
     private record SyncedPhoto(ItemInventoryPhoto photo, ExternalImage externalImage) {
+    }
+
+    private enum AlbumOperationResult {
+        SUCCESS,
+        FAILED,
+        ALBUM_NOT_FOUND,
+        SKIPPED
     }
 
     private static class SyncAccumulator {
