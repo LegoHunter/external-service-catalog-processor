@@ -9,7 +9,7 @@ lego:
     default-provider: flickr
     providers:
       flickr:
-        enabled: false
+        enabled: true
         external-service-id: 10
         display-name: Flickr
         metrics-tag: flickr
