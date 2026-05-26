@@ -20,6 +20,7 @@ import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
 import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
 import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
 import io.legohunter.imaging.model.AlbumManifest;
+import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceRequest;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.service.hosting.api.ImageHostingService;
@@ -48,6 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -284,6 +286,106 @@ class DefaultImageHostingSyncServiceTest {
         verify(imageHostingService, never()).uploadPhoto(any());
         verify(imageHostingService, never()).createAlbum(any());
         verify(externalImageDao, never()).upsert(any());
+    }
+
+    @Test
+    void syncItemInventory_recreatesMissingHostedAlbumWhenMembershipUpdateReportsAlbumNotFound() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImage existingImage = ExternalImage.builder()
+                .externalImageId(201L)
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .itemInventoryPhotoId(11)
+                .externalServiceImageId("flickr-photo-11")
+                .title("front.jpg")
+                .md5AtUpload("md5-11")
+                .metadataHashAtSync("metadata-11")
+                .syncStatus(SYNCED)
+                .build();
+        ExternalImageAlbum album = album("stale-flickr-album");
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+        when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.of(existingImage));
+        when(imageHostingService.updateAlbumMembership(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.ALBUM_NOT_FOUND, 1, "Photoset not found"))
+                .thenReturn(response(null));
+        when(imageHostingService.createAlbum(any())).thenReturn(response(HostedAlbum.builder()
+                .id("replacement-flickr-album")
+                .url("https://flickr.example/albums/replacement")
+                .build()));
+
+        ImageHostingSyncResult result = service.syncItemInventory(100);
+
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
+        assertThat(result.getPhotosSkipped()).isEqualTo(1);
+        assertThat(result.isAlbumCreated()).isTrue();
+        assertThat(result.isMembershipUpdated()).isTrue();
+        assertThat(result.getAlbumId()).isEqualTo("replacement-flickr-album");
+        assertThat(result.getAlbumUrl()).isEqualTo("https://flickr.example/albums/replacement");
+        assertThat(result.getFailureMessages()).isEmpty();
+        assertThat(album.getExternalAlbumId()).isEqualTo("replacement-flickr-album");
+
+        verify(imageHostingService).createAlbum(any());
+        ArgumentCaptor<PhotoServiceRequest<HostedAlbumMembershipRequest>> membershipCaptor =
+                ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService, times(2)).updateAlbumMembership(membershipCaptor.capture());
+        assertThat(membershipCaptor.getAllValues())
+                .extracting(request -> request.get().getAlbumId())
+                .containsExactly("stale-flickr-album", "replacement-flickr-album");
+    }
+
+    @Test
+    void syncItemInventory_recreatesMissingHostedAlbumWhenMetadataUpdateReportsAlbumNotFound() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImage existingImage = ExternalImage.builder()
+                .externalImageId(201L)
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .itemInventoryPhotoId(11)
+                .externalServiceImageId("flickr-photo-11")
+                .title("front.jpg")
+                .md5AtUpload("md5-11")
+                .metadataHashAtSync("metadata-11")
+                .syncStatus(SYNCED)
+                .build();
+        ExternalImageAlbum album = album("stale-flickr-album");
+        album.setTitle("Old hosted title");
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of(ExternalItemInventory.builder()
+                .externalItemId(501)
+                .itemInventoryId(100)
+                .build()));
+        when(externalItemDao.findByExternalItemId(501)).thenReturn(Optional.of(externalItem(501, 2, "4558-1", "Metroliner")));
+        when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.of(existingImage));
+        when(imageHostingService.updateAlbumMetadata(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.ALBUM_NOT_FOUND, 1, "Photoset not found"));
+        when(imageHostingService.createAlbum(any())).thenReturn(response(HostedAlbum.builder()
+                .id("replacement-flickr-album")
+                .url("https://flickr.example/albums/replacement")
+                .build()));
+        when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
+
+        ImageHostingSyncResult result = service.syncItemInventory(100);
+
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
+        assertThat(result.isAlbumCreated()).isTrue();
+        assertThat(result.isMembershipUpdated()).isTrue();
+        assertThat(result.getAlbumId()).isEqualTo("replacement-flickr-album");
+        assertThat(result.getFailureMessages()).isEmpty();
+
+        verify(imageHostingService).updateAlbumMetadata(any());
+        verify(imageHostingService).createAlbum(any());
+        ArgumentCaptor<PhotoServiceRequest<HostedAlbumMembershipRequest>> membershipCaptor =
+                ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).updateAlbumMembership(membershipCaptor.capture());
+        assertThat(membershipCaptor.getValue().get().getAlbumId()).isEqualTo("replacement-flickr-album");
     }
 
     @Test
@@ -619,18 +721,27 @@ class DefaultImageHostingSyncServiceTest {
     }
 
     private static <T> PhotoServiceResponse<T> response(T value) {
-        return new TestPhotoServiceResponse<>(value, false, null, null);
+        return new TestPhotoServiceResponse<>(value, false, null, null, PhotoServiceErrorType.UNKNOWN);
     }
 
     private static <T> PhotoServiceResponse<T> errorResponse(Integer responseCode, String responseMessage) {
-        return new TestPhotoServiceResponse<>(null, true, responseCode, responseMessage);
+        return errorResponse(PhotoServiceErrorType.UNKNOWN, responseCode, responseMessage);
+    }
+
+    private static <T> PhotoServiceResponse<T> errorResponse(
+            PhotoServiceErrorType errorType,
+            Integer responseCode,
+            String responseMessage
+    ) {
+        return new TestPhotoServiceResponse<>(null, true, responseCode, responseMessage, errorType);
     }
 
     private record TestPhotoServiceResponse<T>(
             T value,
             boolean error,
             Integer responseCode,
-            String responseMessage
+            String responseMessage,
+            PhotoServiceErrorType errorType
     ) implements PhotoServiceResponse<T> {
 
         @Override
