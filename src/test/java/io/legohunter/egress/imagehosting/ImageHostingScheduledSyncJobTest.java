@@ -20,6 +20,7 @@ import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.SUCCESS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -112,7 +113,7 @@ class ImageHostingScheduledSyncJobTest {
         assertThat(result.syncedItemInventoryIds()).containsExactly(101, 102, 103);
         assertThat(result.failedItemInventoryIds()).isEmpty();
         ArgumentCaptor<ImageHostingSyncRequest> requestCaptor = ArgumentCaptor.forClass(ImageHostingSyncRequest.class);
-        verify(imageHostingSyncService, org.mockito.Mockito.times(3)).sync(requestCaptor.capture());
+        verify(imageHostingSyncService, times(3)).sync(requestCaptor.capture());
         assertThat(requestCaptor.getAllValues())
                 .extracting(ImageHostingSyncRequest::getItemInventoryId)
                 .containsExactlyInAnyOrder(101, 102, 103);
