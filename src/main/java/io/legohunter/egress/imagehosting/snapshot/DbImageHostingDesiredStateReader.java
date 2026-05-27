@@ -19,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -161,7 +162,7 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
         return "Inventory item [%s]".formatted(inventory.getUuid());
     }
 
-    private java.util.List<ItemInventoryPhoto> sortedPhotos(Set<ItemInventoryPhoto> photos) {
+    private List<ItemInventoryPhoto> sortedPhotos(Set<ItemInventoryPhoto> photos) {
         return photos.stream()
                 .sorted(Comparator.comparing(
                         ItemInventoryPhoto::getItemInventoryPhotoId,
