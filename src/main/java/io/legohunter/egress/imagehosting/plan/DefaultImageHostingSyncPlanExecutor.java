@@ -10,6 +10,7 @@ import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
+import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.imaging.model.AlbumManifest;
 import io.legohunter.imaging.model.HostedAlbum;
@@ -67,6 +68,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     private final ExternalImageAlbumDao externalImageAlbumDao;
     private final ExternalImageAlbumImageDao externalImageAlbumImageDao;
     private final ImageHostingSyncProperties properties;
+    private final ImageHostingRetryTemplate retryTemplate;
 
     @Override
     public SyncReport execute(SyncPlan plan, boolean allowReviewRequired) {
@@ -131,14 +133,27 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         PhotoMetaDataV1 photoMetaData = null;
         try {
             photoMetaData = loadPhotoMetaData(photo);
-            PhotoServiceResponse<String> response = imageHostingService().uploadPhoto(new SimplePhotoServiceRequest<>(photoMetaData));
+            PhotoMetaDataV1 loadedPhotoMetaData = photoMetaData;
+            ImageHostingRetryTemplate.AttemptedResponse<String> attemptedResponse = retryTemplate.execute(
+                    "uploadPhoto",
+                    () -> imageHostingService().uploadPhoto(new SimplePhotoServiceRequest<>(loadedPhotoMetaData))
+            );
+            PhotoServiceResponse<String> response = attemptedResponse.response();
             if (response.isError()) {
                 saveFailedImage(externalServiceId, photo, existing, responseMessage(response));
-                return responseResult(action, SyncActionStatus.FAILED, response, responseMessage(response), startedAt, null);
+                return responseResult(action, SyncActionStatus.FAILED, attemptedResponse, responseMessage(response), startedAt, null);
             }
 
             ExternalImage externalImage = saveSyncedImage(externalServiceId, photo, existing, response.get());
-            return result(action, SyncActionStatus.SUCCEEDED, "Uploaded photo to Flickr", startedAt, null, externalImage.getExternalServiceImageId());
+            return result(
+                    action,
+                    SyncActionStatus.SUCCEEDED,
+                    "Uploaded photo to Flickr",
+                    startedAt,
+                    null,
+                    externalImage.getExternalServiceImageId(),
+                    attemptedResponse
+            );
         } catch (IOException e) {
             saveFailedImage(externalServiceId, photo, existing, e.getMessage());
             return result(action, SyncActionStatus.FAILED, e.getMessage(), startedAt, null, null);
@@ -167,10 +182,14 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 .map(this::toManifestPhoto)
                 .toList());
 
-        PhotoServiceResponse<HostedAlbum> response = imageHostingService().createAlbum(new SimplePhotoServiceRequest<>(manifest));
+        ImageHostingRetryTemplate.AttemptedResponse<HostedAlbum> attemptedResponse = retryTemplate.execute(
+                "createAlbum",
+                () -> imageHostingService().createAlbum(new SimplePhotoServiceRequest<>(manifest))
+        );
+        PhotoServiceResponse<HostedAlbum> response = attemptedResponse.response();
         if (response.isError()) {
             markAlbumFailed(album, responseMessage(response));
-            return responseResult(action, SyncActionStatus.FAILED, response, responseMessage(response), startedAt, null);
+            return responseResult(action, SyncActionStatus.FAILED, attemptedResponse, responseMessage(response), startedAt, null);
         }
 
         HostedAlbum hostedAlbum = response.get();
@@ -181,43 +200,51 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         album.setLastSyncedAt(ZonedDateTime.now());
         externalImageAlbumDao.update(album);
         persistAlbumMembership(album, syncedPhotos);
-        return result(action, SyncActionStatus.SUCCEEDED, "Created Flickr album", startedAt, hostedAlbum.getId(), null);
+        return result(action, SyncActionStatus.SUCCEEDED, "Created Flickr album", startedAt, hostedAlbum.getId(), null, attemptedResponse);
     }
 
     private SyncActionResult updatePhotoMetadata(SyncAction action, LocalDateTime startedAt) {
         String photoId = requiredPhotoId(action);
-        PhotoServiceResponse<Void> response = imageHostingService().updatePhotoMetadata(new SimplePhotoServiceRequest<>(
-                HostedPhotoMetadataUpdate.builder()
-                        .photoId(photoId)
-                        .title(attribute(action, "desiredTitle").orElse(""))
-                        .description(attribute(action, "desiredDescription").orElse(""))
-                        .build()
-        ));
+        ImageHostingRetryTemplate.AttemptedResponse<Void> attemptedResponse = retryTemplate.execute(
+                "updatePhotoMetadata",
+                () -> imageHostingService().updatePhotoMetadata(new SimplePhotoServiceRequest<>(
+                        HostedPhotoMetadataUpdate.builder()
+                                .photoId(photoId)
+                                .title(attribute(action, "desiredTitle").orElse(""))
+                                .description(attribute(action, "desiredDescription").orElse(""))
+                                .build()
+                ))
+        );
+        PhotoServiceResponse<Void> response = attemptedResponse.response();
         if (response.isError()) {
             markImageFailed(action, responseMessage(response));
-            return responseResult(action, SyncActionStatus.FAILED, response, responseMessage(response), startedAt, null);
+            return responseResult(action, SyncActionStatus.FAILED, attemptedResponse, responseMessage(response), startedAt, null);
         }
 
         updateExternalImageMetadata(action);
-        return result(action, SyncActionStatus.SUCCEEDED, "Updated Flickr photo metadata", startedAt, null, photoId);
+        return result(action, SyncActionStatus.SUCCEEDED, "Updated Flickr photo metadata", startedAt, null, photoId, attemptedResponse);
     }
 
     private SyncActionResult updateAlbumMetadata(SyncAction action, LocalDateTime startedAt) {
         String albumId = requiredAlbumId(action);
-        PhotoServiceResponse<Void> response = imageHostingService().updateAlbumMetadata(new SimplePhotoServiceRequest<>(
-                HostedAlbumMetadataUpdate.builder()
-                        .albumId(albumId)
-                        .title(attribute(action, "desiredTitle").orElse(""))
-                        .description(attribute(action, "desiredDescription").orElse(""))
-                        .build()
-        ));
+        ImageHostingRetryTemplate.AttemptedResponse<Void> attemptedResponse = retryTemplate.execute(
+                "updateAlbumMetadata",
+                () -> imageHostingService().updateAlbumMetadata(new SimplePhotoServiceRequest<>(
+                        HostedAlbumMetadataUpdate.builder()
+                                .albumId(albumId)
+                                .title(attribute(action, "desiredTitle").orElse(""))
+                                .description(attribute(action, "desiredDescription").orElse(""))
+                                .build()
+                ))
+        );
+        PhotoServiceResponse<Void> response = attemptedResponse.response();
         if (response.isError()) {
             markAlbumFailed(action, responseMessage(response));
-            return responseResult(action, SyncActionStatus.FAILED, response, responseMessage(response), startedAt, albumId);
+            return responseResult(action, SyncActionStatus.FAILED, attemptedResponse, responseMessage(response), startedAt, albumId);
         }
 
         updateExternalAlbumMetadata(action);
-        return result(action, SyncActionStatus.SUCCEEDED, "Updated Flickr album metadata", startedAt, albumId, null);
+        return result(action, SyncActionStatus.SUCCEEDED, "Updated Flickr album metadata", startedAt, albumId, null, attemptedResponse);
     }
 
     private SyncActionResult updateAlbumMembership(SyncAction action, LocalDateTime startedAt) {
@@ -230,20 +257,24 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 .filter(this::hasText)
                 .orElseGet(() -> photoIds.stream().findFirst().orElseThrow());
 
-        PhotoServiceResponse<Void> response = imageHostingService().updateAlbumMembership(new SimplePhotoServiceRequest<>(
-                HostedAlbumMembershipRequest.builder()
-                        .albumId(albumId)
-                        .primaryPhotoId(primaryPhotoId)
-                        .photoIds(photoIds)
-                        .build()
-        ));
+        ImageHostingRetryTemplate.AttemptedResponse<Void> attemptedResponse = retryTemplate.execute(
+                "updateAlbumMembership",
+                () -> imageHostingService().updateAlbumMembership(new SimplePhotoServiceRequest<>(
+                        HostedAlbumMembershipRequest.builder()
+                                .albumId(albumId)
+                                .primaryPhotoId(primaryPhotoId)
+                                .photoIds(photoIds)
+                                .build()
+                ))
+        );
+        PhotoServiceResponse<Void> response = attemptedResponse.response();
         if (response.isError()) {
             markAlbumFailed(action, responseMessage(response));
-            return responseResult(action, SyncActionStatus.FAILED, response, responseMessage(response), startedAt, albumId);
+            return responseResult(action, SyncActionStatus.FAILED, attemptedResponse, responseMessage(response), startedAt, albumId);
         }
 
         persistAlbumMembership(action, photoIds, primaryPhotoId);
-        return result(action, SyncActionStatus.SUCCEEDED, "Updated Flickr album membership", startedAt, albumId, primaryPhotoId);
+        return result(action, SyncActionStatus.SUCCEEDED, "Updated Flickr album membership", startedAt, albumId, primaryPhotoId, attemptedResponse);
     }
 
     private SyncActionResult repairAlbumId(SyncAction action, LocalDateTime startedAt) {
@@ -475,11 +506,12 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     private SyncActionResult responseResult(
             SyncAction action,
             SyncActionStatus status,
-            PhotoServiceResponse<?> response,
+            ImageHostingRetryTemplate.AttemptedResponse<?> attemptedResponse,
             String message,
             LocalDateTime startedAt,
             String albumId
     ) {
+        PhotoServiceResponse<?> response = attemptedResponse.response();
         return SyncActionResult.builder()
                 .actionId(action.getActionId())
                 .type(action.getType())
@@ -488,6 +520,9 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 .photoId(action.getPhotoId())
                 .responseCode(response.responseCode())
                 .errorType(response.errorType())
+                .attempts(attemptedResponse.attempts())
+                .retried(attemptedResponse.retried())
+                .retryable(attemptedResponse.retryable())
                 .message(message)
                 .startedAt(startedAt)
                 .finishedAt(LocalDateTime.now())
@@ -502,6 +537,18 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
             String albumId,
             String photoId
     ) {
+        return result(action, status, message, startedAt, albumId, photoId, null);
+    }
+
+    private SyncActionResult result(
+            SyncAction action,
+            SyncActionStatus status,
+            String message,
+            LocalDateTime startedAt,
+            String albumId,
+            String photoId,
+            ImageHostingRetryTemplate.AttemptedResponse<?> attemptedResponse
+    ) {
         return SyncActionResult.builder()
                 .actionId(action == null ? null : action.getActionId())
                 .type(action == null ? null : action.getType())
@@ -509,6 +556,9 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 .albumId(albumId == null && action != null ? action.getAlbumId() : albumId)
                 .photoId(photoId == null && action != null ? action.getPhotoId() : photoId)
                 .message(message)
+                .attempts(attemptedResponse == null ? 0 : attemptedResponse.attempts())
+                .retried(attemptedResponse != null && attemptedResponse.retried())
+                .retryable(attemptedResponse != null && attemptedResponse.retryable())
                 .startedAt(startedAt)
                 .finishedAt(LocalDateTime.now())
                 .build();

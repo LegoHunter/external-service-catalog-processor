@@ -1,5 +1,6 @@
 package io.legohunter.egress.imagehosting.remote;
 
+import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumPage;
@@ -26,6 +27,7 @@ public class DefaultImageHostingRemoteSnapshotReader implements ImageHostingRemo
 
     private final Optional<ImageHostingService> imageHostingService;
     private final ImageHostingSyncProperties properties;
+    private final ImageHostingRetryTemplate retryTemplate;
 
     @Override
     public ImageHostingRemoteSnapshot read(ImageHostingRemoteSnapshotRequest request) {
@@ -90,18 +92,23 @@ public class DefaultImageHostingRemoteSnapshotReader implements ImageHostingRemo
         int pagesRead = 0;
         int pageSize = effectivePageSize(request.getAlbumPageSize());
         while (true) {
-            PhotoServiceResponse<HostedAlbumPage> response = imageHostingService().listAlbums(new SimplePhotoServiceRequest<>(
-                    HostedAlbumSearchRequest.builder()
-                            .userId(request.getUserId())
-                            .page(page)
-                            .perPage(pageSize)
-                            .build()
-            ));
+            int currentPage = page;
+            ImageHostingRetryTemplate.AttemptedResponse<HostedAlbumPage> attemptedResponse = retryTemplate.execute(
+                    "listAlbums",
+                    () -> imageHostingService().listAlbums(new SimplePhotoServiceRequest<>(
+                            HostedAlbumSearchRequest.builder()
+                                    .userId(request.getUserId())
+                                    .page(currentPage)
+                                    .perPage(pageSize)
+                                    .build()
+                    ))
+            );
+            PhotoServiceResponse<HostedAlbumPage> response = attemptedResponse.response();
             if (response.isError()) {
                 return new AlbumLookupResult(
                         Optional.empty(),
                         pagesRead,
-                        responseMessage(response, "Image hosting provider failed to list albums")
+                        responseMessage(attemptedResponse, "Image hosting provider failed to list albums")
                 );
             }
 
@@ -136,18 +143,23 @@ public class DefaultImageHostingRemoteSnapshotReader implements ImageHostingRemo
         int pageSize = effectivePageSize(request.getPhotoPageSize());
         List<HostedPhoto> photos = new ArrayList<>();
         while (true) {
-            PhotoServiceResponse<HostedPhotoPage> response = imageHostingService().listAlbumPhotos(new SimplePhotoServiceRequest<>(
-                    HostedAlbumPhotoSearchRequest.builder()
-                            .albumId(request.getAlbumId())
-                            .page(page)
-                            .perPage(pageSize)
-                            .build()
-            ));
+            int currentPage = page;
+            ImageHostingRetryTemplate.AttemptedResponse<HostedPhotoPage> attemptedResponse = retryTemplate.execute(
+                    "listAlbumPhotos",
+                    () -> imageHostingService().listAlbumPhotos(new SimplePhotoServiceRequest<>(
+                            HostedAlbumPhotoSearchRequest.builder()
+                                    .albumId(request.getAlbumId())
+                                    .page(currentPage)
+                                    .perPage(pageSize)
+                                    .build()
+                    ))
+            );
+            PhotoServiceResponse<HostedPhotoPage> response = attemptedResponse.response();
             if (response.isError()) {
                 return new PhotoLookupResult(
                         photos,
                         pagesRead,
-                        responseMessage(response, "Image hosting provider failed to list album photos")
+                        responseMessage(attemptedResponse, "Image hosting provider failed to list album photos")
                 );
             }
 
@@ -175,14 +187,26 @@ public class DefaultImageHostingRemoteSnapshotReader implements ImageHostingRemo
         return pageSize > 0 ? pageSize : DEFAULT_PAGE_SIZE;
     }
 
-    private String responseMessage(PhotoServiceResponse<?> response, String defaultMessage) {
+    private String responseMessage(ImageHostingRetryTemplate.AttemptedResponse<?> attemptedResponse, String defaultMessage) {
+        PhotoServiceResponse<?> response = attemptedResponse.response();
         if (!isBlank(response.responseMessage())) {
-            return response.responseMessage();
+            return withAttempts(response.responseMessage(), attemptedResponse);
         }
         if (response.responseCode() != null) {
-            return "%s; responseCode=[%s]".formatted(defaultMessage, response.responseCode());
+            return withAttempts("%s; responseCode=[%s]".formatted(defaultMessage, response.responseCode()), attemptedResponse);
         }
-        return defaultMessage;
+        return withAttempts(defaultMessage, attemptedResponse);
+    }
+
+    private String withAttempts(String message, ImageHostingRetryTemplate.AttemptedResponse<?> attemptedResponse) {
+        if (!attemptedResponse.retried()) {
+            return message;
+        }
+        return "%s; attempts=[%s]; errorType=[%s]".formatted(
+                message,
+                attemptedResponse.attempts(),
+                attemptedResponse.errorType()
+        );
     }
 
     private boolean isBlank(String value) {

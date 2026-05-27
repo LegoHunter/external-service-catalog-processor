@@ -1,6 +1,7 @@
 package io.legohunter.egress.imagehosting.remote;
 
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumPage;
 import io.legohunter.imaging.model.HostedAlbumPhotoSearchRequest;
@@ -47,8 +48,13 @@ class DefaultImageHostingRemoteSnapshotReaderTest {
         flickr.setExternalServiceId(FLICKR_SERVICE_ID);
         flickr.setMetricsTag("flickr");
         properties.getProviders().put("flickr", flickr);
+        properties.getSync().getRetry().setInitialBackoffMs(0L);
 
-        reader = new DefaultImageHostingRemoteSnapshotReader(Optional.of(imageHostingService), properties);
+        reader = new DefaultImageHostingRemoteSnapshotReader(
+                Optional.of(imageHostingService),
+                properties,
+                new ImageHostingRetryTemplate(properties)
+        );
     }
 
     @Test
@@ -198,6 +204,45 @@ class DefaultImageHostingRemoteSnapshotReaderTest {
     }
 
     @Test
+    void readRetriesTransientAlbumListProviderFailure() {
+        when(imageHostingService.listAlbums(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.SERVICE_UNAVAILABLE, 503, "Flickr unavailable"))
+                .thenReturn(response(HostedAlbumPage.builder()
+                        .album(album("album-123"))
+                        .page(1)
+                        .pages(1)
+                        .build()));
+        when(imageHostingService.listAlbumPhotos(any()))
+                .thenReturn(response(HostedPhotoPage.builder()
+                        .page(1)
+                        .pages(1)
+                        .build()));
+
+        ImageHostingRemoteSnapshot snapshot = reader.read(ImageHostingRemoteSnapshotRequest.builder()
+                .albumId("album-123")
+                .build());
+
+        assertThat(snapshot.isSuccessful()).isTrue();
+        assertThat(snapshot.isAlbumFound()).isTrue();
+        verify(imageHostingService, times(2)).listAlbums(any());
+    }
+
+    @Test
+    void readDoesNotRetryNonTransientAlbumListProviderFailure() {
+        when(imageHostingService.listAlbums(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.AUTHORIZATION_FAILED, 99, "Insufficient permissions"));
+
+        ImageHostingRemoteSnapshot snapshot = reader.read(ImageHostingRemoteSnapshotRequest.builder()
+                .albumId("album-123")
+                .build());
+
+        assertThat(snapshot.isSuccessful()).isFalse();
+        assertThat(snapshot.getFailureMessages()).containsExactly("Insufficient permissions");
+        verify(imageHostingService).listAlbums(any());
+        verify(imageHostingService, never()).listAlbumPhotos(any());
+    }
+
+    @Test
     void readRequiresAlbumId() {
         assertThatThrownBy(() -> reader.read(ImageHostingRemoteSnapshotRequest.builder().build()))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -231,6 +276,14 @@ class DefaultImageHostingRemoteSnapshotReaderTest {
 
     private static <T> PhotoServiceResponse<T> errorResponse(Integer responseCode, String responseMessage) {
         return new TestPhotoServiceResponse<>(null, true, responseCode, responseMessage, PhotoServiceErrorType.UNKNOWN);
+    }
+
+    private static <T> PhotoServiceResponse<T> errorResponse(
+            PhotoServiceErrorType errorType,
+            Integer responseCode,
+            String responseMessage
+    ) {
+        return new TestPhotoServiceResponse<>(null, true, responseCode, responseMessage, errorType);
     }
 
     private record TestPhotoServiceResponse<T>(

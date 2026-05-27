@@ -15,6 +15,12 @@ lego:
         metrics-tag: flickr
     sync:
       external-service-id: 10
+      retry:
+        enabled: true
+        max-attempts: 3
+        initial-backoff-ms: 500
+        backoff-multiplier: 2.0
+        max-backoff-ms: 5000
       scheduled:
         enabled: false
         batch-size: 25

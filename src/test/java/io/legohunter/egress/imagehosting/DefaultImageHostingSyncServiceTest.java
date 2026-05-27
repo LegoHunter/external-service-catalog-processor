@@ -110,6 +110,7 @@ class DefaultImageHostingSyncServiceTest {
         ImageHostingSyncProperties properties = new ImageHostingSyncProperties();
         properties.getSync().setExternalServiceId(FLICKR_SERVICE_ID);
         properties.getSync().setTempDirectory(tempDirectory);
+        properties.getSync().getRetry().setInitialBackoffMs(0L);
         ImageHostingSyncProperties.Provider flickr = new ImageHostingSyncProperties.Provider();
         flickr.setEnabled(true);
         flickr.setExternalServiceId(FLICKR_SERVICE_ID);
@@ -131,7 +132,8 @@ class DefaultImageHostingSyncServiceTest {
                 properties,
                 new ImageHostingSyncMetricsService(meterRegistry),
                 desiredStateReader,
-                preflightValidator
+                preflightValidator,
+                new ImageHostingRetryTemplate(properties)
         );
 
         lenient().when(desiredStateReader.read(any())).thenReturn(validSnapshot());
@@ -546,6 +548,40 @@ class DefaultImageHostingSyncServiceTest {
         verify(imageHostingService, never()).updateAlbumMembership(any());
         verify(externalImageAlbumDao).update(album);
         assertThat(album.getSyncStatus()).isEqualTo(ExternalSyncStatus.FAILED);
+    }
+
+    @Test
+    void syncItemInventory_retriesTransientUploadFailureBeforeSucceeding() {
+        ItemInventory inventory = inventory();
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImageAlbum album = album(null);
+
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
+        when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.empty());
+        when(minioService.getObject("photos", "100/front.jpg"))
+                .thenReturn(new ByteArrayInputStream("image".getBytes()));
+        when(imageHostingService.uploadPhoto(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.SERVICE_UNAVAILABLE, 503, "Flickr unavailable"))
+                .thenReturn(response("flickr-photo-11"));
+        when(externalImageDao.upsert(any())).thenAnswer(invocation -> {
+            ExternalImage externalImage = invocation.getArgument(0);
+            externalImage.setExternalImageId(201L);
+            return externalImage;
+        });
+        when(imageHostingService.createAlbum(any())).thenReturn(response(HostedAlbum.builder()
+                .id("flickr-album-100")
+                .url("https://flickr.example/albums/100")
+                .build()));
+        when(imageHostingService.updateAlbumMembership(any())).thenReturn(response(null));
+
+        ImageHostingSyncResult result = service.syncItemInventory(100);
+
+        assertThat(result.getOutcome()).isEqualTo(SUCCESS);
+        assertThat(result.getPhotosUploaded()).isEqualTo(1);
+        verify(imageHostingService, times(2)).uploadPhoto(any());
     }
 
     @Test
