@@ -75,6 +75,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     private final ImageHostingSyncMetricsService metricsService;
     private final ImageHostingDesiredStateReader desiredStateReader;
     private final ImageHostingPreflightValidator preflightValidator;
+    private final ImageHostingRetryTemplate retryTemplate;
 
     @Override
     public ImageHostingSyncResult syncItemInventory(Integer itemInventoryId) {
@@ -314,6 +315,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         try {
             PhotoMetaDataV1 photoMetaData = loadPhotoMetaData(photo);
             try {
+                PhotoMetaDataV1 loadedPhotoMetaData = photoMetaData;
                 log.info(
                         "image_hosting.photo_upload.started provider={} externalServiceId={} itemInventoryPhotoId={} s3Bucket={} s3Key={} retryFailed={}",
                         provider.provider(),
@@ -323,7 +325,10 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                         photo.getS3Key(),
                         retryFailed
                 );
-                PhotoServiceResponse<String> response = imageHostingService().uploadPhoto(new SimplePhotoServiceRequest<>(photoMetaData));
+                PhotoServiceResponse<String> response = retryTemplate.execute(
+                        "legacyUploadPhoto",
+                        () -> imageHostingService().uploadPhoto(new SimplePhotoServiceRequest<>(loadedPhotoMetaData))
+                ).response();
                 if (response.isError()) {
                     String message = responseMessage(response);
                     saveFailedImage(externalServiceId, photo, existing, message);
@@ -391,7 +396,10 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     photo.getMetadataHash(),
                     externalImage.getMetadataHashAtSync()
             );
-            PhotoServiceResponse<Void> response = imageHostingService().updatePhotoMetadata(new SimplePhotoServiceRequest<>(metadataUpdate));
+            PhotoServiceResponse<Void> response = retryTemplate.execute(
+                    "legacyUpdatePhotoMetadata",
+                    () -> imageHostingService().updatePhotoMetadata(new SimplePhotoServiceRequest<>(metadataUpdate))
+            ).response();
             if (response.isError()) {
                 String message = responseMessage(response);
                 saveFailedImage(provider.externalServiceId(), photo, Optional.of(externalImage), message);
@@ -543,7 +551,10 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     .map(this::toManifestPhoto)
                     .toList());
 
-            PhotoServiceResponse<HostedAlbum> response = imageHostingService().createAlbum(new SimplePhotoServiceRequest<>(manifest));
+            PhotoServiceResponse<HostedAlbum> response = retryTemplate.execute(
+                    "legacyCreateAlbum",
+                    () -> imageHostingService().createAlbum(new SimplePhotoServiceRequest<>(manifest))
+            ).response();
             if (response.isError()) {
                 String message = responseMessage(response);
                 markAlbumFailed(album, message);
@@ -627,7 +638,10 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     .primaryPhotoId(primaryPhotoId)
                     .photoIds(photoIds)
                     .build();
-            PhotoServiceResponse<Void> response = imageHostingService().updateAlbumMembership(new SimplePhotoServiceRequest<>(membershipRequest));
+            PhotoServiceResponse<Void> response = retryTemplate.execute(
+                    "legacyUpdateAlbumMembership",
+                    () -> imageHostingService().updateAlbumMembership(new SimplePhotoServiceRequest<>(membershipRequest))
+            ).response();
             if (response.isError()) {
                 String message = responseMessage(response);
                 if (isAlbumNotFound(response)) {
@@ -715,13 +729,16 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     album.getExternalAlbumId(),
                     desiredTitle
             );
-            PhotoServiceResponse<Void> response = imageHostingService().updateAlbumMetadata(new SimplePhotoServiceRequest<>(
-                    HostedAlbumMetadataUpdate.builder()
-                            .albumId(album.getExternalAlbumId())
-                            .title(desiredTitle)
-                            .description(desiredDescription)
-                            .build()
-            ));
+            PhotoServiceResponse<Void> response = retryTemplate.execute(
+                    "legacyUpdateAlbumMetadata",
+                    () -> imageHostingService().updateAlbumMetadata(new SimplePhotoServiceRequest<>(
+                            HostedAlbumMetadataUpdate.builder()
+                                    .albumId(album.getExternalAlbumId())
+                                    .title(desiredTitle)
+                                    .description(desiredDescription)
+                                    .build()
+                    ))
+            ).response();
             if (response.isError()) {
                 String message = responseMessage(response);
                 if (isAlbumNotFound(response)) {

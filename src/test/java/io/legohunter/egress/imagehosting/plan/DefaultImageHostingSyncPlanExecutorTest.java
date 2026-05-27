@@ -9,6 +9,7 @@ import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventoryPhoto;
+import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
 import io.legohunter.imaging.model.PhotoServiceErrorType;
@@ -81,6 +82,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
     void setUp() {
         ImageHostingSyncProperties properties = new ImageHostingSyncProperties();
         properties.getSync().setTempDirectory(tempDirectory);
+        properties.getSync().getRetry().setInitialBackoffMs(0L);
         executor = new DefaultImageHostingSyncPlanExecutor(
                 Optional.of(imageHostingService),
                 minioService,
@@ -89,7 +91,8 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 externalImageDao,
                 externalImageAlbumDao,
                 externalImageAlbumImageDao,
-                properties
+                properties,
+                new ImageHostingRetryTemplate(properties)
         );
     }
 
@@ -228,6 +231,82 @@ class DefaultImageHostingSyncPlanExecutorTest {
         assertThat(externalImage.getSyncStatus()).isEqualTo(FAILED);
         assertThat(externalImage.getErrorMessage()).isEqualTo("Flickr unavailable");
         verify(externalImageDao).update(externalImage);
+    }
+
+    @Test
+    void executeRetriesTransientProviderFailuresBeforeSucceeding() {
+        ExternalImage externalImage = externalImage(201L, 11, "photo-11");
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(externalImage));
+        when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo(11, true)));
+        when(imageHostingService.updatePhotoMetadata(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.SERVICE_UNAVAILABLE, 503, "Flickr unavailable"))
+                .thenReturn(response(null));
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("plan-1")
+                .action(SyncAction.builder()
+                        .actionId("001-update-photo-metadata")
+                        .type(SyncActionType.UPDATE_PHOTO_METADATA)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .photoId("photo-11")
+                        .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                        .attribute("itemInventoryPhotoId", "11")
+                        .attribute("externalImageId", "201")
+                        .attribute("desiredTitle", "New title")
+                        .attribute("desiredDescription", "New description")
+                        .build())
+                .build(), false);
+
+        assertThat(report.getResults().getFirst())
+                .extracting(
+                        SyncActionResult::getStatus,
+                        SyncActionResult::getAttempts,
+                        SyncActionResult::isRetried,
+                        SyncActionResult::isRetryable
+                )
+                .containsExactly(SyncActionStatus.SUCCEEDED, 2, true, false);
+        verify(imageHostingService, times(2)).updatePhotoMetadata(any());
+        verify(externalImageDao).update(externalImage);
+    }
+
+    @Test
+    void executeDoesNotRetryNonTransientProviderFailures() {
+        ExternalImage externalImage = externalImage(201L, 11, "photo-11");
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(externalImage));
+        when(imageHostingService.updatePhotoMetadata(any()))
+                .thenReturn(errorResponse(PhotoServiceErrorType.AUTHORIZATION_FAILED, 99, "Insufficient permissions"));
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("plan-1")
+                .action(SyncAction.builder()
+                        .actionId("001-update-photo-metadata")
+                        .type(SyncActionType.UPDATE_PHOTO_METADATA)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .photoId("photo-11")
+                        .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                        .attribute("itemInventoryPhotoId", "11")
+                        .attribute("externalImageId", "201")
+                        .attribute("desiredTitle", "New title")
+                        .attribute("desiredDescription", "New description")
+                        .build())
+                .build(), false);
+
+        assertThat(report.getResults().getFirst())
+                .extracting(
+                        SyncActionResult::getStatus,
+                        SyncActionResult::getAttempts,
+                        SyncActionResult::isRetried,
+                        SyncActionResult::isRetryable,
+                        SyncActionResult::getErrorType
+                )
+                .containsExactly(
+                        SyncActionStatus.FAILED,
+                        1,
+                        false,
+                        false,
+                        PhotoServiceErrorType.AUTHORIZATION_FAILED
+                );
+        verify(imageHostingService).updatePhotoMetadata(any());
     }
 
     @Test

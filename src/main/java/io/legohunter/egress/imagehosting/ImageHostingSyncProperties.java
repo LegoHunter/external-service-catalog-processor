@@ -53,6 +53,7 @@ public class ImageHostingSyncProperties {
         private Integer externalServiceId = 10;
         private Path tempDirectory = Path.of(System.getProperty("java.io.tmpdir"), "lego-data-ingress-image-hosting");
         private Scheduled scheduled = new Scheduled();
+        private Retry retry = new Retry();
     }
 
     @Getter
@@ -73,6 +74,35 @@ public class ImageHostingSyncProperties {
 
         public int effectiveConcurrency() {
             return Math.max(1, concurrency);
+        }
+    }
+
+    @Getter
+    @Setter
+    public static class Retry {
+        private boolean enabled = true;
+        private int maxAttempts = 3;
+        private long initialBackoffMs = 500L;
+        private double backoffMultiplier = 2.0d;
+        private long maxBackoffMs = 5_000L;
+
+        public int effectiveMaxAttempts() {
+            if (!enabled) {
+                return 1;
+            }
+            return Math.max(1, maxAttempts);
+        }
+
+        public long effectiveInitialBackoffMs() {
+            return Math.max(0L, initialBackoffMs);
+        }
+
+        public double effectiveBackoffMultiplier() {
+            return Math.max(1.0d, backoffMultiplier);
+        }
+
+        public long effectiveMaxBackoffMs() {
+            return Math.max(effectiveInitialBackoffMs(), maxBackoffMs);
         }
     }
 
