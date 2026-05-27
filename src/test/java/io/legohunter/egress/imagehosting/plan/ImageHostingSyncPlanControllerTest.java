@@ -1,6 +1,7 @@
 package io.legohunter.egress.imagehosting.plan;
 
 import io.legohunter.imaging.service.sync.model.SyncPlan;
+import io.legohunter.imaging.service.sync.model.SyncReport;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.ResponseEntity;
@@ -16,9 +17,10 @@ class ImageHostingSyncPlanControllerTest {
     @Test
     void planItemInventorySyncBuildsRequestFromPathAndQueryParameters() {
         ImageHostingSyncPlanService service = mock(ImageHostingSyncPlanService.class);
+        ImageHostingSyncPlanExecutor executor = mock(ImageHostingSyncPlanExecutor.class);
         SyncPlan plan = SyncPlan.builder().planId("plan-1").build();
         when(service.plan(any())).thenReturn(plan);
-        ImageHostingSyncPlanController controller = new ImageHostingSyncPlanController(service);
+        ImageHostingSyncPlanController controller = new ImageHostingSyncPlanController(service, executor);
 
         ResponseEntity<SyncPlan> response = controller.planItemInventorySync(
                 100,
@@ -45,5 +47,30 @@ class ImageHostingSyncPlanControllerTest {
                         ImageHostingSyncPlanRequest::getPhotoPageSize
                 )
                 .containsExactly(100, "flickr", 10, "user-123", 100, 250);
+    }
+
+    @Test
+    void applyItemInventorySyncPlanBuildsPlanThenExecutesIt() {
+        ImageHostingSyncPlanService service = mock(ImageHostingSyncPlanService.class);
+        ImageHostingSyncPlanExecutor executor = mock(ImageHostingSyncPlanExecutor.class);
+        SyncPlan plan = SyncPlan.builder().planId("plan-1").build();
+        SyncReport report = SyncReport.builder().planId("plan-1").build();
+        when(service.plan(any())).thenReturn(plan);
+        when(executor.execute(plan, true)).thenReturn(report);
+        ImageHostingSyncPlanController controller = new ImageHostingSyncPlanController(service, executor);
+
+        ResponseEntity<SyncReport> response = controller.applyItemInventorySyncPlan(
+                100,
+                "flickr",
+                10,
+                "user-123",
+                100,
+                250,
+                true
+        );
+
+        assertThat(response.getStatusCode().value()).isEqualTo(202);
+        assertThat(response.getBody()).isSameAs(report);
+        verify(executor).execute(plan, true);
     }
 }

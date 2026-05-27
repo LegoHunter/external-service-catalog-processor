@@ -63,8 +63,8 @@ public class ImageHostingReconciliationPlanner {
             return buildPlan(desiredState, actions);
         }
 
-        planAlbumActions(desiredAlbum, remote, actions);
         planPhotoActions(desiredState, remote, actions);
+        planAlbumActions(desiredAlbum, remote, actions);
         planMembershipActions(desiredState, remote, actions);
 
         return buildPlan(desiredState, actions);
