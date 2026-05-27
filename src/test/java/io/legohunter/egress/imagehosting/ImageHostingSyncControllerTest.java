@@ -5,6 +5,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.http.ResponseEntity;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -21,7 +22,7 @@ class ImageHostingSyncControllerTest {
                 .dryRun(true)
                 .photosDiscovered(2)
                 .build();
-        when(syncService.sync(org.mockito.ArgumentMatchers.any())).thenReturn(serviceResult);
+        when(syncService.sync(any())).thenReturn(serviceResult);
 
         ResponseEntity<ImageHostingSyncResult> response = controller.syncItemInventory(100, true, null, null, false);
 
@@ -50,7 +51,7 @@ class ImageHostingSyncControllerTest {
                 .externalServiceId(10)
                 .dryRun(false)
                 .build();
-        when(syncService.sync(org.mockito.ArgumentMatchers.any())).thenReturn(serviceResult);
+        when(syncService.sync(any())).thenReturn(serviceResult);
 
         controller.syncItemInventory(100, false, "flickr", 10, true);
 
