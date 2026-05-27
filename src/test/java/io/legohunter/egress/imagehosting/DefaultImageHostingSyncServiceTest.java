@@ -15,6 +15,13 @@ import io.legohunter.data.dto.ExternalItemInventory;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.ExternalSyncStatus;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssue;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssueType;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightResult;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightValidator;
+import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingPhoto;
+import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateReader;
+import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
 import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
@@ -47,6 +54,7 @@ import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.PARTIAL_
 import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.SUCCESS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
@@ -85,6 +93,12 @@ class DefaultImageHostingSyncServiceTest {
     @Mock
     private ExternalImageAlbumImageDao externalImageAlbumImageDao;
 
+    @Mock
+    private ImageHostingDesiredStateReader desiredStateReader;
+
+    @Mock
+    private ImageHostingPreflightValidator preflightValidator;
+
     @TempDir
     private Path tempDirectory;
 
@@ -115,8 +129,13 @@ class DefaultImageHostingSyncServiceTest {
                 externalImageAlbumDao,
                 externalImageAlbumImageDao,
                 properties,
-                new ImageHostingSyncMetricsService(meterRegistry)
+                new ImageHostingSyncMetricsService(meterRegistry),
+                desiredStateReader,
+                preflightValidator
         );
+
+        lenient().when(desiredStateReader.read(any())).thenReturn(validSnapshot());
+        lenient().when(preflightValidator.validate(any(), any())).thenReturn(ImageHostingPreflightResult.valid());
     }
 
     @Test
@@ -642,6 +661,11 @@ class DefaultImageHostingSyncServiceTest {
     void syncItemInventory_noPhotosDoesNotTouchProviderOrExternalAlbumTables() {
         ItemInventory inventory = inventory();
 
+        when(desiredStateReader.read(any())).thenReturn(ImageHostingDesiredStateSnapshot.builder()
+                .provider("flickr")
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .inventory(inventory)
+                .build());
         when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
         when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of());
 
@@ -679,6 +703,30 @@ class DefaultImageHostingSyncServiceTest {
         verifyNoInteractions(imageHostingService, minioService, externalImageDao, externalImageAlbumDao, externalImageAlbumImageDao);
     }
 
+    @Test
+    void sync_stopsBeforeProviderCallsWhenDbS3PreflightFails() {
+        ImageHostingPreflightIssue issue = ImageHostingPreflightIssue.builder()
+                .type(ImageHostingPreflightIssueType.S3_OBJECT_MISSING)
+                .itemInventoryId(100)
+                .itemInventoryPhotoId(11)
+                .message("S3 object [photos/100/front.jpg] is not available for inventory photo [11]")
+                .build();
+        when(preflightValidator.validate(any(), any()))
+                .thenReturn(ImageHostingPreflightResult.builder().issue(issue).build());
+
+        ImageHostingSyncResult result = service.syncItemInventory(100);
+
+        assertThat(result.getOutcome()).isEqualTo(FAILED);
+        assertThat(result.getPhotosDiscovered()).isEqualTo(1);
+        assertThat(result.getPhotosFailed()).isEqualTo(1);
+        assertThat(result.getFailedPhotoIds()).containsExactly(11);
+        assertThat(result.getFailureMessages())
+                .containsExactly("Photo [11] failed: Preflight failed: S3 object [photos/100/front.jpg] is not available for inventory photo [11]");
+
+        verifyNoInteractions(imageHostingService, minioService, itemInventoryDao, itemInventoryPhotoDao);
+        verifyNoInteractions(externalImageDao, externalImageAlbumDao, externalImageAlbumImageDao);
+    }
+
     private static ItemInventory inventory() {
         ItemInventory inventory = new ItemInventory();
         inventory.setItemInventoryId(100);
@@ -697,6 +745,17 @@ class DefaultImageHostingSyncServiceTest {
                 .metadataHash("metadata-" + itemInventoryPhotoId)
                 .fileName("front.jpg")
                 .primary(primary)
+                .build();
+    }
+
+    private static ImageHostingDesiredStateSnapshot validSnapshot() {
+        return ImageHostingDesiredStateSnapshot.builder()
+                .provider("flickr")
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .inventory(inventory())
+                .photo(DesiredImageHostingPhoto.builder()
+                        .inventoryPhoto(photo(11, true))
+                        .build())
                 .build();
     }
 

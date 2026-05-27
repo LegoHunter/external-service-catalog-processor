@@ -6,6 +6,8 @@ public interface MinioService {
 
     InputStream getObject(String bucket, String key);
 
+    boolean objectExists(String bucket, String key);
+
     void putObject(String bucket, String key, InputStream stream, long size, String contentType);
 
     void copyObject(String sourceBucket, String sourceKey, String destBucket, String destKey);

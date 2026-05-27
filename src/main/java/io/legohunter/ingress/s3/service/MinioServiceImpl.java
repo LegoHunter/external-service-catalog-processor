@@ -25,6 +25,22 @@ public class MinioServiceImpl implements MinioService {
     }
 
     @Override
+    public boolean objectExists(String bucket, String key) {
+        if (bucket == null || bucket.isBlank() || key == null || key.isBlank()) {
+            return false;
+        }
+
+        try {
+            minioClient.statObject(
+                    StatObjectArgs.builder().bucket(bucket).object(key).build()
+            );
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    @Override
     public void putObject(String bucket, String key, InputStream stream, long size, String contentType) {
         try {
             minioClient.putObject(

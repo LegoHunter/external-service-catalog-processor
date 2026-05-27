@@ -1,6 +1,7 @@
 package io.legohunter.egress.imagehosting.snapshot;
 
 import io.legohunter.data.dto.ExternalItem;
+import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventory;
 import lombok.Builder;
 import lombok.Data;
@@ -22,12 +23,19 @@ public class ImageHostingDesiredStateSnapshot {
     @Singular
     private List<DesiredImageHostingPhoto> photos;
 
+    @Singular
+    private List<ExternalImageAlbumImage> albumMemberships;
+
     public Integer getItemInventoryId() {
         return inventory == null ? null : inventory.getItemInventoryId();
     }
 
     public List<DesiredImageHostingPhoto> getPhotos() {
         return Optional.ofNullable(photos).orElse(Collections.emptyList());
+    }
+
+    public List<ExternalImageAlbumImage> getAlbumMemberships() {
+        return Optional.ofNullable(albumMemberships).orElse(Collections.emptyList());
     }
 
     public Optional<ExternalItem> externalItemOptional() {

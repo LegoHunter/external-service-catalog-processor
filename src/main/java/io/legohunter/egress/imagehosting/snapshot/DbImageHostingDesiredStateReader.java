@@ -57,7 +57,8 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
                 ));
         ExternalItem externalItem = bricklinkExternalItem(inventory).orElse(null);
         DesiredImageHostingAlbum album = desiredAlbum(provider.externalServiceId(), inventory, externalItem);
-        Map<Long, ExternalImageAlbumImage> membershipsByExternalImageId = membershipsByExternalImageId(album);
+        Set<ExternalImageAlbumImage> albumMemberships = albumMemberships(album);
+        Map<Long, ExternalImageAlbumImage> membershipsByExternalImageId = membershipsByExternalImageId(albumMemberships);
 
         ImageHostingDesiredStateSnapshot.ImageHostingDesiredStateSnapshotBuilder snapshot =
                 ImageHostingDesiredStateSnapshot.builder()
@@ -65,7 +66,8 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
                         .externalServiceId(provider.externalServiceId())
                         .inventory(inventory)
                         .externalItem(externalItem)
-                        .album(album);
+                        .album(album)
+                        .albumMemberships(albumMemberships);
 
         sortedPhotos(itemInventoryPhotoDao.findByItemInventoryId(inventory.getItemInventoryId()))
                 .forEach(photo -> snapshot.photo(desiredPhoto(
@@ -119,14 +121,17 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
                 .build();
     }
 
-    private Map<Long, ExternalImageAlbumImage> membershipsByExternalImageId(DesiredImageHostingAlbum album) {
+    private Set<ExternalImageAlbumImage> albumMemberships(DesiredImageHostingAlbum album) {
         Long externalImageAlbumId = album.getExternalImageAlbumId();
         if (externalImageAlbumId == null) {
-            return Map.of();
+            return Set.of();
         }
 
-        return externalImageAlbumImageDao.findByExternalImageAlbumId(externalImageAlbumId)
-                .stream()
+        return externalImageAlbumImageDao.findByExternalImageAlbumId(externalImageAlbumId);
+    }
+
+    private Map<Long, ExternalImageAlbumImage> membershipsByExternalImageId(Set<ExternalImageAlbumImage> albumMemberships) {
+        return albumMemberships.stream()
                 .filter(membership -> membership.getExternalImageId() != null)
                 .collect(Collectors.toMap(
                         ExternalImageAlbumImage::getExternalImageId,
