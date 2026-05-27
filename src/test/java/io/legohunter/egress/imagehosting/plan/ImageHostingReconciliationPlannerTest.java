@@ -39,11 +39,11 @@ class ImageHostingReconciliationPlannerTest {
         assertThat(plan.getMode()).isEqualTo(SyncPlanMode.DRY_RUN);
         assertThat(plan.getActions())
                 .extracting(SyncAction::getType)
-                .containsExactly(SyncActionType.CREATE_ALBUM, SyncActionType.UPLOAD_PHOTO);
+                .containsExactly(SyncActionType.UPLOAD_PHOTO, SyncActionType.CREATE_ALBUM);
         assertThat(plan.getActions())
                 .extracting(SyncAction::getSafety)
                 .containsExactly(SyncActionSafety.SAFE_AUTOMATIC, SyncActionSafety.SAFE_AUTOMATIC);
-        assertThat(plan.getActions().get(1).getAttributes())
+        assertThat(plan.getActions().getFirst().getAttributes())
                 .containsEntry("itemInventoryPhotoId", "11")
                 .containsEntry("primary", "true");
     }
@@ -63,8 +63,8 @@ class ImageHostingReconciliationPlannerTest {
 
         assertThat(plan.getActions())
                 .extracting(SyncAction::getType)
-                .containsExactly(SyncActionType.UPDATE_ALBUM_METADATA, SyncActionType.UPDATE_PHOTO_METADATA);
-        assertThat(plan.getActions().get(1).getAttributes())
+                .containsExactly(SyncActionType.UPDATE_PHOTO_METADATA, SyncActionType.UPDATE_ALBUM_METADATA);
+        assertThat(plan.getActions().getFirst().getAttributes())
                 .containsEntry("metadataHash", "metadata-new")
                 .containsEntry("metadataHashAtSync", "metadata-old")
                 .containsEntry("desiredTitle", "Caption 11")
