@@ -25,6 +25,12 @@ import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.model.SimplePhotoServiceRequest;
 import io.legohunter.imaging.service.hosting.api.ImageHostingService;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssue;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightResult;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightValidator;
+import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateReader;
+import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateRequest;
+import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
 import io.legohunter.ingress.s3.api.MinioService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -67,6 +73,8 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     private final ExternalImageAlbumImageDao externalImageAlbumImageDao;
     private final ImageHostingSyncProperties properties;
     private final ImageHostingSyncMetricsService metricsService;
+    private final ImageHostingDesiredStateReader desiredStateReader;
+    private final ImageHostingPreflightValidator preflightValidator;
 
     @Override
     public ImageHostingSyncResult syncItemInventory(Integer itemInventoryId) {
@@ -152,17 +160,35 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             ImageHostingSyncProperties.ResolvedProvider provider
     ) {
         Integer externalServiceId = provider.externalServiceId();
-        ItemInventory inventory = itemInventoryDao.findByItemInventoryId(request.getItemInventoryId())
-                .orElseThrow(() -> new IllegalArgumentException("No item inventory found for id [%s]".formatted(request.getItemInventoryId())));
-        List<ItemInventoryPhoto> photos = sortedPhotos(itemInventoryPhotoDao.findByItemInventoryId(inventory.getItemInventoryId()));
+        ImageHostingDesiredStateSnapshot desiredState = desiredStateReader.read(ImageHostingDesiredStateRequest.builder()
+                .itemInventoryId(request.getItemInventoryId())
+                .provider(provider.provider())
+                .externalServiceId(externalServiceId)
+                .build());
         SyncAccumulator accumulator = new SyncAccumulator(
-                inventory.getItemInventoryId(),
+                desiredState.getItemInventoryId(),
                 provider.provider(),
                 externalServiceId,
                 request.isDryRun(),
                 request.isRetryFailed(),
-                photos.size()
+                desiredState.getPhotos().size()
         );
+        ImageHostingPreflightResult preflightResult = preflightValidator.validate(desiredState, request);
+        if (!preflightResult.isValid()) {
+            preflightResult.issues().forEach(accumulator::recordPreflightIssue);
+            log.warn(
+                    "image_hosting.sync.preflight_failed provider={} externalServiceId={} itemInventoryId={} issueCount={}",
+                    provider.provider(),
+                    externalServiceId,
+                    request.getItemInventoryId(),
+                    preflightResult.issues().size()
+            );
+            return accumulator.toResult();
+        }
+
+        ItemInventory inventory = itemInventoryDao.findByItemInventoryId(request.getItemInventoryId())
+                .orElseThrow(() -> new IllegalArgumentException("No item inventory found for id [%s]".formatted(request.getItemInventoryId())));
+        List<ItemInventoryPhoto> photos = sortedPhotos(itemInventoryPhotoDao.findByItemInventoryId(inventory.getItemInventoryId()));
 
         if (photos.isEmpty()) {
             log.info(
@@ -984,6 +1010,18 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             failureMessages.add(message);
         }
 
+        private void recordPreflightIssue(ImageHostingPreflightIssue issue) {
+            String message = "Preflight failed: %s".formatted(issue.getMessage());
+            if (issue.getItemInventoryPhotoId() == null) {
+                failureMessages.add(message);
+                return;
+            }
+
+            photosFailed++;
+            failedPhotoIds.add(issue.getItemInventoryPhotoId());
+            failureMessages.add("Photo [%s] failed: %s".formatted(issue.getItemInventoryPhotoId(), message));
+        }
+
         private void setAlbum(ExternalImageAlbum album) {
             externalImageAlbumId = album.getExternalImageAlbumId();
             albumId = album.getExternalAlbumId();
@@ -1017,7 +1055,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         }
 
         private ImageHostingSyncOutcome outcome() {
-            if (dryRun) {
+            if (dryRun && failureMessages.isEmpty()) {
                 return ImageHostingSyncOutcome.DRY_RUN;
             }
             if (failureMessages.isEmpty()) {
