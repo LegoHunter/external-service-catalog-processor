@@ -3,6 +3,7 @@ package io.legohunter.egress.imagehosting.plan;
 import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventoryPhoto;
+import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.remote.ImageHostingRemoteSnapshot;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingAlbum;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingPhoto;
@@ -14,6 +15,7 @@ import io.legohunter.imaging.service.sync.model.SyncActionSafety;
 import io.legohunter.imaging.service.sync.model.SyncActionType;
 import io.legohunter.imaging.service.sync.model.SyncPlan;
 import io.legohunter.imaging.service.sync.model.SyncPlanMode;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -31,7 +33,9 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
+@RequiredArgsConstructor
 public class ImageHostingReconciliationPlanner {
+    private final ImageHostingPublishingPolicy publishingPolicy;
 
     public SyncPlan plan(ImageHostingDesiredStateSnapshot desiredState, ImageHostingRemoteSnapshot remoteSnapshot) {
         if (desiredState == null) {
@@ -131,7 +135,10 @@ public class ImageHostingReconciliationPlanner {
                         SyncActionSafety.SAFE_AUTOMATIC,
                         desiredPhoto,
                         "Upload DB photo that does not have a Flickr photo id",
-                        Map.of()
+                        Map.of(
+                                "desiredTitle", photoTitle(desiredPhoto),
+                                "desiredDescription", photoDescription(desiredPhoto)
+                        )
                 );
                 continue;
             }
@@ -293,25 +300,15 @@ public class ImageHostingReconciliationPlanner {
     }
 
     private String photoTitle(DesiredImageHostingPhoto desiredPhoto) {
-        ItemInventoryPhoto photo = desiredPhoto.getInventoryPhoto();
-        if (photo == null) {
-            return "";
-        }
-        if (hasText(photo.getCaption())) {
-            return photo.getCaption();
-        }
-        if (hasText(photo.getFileName())) {
-            return photo.getFileName();
-        }
-        return "photo-%s.jpg".formatted(photo.getItemInventoryPhotoId());
+        return Optional.ofNullable(desiredPhoto.getInventoryPhoto())
+                .map(publishingPolicy::photoTitle)
+                .orElse("");
     }
 
     private String photoDescription(DesiredImageHostingPhoto desiredPhoto) {
-        ItemInventoryPhoto photo = desiredPhoto.getInventoryPhoto();
-        if (photo != null && hasText(photo.getCaption())) {
-            return photo.getCaption();
-        }
-        return photoTitle(desiredPhoto);
+        return Optional.ofNullable(desiredPhoto.getInventoryPhoto())
+                .map(publishingPolicy::photoDescription)
+                .orElse(photoTitle(desiredPhoto));
     }
 
     private boolean sameText(String left, String right) {

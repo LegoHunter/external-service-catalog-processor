@@ -6,7 +6,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -17,6 +19,7 @@ import java.util.Optional;
 public class ImageHostingSyncProperties {
     private String defaultProvider = "flickr";
     private Sync sync = new Sync();
+    private Publishing publishing = new Publishing();
     private Map<String, Provider> providers = new LinkedHashMap<>();
 
     public ResolvedProvider resolveProvider(String requestedProvider, Integer requestedExternalServiceId) {
@@ -113,6 +116,25 @@ public class ImageHostingSyncProperties {
         private Integer externalServiceId;
         private String displayName;
         private String metricsTag;
+    }
+
+    @Getter
+    @Setter
+    public static class Publishing {
+        private Photo photo = new Photo();
+    }
+
+    @Getter
+    @Setter
+    public static class Photo {
+        private String titleTemplate = "{captionOrFilename}";
+        private String descriptionTemplate = "{captionOrTitle}";
+        private List<String> tags = new ArrayList<>();
+        private Boolean publicFlag = true;
+        private Boolean friendFlag = false;
+        private Boolean familyFlag = false;
+        private Boolean hidden = false;
+        private String safetyLevel = "safe";
     }
 
     public record ResolvedProvider(String provider, String displayName, String metricsTag, Integer externalServiceId) {

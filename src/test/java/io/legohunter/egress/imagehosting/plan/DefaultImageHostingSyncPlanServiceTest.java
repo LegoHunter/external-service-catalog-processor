@@ -2,6 +2,8 @@ package io.legohunter.egress.imagehosting.plan;
 
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ItemInventory;
+import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.remote.ImageHostingRemoteSnapshot;
 import io.legohunter.egress.imagehosting.remote.ImageHostingRemoteSnapshotReader;
 import io.legohunter.egress.imagehosting.remote.ImageHostingRemoteSnapshotRequest;
@@ -40,7 +42,7 @@ class DefaultImageHostingSyncPlanServiceTest {
         service = new DefaultImageHostingSyncPlanService(
                 desiredStateReader,
                 remoteSnapshotReader,
-                new ImageHostingReconciliationPlanner()
+                new ImageHostingReconciliationPlanner(new ImageHostingPublishingPolicy(new ImageHostingSyncProperties()))
         );
     }
 

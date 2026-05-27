@@ -11,7 +11,9 @@ import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
+import io.legohunter.imaging.model.PhotoMetaDataV1;
 import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceRequest;
 import io.legohunter.imaging.model.PhotoServiceResponse;
@@ -92,7 +94,8 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 externalImageAlbumDao,
                 externalImageAlbumImageDao,
                 properties,
-                new ImageHostingRetryTemplate(properties)
+                new ImageHostingRetryTemplate(properties),
+                new ImageHostingPublishingPolicy(properties)
         );
     }
 
@@ -131,6 +134,17 @@ class DefaultImageHostingSyncPlanExecutorTest {
                         ExternalImage::getSyncStatus
                 )
                 .containsExactly(FLICKR_SERVICE_ID, 11, "flickr-photo-11", "Front caption", "md5-11", "metadata-11", SYNCED);
+
+        ArgumentCaptor<PhotoServiceRequest<PhotoMetaDataV1>> uploadCaptor = ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).uploadPhoto(uploadCaptor.capture());
+        assertThat(uploadCaptor.getValue().get().getUploadMetadata())
+                .extracting(
+                        metadata -> metadata.getTitle(),
+                        metadata -> metadata.getDescription(),
+                        metadata -> metadata.getPublicFlag(),
+                        metadata -> metadata.getSafetyLevel()
+                )
+                .containsExactly("Front caption", "Front caption", true, "safe");
     }
 
     @Test

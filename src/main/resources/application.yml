@@ -13,6 +13,16 @@ lego:
         external-service-id: 10
         display-name: Flickr
         metrics-tag: flickr
+    publishing:
+      photo:
+        title-template: "{captionOrFilename}"
+        description-template: "{captionOrTitle}"
+        tags: []
+        public-flag: true
+        friend-flag: false
+        family-flag: false
+        hidden: false
+        safety-level: safe
     sync:
       external-service-id: 10
       retry:
