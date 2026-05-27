@@ -16,7 +16,7 @@ lego:
     sync:
       external-service-id: 10
       scheduled:
-        enabled: true
+        enabled: false
         batch-size: 25
         concurrency: 5
         retry-failed: false
