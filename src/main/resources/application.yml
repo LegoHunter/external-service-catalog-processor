@@ -15,6 +15,15 @@ lego:
         metrics-tag: flickr
     sync:
       external-service-id: 10
+      scheduled:
+        enabled: true
+        batch-size: 25
+        concurrency: 5
+        retry-failed: false
+        fixed-delay-ms: 300000
+        initial-delay-ms: 30000
+        lock-at-most-for: 10m
+        lock-at-least-for: 0s
 
 kafka:
   bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092
