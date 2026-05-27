@@ -12,6 +12,7 @@ import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.imaging.model.AlbumManifest;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
@@ -69,6 +70,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     private final ExternalImageAlbumImageDao externalImageAlbumImageDao;
     private final ImageHostingSyncProperties properties;
     private final ImageHostingRetryTemplate retryTemplate;
+    private final ImageHostingPublishingPolicy publishingPolicy;
 
     @Override
     public SyncReport execute(SyncPlan plan, boolean allowReviewRequired) {
@@ -312,6 +314,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
 
         PhotoMetaDataV1 photoMetaData = new PhotoMetaDataV1(tempFile);
         photoMetaData.setMd5(photo.getMd5());
+        photoMetaData.setUploadMetadata(publishingPolicy.uploadMetadata(photo));
         return photoMetaData;
     }
 
@@ -328,7 +331,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 .build());
 
         externalImage.setExternalServiceImageId(externalServiceImageId);
-        externalImage.setTitle(photoTitle(photo));
+        externalImage.setTitle(publishingPolicy.photoTitle(photo));
         externalImage.setMd5AtUpload(photo.getMd5());
         externalImage.setMetadataHashAtSync(photo.getMetadataHash());
         externalImage.setSyncStatus(SYNCED);
@@ -348,7 +351,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 .externalServiceId(externalServiceId)
                 .itemInventoryPhotoId(photo.getItemInventoryPhotoId())
                 .build());
-        externalImage.setTitle(photoTitle(photo));
+        externalImage.setTitle(publishingPolicy.photoTitle(photo));
         externalImage.setMd5AtUpload(photo.getMd5());
         externalImage.setSyncStatus(FAILED);
         externalImage.setErrorMessage(errorMessage);
@@ -427,7 +430,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     }
 
     private PhotoMetaDataV1 toManifestPhoto(SyncedPhoto syncedPhoto) {
-        PhotoMetaDataV1 photoMetaData = new PhotoMetaDataV1(Path.of(photoTitle(syncedPhoto.photo())));
+        PhotoMetaDataV1 photoMetaData = new PhotoMetaDataV1(Path.of(publishingPolicy.photoTitle(syncedPhoto.photo())));
         photoMetaData.setPhotoId(syncedPhoto.externalImage().getExternalServiceImageId());
         photoMetaData.setPrimary(syncedPhoto.primary());
         photoMetaData.setMd5(syncedPhoto.photo().getMd5());
@@ -439,7 +442,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         Integer itemInventoryPhotoId = requiredInteger(action, "itemInventoryPhotoId");
         ItemInventoryPhoto photo = itemInventoryPhotoDao.findByItemInventoryPhotoId(itemInventoryPhotoId)
                 .orElseThrow(() -> new IllegalArgumentException("No item inventory photo found for id [%s]".formatted(itemInventoryPhotoId)));
-        image.setTitle(photoTitle(photo));
+        image.setTitle(publishingPolicy.photoTitle(photo));
         image.setMetadataHashAtSync(photo.getMetadataHash());
         image.setSyncStatus(SYNCED);
         image.setErrorMessage(null);
@@ -614,16 +617,6 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
             Files.deleteIfExists(photoMetaData.getAbsolutePath());
         } catch (IOException ignored) {
         }
-    }
-
-    private String photoTitle(ItemInventoryPhoto photo) {
-        if (hasText(photo.getCaption())) {
-            return photo.getCaption();
-        }
-        if (hasText(photo.getFileName())) {
-            return photo.getFileName();
-        }
-        return "photo-%s.jpg".formatted(photo.getItemInventoryPhotoId());
     }
 
     private String responseMessage(PhotoServiceResponse<?> response) {

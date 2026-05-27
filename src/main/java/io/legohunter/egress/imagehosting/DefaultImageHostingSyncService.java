@@ -28,6 +28,7 @@ import io.legohunter.imaging.service.hosting.api.ImageHostingService;
 import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssue;
 import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightResult;
 import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightValidator;
+import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateReader;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateRequest;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
@@ -76,6 +77,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     private final ImageHostingDesiredStateReader desiredStateReader;
     private final ImageHostingPreflightValidator preflightValidator;
     private final ImageHostingRetryTemplate retryTemplate;
+    private final ImageHostingPublishingPolicy publishingPolicy;
 
     @Override
     public ImageHostingSyncResult syncItemInventory(Integer itemInventoryId) {
@@ -379,11 +381,10 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             ExternalImage externalImage,
             SyncAccumulator accumulator
     ) {
-        HostedPhotoMetadataUpdate metadataUpdate = HostedPhotoMetadataUpdate.builder()
-                .photoId(externalImage.getExternalServiceImageId())
-                .title(photoTitle(photo))
-                .description(photoDescription(photo))
-                .build();
+        HostedPhotoMetadataUpdate metadataUpdate = publishingPolicy.photoMetadataUpdate(
+                externalImage.getExternalServiceImageId(),
+                photo
+        );
 
         try {
             log.info(
@@ -459,6 +460,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
 
         PhotoMetaDataV1 photoMetaData = new PhotoMetaDataV1(tempFile);
         photoMetaData.setMd5(photo.getMd5());
+        photoMetaData.setUploadMetadata(publishingPolicy.uploadMetadata(photo));
         return photoMetaData;
     }
 
@@ -475,7 +477,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                 .build());
 
         externalImage.setExternalServiceImageId(externalServiceImageId);
-        externalImage.setTitle(photoTitle(photo));
+        externalImage.setTitle(publishingPolicy.photoTitle(photo));
         externalImage.setMd5AtUpload(photo.getMd5());
         externalImage.setMetadataHashAtSync(photo.getMetadataHash());
         externalImage.setSyncStatus(SYNCED);
@@ -492,7 +494,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     ) {
         boolean changed = !Objects.equals(externalImage.getMd5AtUpload(), photo.getMd5())
                 || !Objects.equals(externalImage.getMetadataHashAtSync(), photo.getMetadataHash())
-                || !Objects.equals(externalImage.getTitle(), photoTitle(photo))
+                || !Objects.equals(externalImage.getTitle(), publishingPolicy.photoTitle(photo))
                 || !SYNCED.equals(externalImage.getSyncStatus());
         if (!changed) {
             return;
@@ -500,7 +502,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
 
         externalImage.setExternalServiceId(externalServiceId);
         externalImage.setItemInventoryPhotoId(photo.getItemInventoryPhotoId());
-        externalImage.setTitle(photoTitle(photo));
+        externalImage.setTitle(publishingPolicy.photoTitle(photo));
         externalImage.setMd5AtUpload(photo.getMd5());
         externalImage.setMetadataHashAtSync(photo.getMetadataHash());
         externalImage.setSyncStatus(SYNCED);
@@ -519,7 +521,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                 .externalServiceId(externalServiceId)
                 .itemInventoryPhotoId(photo.getItemInventoryPhotoId())
                 .build());
-        externalImage.setTitle(photoTitle(photo));
+        externalImage.setTitle(publishingPolicy.photoTitle(photo));
         externalImage.setMd5AtUpload(photo.getMd5());
         externalImage.setSyncStatus(FAILED);
         externalImage.setErrorMessage(errorMessage);
@@ -869,7 +871,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     }
 
     private PhotoMetaDataV1 toManifestPhoto(SyncedPhoto syncedPhoto) {
-        PhotoMetaDataV1 photoMetaData = new PhotoMetaDataV1(Path.of(photoTitle(syncedPhoto.photo())));
+        PhotoMetaDataV1 photoMetaData = new PhotoMetaDataV1(Path.of(publishingPolicy.photoTitle(syncedPhoto.photo())));
         photoMetaData.setPhotoId(syncedPhoto.externalImage().getExternalServiceImageId());
         photoMetaData.setPrimary(Boolean.TRUE.equals(syncedPhoto.photo().getPrimary()));
         photoMetaData.setMd5(syncedPhoto.photo().getMd5());
@@ -910,23 +912,6 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
 
     private String albumDescription(ItemInventory inventory) {
         return "Inventory item [%s]".formatted(inventory.getUuid());
-    }
-
-    private String photoTitle(ItemInventoryPhoto photo) {
-        if (!isBlank(photo.getCaption())) {
-            return photo.getCaption();
-        }
-        if (!isBlank(photo.getFileName())) {
-            return photo.getFileName();
-        }
-        return "photo-%s.jpg".formatted(photo.getItemInventoryPhotoId());
-    }
-
-    private String photoDescription(ItemInventoryPhoto photo) {
-        if (!isBlank(photo.getCaption())) {
-            return photo.getCaption();
-        }
-        return photoTitle(photo);
     }
 
     private boolean requiresMetadataUpdate(ItemInventoryPhoto photo, ExternalImage externalImage) {

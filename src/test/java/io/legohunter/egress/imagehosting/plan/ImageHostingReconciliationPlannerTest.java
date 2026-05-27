@@ -5,6 +5,8 @@ import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
+import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.remote.ImageHostingRemoteSnapshot;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingAlbum;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingPhoto;
@@ -25,7 +27,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.groups.Tuple.tuple;
 
 class ImageHostingReconciliationPlannerTest {
-    private final ImageHostingReconciliationPlanner planner = new ImageHostingReconciliationPlanner();
+    private final ImageHostingReconciliationPlanner planner = new ImageHostingReconciliationPlanner(
+            new ImageHostingPublishingPolicy(new ImageHostingSyncProperties())
+    );
 
     @Test
     void planCreatesAlbumAndUploadsPhotosWhenDbStateHasNoExternalIds() {

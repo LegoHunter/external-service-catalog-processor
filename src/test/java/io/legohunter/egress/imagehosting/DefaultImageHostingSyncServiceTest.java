@@ -19,6 +19,7 @@ import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssue;
 import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssueType;
 import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightResult;
 import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightValidator;
+import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingPhoto;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateReader;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
@@ -133,7 +134,8 @@ class DefaultImageHostingSyncServiceTest {
                 new ImageHostingSyncMetricsService(meterRegistry),
                 desiredStateReader,
                 preflightValidator,
-                new ImageHostingRetryTemplate(properties)
+                new ImageHostingRetryTemplate(properties),
+                new ImageHostingPublishingPolicy(properties)
         );
 
         lenient().when(desiredStateReader.read(any())).thenReturn(validSnapshot());
