@@ -8,10 +8,13 @@ import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
+import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
+import io.legohunter.imaging.model.HostedAlbum;
+import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
 import io.legohunter.imaging.model.PhotoMetaDataV1;
 import io.legohunter.imaging.model.PhotoServiceErrorType;
@@ -38,6 +41,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.ByteArrayInputStream;
 import java.nio.file.Path;
 import java.util.Optional;
+import java.util.Set;
 
 import static io.legohunter.data.enums.ExternalSyncStatus.FAILED;
 import static io.legohunter.data.enums.ExternalSyncStatus.SYNCED;
@@ -210,6 +214,63 @@ class DefaultImageHostingSyncPlanExecutorTest {
                         tuple(301L, 201L, 1, true),
                         tuple(301L, 202L, 2, false)
                 );
+    }
+
+    @Test
+    void executeCreatesAlbumFromDbBackedCreateRequest() {
+        ItemInventoryPhoto primaryPhoto = photo(11, true);
+        ItemInventoryPhoto detailPhoto = photo(12, false);
+        ExternalImageAlbum pendingAlbum = ExternalImageAlbum.builder()
+                .externalImageAlbumId(301L)
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .itemInventoryId(100)
+                .title("4558-1 - Metroliner")
+                .build();
+        ExternalImage primaryImage = externalImage(201L, 11, "photo-11");
+        ExternalImage detailImage = externalImage(202L, 12, "photo-12");
+        ItemInventory inventory = new ItemInventory();
+        inventory.setItemInventoryId(100);
+        inventory.setUuid("inventory-uuid");
+        when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
+        when(externalImageAlbumDao.findByExternalServiceIdAndItemInventoryId(FLICKR_SERVICE_ID, 100))
+                .thenReturn(Optional.of(pendingAlbum));
+        when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(detailPhoto, primaryPhoto));
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
+                .thenReturn(Optional.of(primaryImage));
+        when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 12))
+                .thenReturn(Optional.of(detailImage));
+        when(imageHostingService.createAlbum(any())).thenReturn(response(HostedAlbum.builder()
+                .id("album-100")
+                .url("https://flickr.example/albums/album-100")
+                .build()));
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("plan-1")
+                .action(SyncAction.builder()
+                        .actionId("001-create-album")
+                        .type(SyncActionType.CREATE_ALBUM)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                        .attribute("itemInventoryId", "100")
+                        .attribute("desiredTitle", "4558-1 - Metroliner")
+                        .attribute("desiredDescription", "Generated album description")
+                        .build())
+                .build(), false);
+
+        assertThat(report.getResults().getFirst().getStatus()).isEqualTo(SyncActionStatus.SUCCEEDED);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<PhotoServiceRequest<HostedAlbumCreateRequest>> requestCaptor =
+                ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).createAlbum(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().get())
+                .extracting(
+                        HostedAlbumCreateRequest::getTitle,
+                        HostedAlbumCreateRequest::getDescription,
+                        HostedAlbumCreateRequest::getPrimaryPhotoId
+                )
+                .containsExactly("4558-1 - Metroliner", "Generated album description", "photo-11");
+        assertThat(requestCaptor.getValue().get().getPhotoIds()).containsExactly("photo-11", "photo-12");
     }
 
     @Test
