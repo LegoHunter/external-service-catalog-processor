@@ -1,5 +1,14 @@
 # Lego Data Ingress
 
+## API Documentation
+
+Detailed internal image-hosting API documentation for the Flickr Integration
+Phase 3 endpoints is maintained in
+[docs/image-hosting-api.md](docs/image-hosting-api.md).
+
+When the service is running, generated OpenAPI documentation is also available
+at `/swagger-ui/index.html` and `/v3/api-docs`.
+
 ## Flickr Integration Phase 1
 
 Phase 1 exposes a temporary internal endpoint for manually syncing one item inventory record at a time to the configured image hosting provider.
