@@ -16,6 +16,7 @@ import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.ExternalSyncStatus;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -68,7 +69,15 @@ class DbImageHostingDesiredStateReaderTest {
                 externalImageDao,
                 externalImageAlbumDao,
                 externalImageAlbumImageDao,
-                properties()
+                properties(),
+                new GeneratedDescriptionComposer(
+                        itemInventoryDao,
+                        itemInventoryPhotoDao,
+                        externalItemDao,
+                        externalItemInventoryDao,
+                        externalImageAlbumDao,
+                        properties()
+                )
         );
     }
 
@@ -115,7 +124,17 @@ class DbImageHostingDesiredStateReaderTest {
                         DesiredImageHostingAlbum::getExternalImageAlbumId,
                         DesiredImageHostingAlbum::getExternalAlbumId
                 )
-                .containsExactly("4558-1 - Metroliner", "Inventory item [inventory-uuid]", 301L, "flickr-album-100");
+                .containsExactly(
+                        "4558-1 - Metroliner",
+                        """
+                                4558-1 - Metroliner.
+
+                                Caption 11 Caption 12
+
+                                Photos: https://flic.kr/s/a100""",
+                        301L,
+                        "flickr-album-100"
+                );
         assertThat(snapshot.getPhotos())
                 .extracting(DesiredImageHostingPhoto::getItemInventoryPhotoId)
                 .containsExactly(11, 12);
@@ -166,7 +185,10 @@ class DbImageHostingDesiredStateReaderTest {
                         DesiredImageHostingAlbum::getDesiredDescription,
                         DesiredImageHostingAlbum::getExternalAlbum
                 )
-                .containsExactly("Inventory inventory-uuid", "Inventory item [inventory-uuid]", null);
+                .containsExactly("Inventory inventory-uuid", """
+                        Inventory inventory-uuid.
+
+                        Caption 11""", null);
         assertThat(snapshot.hasPhotos()).isTrue();
         assertThat(snapshot.primaryPhotoOptional()).isEmpty();
         assertThat(snapshot.getPhotos()).hasSize(1);

@@ -15,6 +15,14 @@ import io.legohunter.data.dto.ExternalItemInventory;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.ExternalSyncStatus;
+import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssue;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightResult;
+import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightValidator;
+import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
+import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateReader;
+import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateRequest;
+import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
 import io.legohunter.imaging.model.AlbumManifest;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
@@ -25,13 +33,6 @@ import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceResponse;
 import io.legohunter.imaging.model.SimplePhotoServiceRequest;
 import io.legohunter.imaging.service.hosting.api.ImageHostingService;
-import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssue;
-import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightResult;
-import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightValidator;
-import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
-import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateReader;
-import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateRequest;
-import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
 import io.legohunter.ingress.s3.api.MinioService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,9 +48,9 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static io.legohunter.data.dto.ExternalService.ExternalServiceType.BRICKLINK;
@@ -78,6 +79,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     private final ImageHostingPreflightValidator preflightValidator;
     private final ImageHostingRetryTemplate retryTemplate;
     private final ImageHostingPublishingPolicy publishingPolicy;
+    private final GeneratedDescriptionComposer descriptionComposer;
 
     @Override
     public ImageHostingSyncResult syncItemInventory(Integer itemInventoryId) {
@@ -223,6 +225,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                 .build());
         boolean albumTitleChanged = !Objects.equals(album.getTitle(), albumTitle);
         album.setTitle(albumTitle);
+        String albumDescription = albumDescription(provider, inventory, album, photos);
 
         List<SyncedPhoto> syncedPhotos = new ArrayList<>();
         for (ItemInventoryPhoto photo : photos) {
@@ -236,12 +239,19 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         }
 
         if (isBlank(album.getExternalAlbumId())) {
-            createAlbum(provider, album, inventory, syncedPhotos, accumulator);
+            createAlbum(provider, album, inventory, albumDescription, syncedPhotos, accumulator);
         } else {
             accumulator.setAlbum(album);
-            AlbumOperationResult metadataResult = updateAlbumMetadataIfNeeded(provider, album, inventory, albumTitleChanged, albumTitle, accumulator);
+            AlbumOperationResult metadataResult = updateAlbumMetadataIfNeeded(
+                    provider,
+                    album,
+                    albumTitleChanged,
+                    albumTitle,
+                    albumDescription,
+                    accumulator
+            );
             if (AlbumOperationResult.ALBUM_NOT_FOUND.equals(metadataResult)) {
-                recreateAlbum(provider, album, inventory, syncedPhotos, accumulator, "metadata update");
+                recreateAlbum(provider, album, inventory, albumDescription, syncedPhotos, accumulator, "metadata update");
             } else {
                 log.info(
                         "image_hosting.album.reused provider={} externalServiceId={} itemInventoryId={} externalImageAlbumId={} albumId={} albumUrl={}",
@@ -258,7 +268,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         if (!isBlank(album.getExternalAlbumId())) {
             AlbumOperationResult membershipResult = updateAlbumMembership(provider, album, syncedPhotos, accumulator);
             if (AlbumOperationResult.ALBUM_NOT_FOUND.equals(membershipResult)) {
-                recreateAlbum(provider, album, inventory, syncedPhotos, accumulator, "membership update");
+                recreateAlbum(provider, album, inventory, albumDescription, syncedPhotos, accumulator, "membership update");
                 if (!isBlank(album.getExternalAlbumId())) {
                     updateAlbumMembership(provider, album, syncedPhotos, accumulator);
                 }
@@ -533,6 +543,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             ImageHostingSyncProperties.ResolvedProvider provider,
             ExternalImageAlbum album,
             ItemInventory inventory,
+            String albumDescription,
             List<SyncedPhoto> syncedPhotos,
             SyncAccumulator accumulator
     ) {
@@ -548,7 +559,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             AlbumManifest manifest = new AlbumManifest();
             manifest.setUuid(inventory.getUuid());
             manifest.setTitle(album.getTitle());
-            manifest.setDescription(albumDescription(inventory));
+            manifest.setDescription(albumDescription);
             manifest.setPhotos(syncedPhotos.stream()
                     .map(this::toManifestPhoto)
                     .toList());
@@ -712,16 +723,15 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     private AlbumOperationResult updateAlbumMetadataIfNeeded(
             ImageHostingSyncProperties.ResolvedProvider provider,
             ExternalImageAlbum album,
-            ItemInventory inventory,
             boolean albumTitleChanged,
             String desiredTitle,
+            String desiredDescription,
             SyncAccumulator accumulator
     ) {
         if (isBlank(album.getExternalAlbumId()) || !albumTitleChanged) {
             return AlbumOperationResult.SKIPPED;
         }
 
-        String desiredDescription = albumDescription(inventory);
         try {
             log.info(
                     "image_hosting.album_metadata.update.started provider={} externalServiceId={} externalImageAlbumId={} albumId={} title={}",
@@ -807,12 +817,13 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
             ImageHostingSyncProperties.ResolvedProvider provider,
             ExternalImageAlbum album,
             ItemInventory inventory,
+            String albumDescription,
             List<SyncedPhoto> syncedPhotos,
             SyncAccumulator accumulator,
             String reason
     ) {
         clearStaleAlbumReference(provider, album, reason);
-        createAlbum(provider, album, inventory, syncedPhotos, accumulator);
+        createAlbum(provider, album, inventory, albumDescription, syncedPhotos, accumulator);
     }
 
     private void clearStaleAlbumReference(
@@ -892,14 +903,7 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     }
 
     private String albumTitle(ItemInventory inventory) {
-        Optional<ExternalItem> externalItem = externalItemInventoryDao.findByItemInventoryId(inventory.getItemInventoryId()).stream()
-                .map(ExternalItemInventory::getExternalItemId)
-                .map(externalItemDao::findByExternalItemId)
-                .flatMap(Optional::stream)
-                .filter(item -> BRICKLINK.getExternalServiceId().equals(item.getServiceId()))
-                .filter(item -> !isBlank(item.getExternalNumber()))
-                .filter(item -> !isBlank(item.getName()))
-                .findFirst();
+        Optional<ExternalItem> externalItem = bricklinkExternalItem(inventory);
         if (externalItem.isPresent()) {
             ExternalItem item = externalItem.get();
             return "%s - %s".formatted(item.getExternalNumber(), item.getName());
@@ -910,8 +914,30 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         return "Inventory %s".formatted(inventory.getUuid());
     }
 
-    private String albumDescription(ItemInventory inventory) {
-        return "Inventory item [%s]".formatted(inventory.getUuid());
+    private String albumDescription(
+            ImageHostingSyncProperties.ResolvedProvider provider,
+            ItemInventory inventory,
+            ExternalImageAlbum album,
+            List<ItemInventoryPhoto> photos
+    ) {
+        return descriptionComposer.compose(
+                provider,
+                inventory,
+                bricklinkExternalItem(inventory).orElse(null),
+                album,
+                photos
+        ).getDescription();
+    }
+
+    private Optional<ExternalItem> bricklinkExternalItem(ItemInventory inventory) {
+        return externalItemInventoryDao.findByItemInventoryId(inventory.getItemInventoryId()).stream()
+                .map(ExternalItemInventory::getExternalItemId)
+                .map(externalItemDao::findByExternalItemId)
+                .flatMap(Optional::stream)
+                .filter(item -> BRICKLINK.getExternalServiceId().equals(item.getServiceId()))
+                .filter(item -> !isBlank(item.getExternalNumber()))
+                .filter(item -> !isBlank(item.getName()))
+                .findFirst();
     }
 
     private boolean requiresMetadataUpdate(ItemInventoryPhoto photo, ExternalImage externalImage) {

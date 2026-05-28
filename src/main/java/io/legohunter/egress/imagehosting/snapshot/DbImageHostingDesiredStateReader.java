@@ -15,6 +15,7 @@ import io.legohunter.data.dto.ExternalItemInventory;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
+import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -39,6 +40,7 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
     private final ExternalImageAlbumDao externalImageAlbumDao;
     private final ExternalImageAlbumImageDao externalImageAlbumImageDao;
     private final ImageHostingSyncProperties properties;
+    private final GeneratedDescriptionComposer descriptionComposer;
 
     @Override
     public ImageHostingDesiredStateSnapshot read(ImageHostingDesiredStateRequest request) {
@@ -56,7 +58,8 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
                         "No item inventory found for id [%s]".formatted(request.getItemInventoryId())
                 ));
         ExternalItem externalItem = bricklinkExternalItem(inventory).orElse(null);
-        DesiredImageHostingAlbum album = desiredAlbum(provider.externalServiceId(), inventory, externalItem);
+        List<ItemInventoryPhoto> photos = sortedPhotos(itemInventoryPhotoDao.findByItemInventoryId(inventory.getItemInventoryId()));
+        DesiredImageHostingAlbum album = desiredAlbum(provider, inventory, externalItem, photos);
         Set<ExternalImageAlbumImage> albumMemberships = albumMemberships(album);
         Map<Long, ExternalImageAlbumImage> membershipsByExternalImageId = membershipsByExternalImageId(albumMemberships);
 
@@ -69,30 +72,36 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
                         .album(album)
                         .albumMemberships(albumMemberships);
 
-        sortedPhotos(itemInventoryPhotoDao.findByItemInventoryId(inventory.getItemInventoryId()))
-                .forEach(photo -> snapshot.photo(desiredPhoto(
-                        provider.externalServiceId(),
-                        photo,
-                        membershipsByExternalImageId
-                )));
+        photos.forEach(photo -> snapshot.photo(desiredPhoto(
+                provider.externalServiceId(),
+                photo,
+                membershipsByExternalImageId
+        )));
 
         return snapshot.build();
     }
 
     private DesiredImageHostingAlbum desiredAlbum(
-            Integer externalServiceId,
+            ImageHostingSyncProperties.ResolvedProvider provider,
             ItemInventory inventory,
-            ExternalItem externalItem
+            ExternalItem externalItem,
+            List<ItemInventoryPhoto> photos
     ) {
         ExternalImageAlbum externalAlbum =
                 externalImageAlbumDao.findByExternalServiceIdAndItemInventoryId(
-                        externalServiceId,
+                        provider.externalServiceId(),
                         inventory.getItemInventoryId()
                 ).orElse(null);
 
         return DesiredImageHostingAlbum.builder()
                 .desiredTitle(albumTitle(inventory, externalItem))
-                .desiredDescription(albumDescription(inventory))
+                .desiredDescription(descriptionComposer.compose(
+                        provider,
+                        inventory,
+                        externalItem,
+                        externalAlbum,
+                        photos
+                ).getDescription())
                 .externalAlbum(externalAlbum)
                 .build();
     }
@@ -161,10 +170,6 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
         }
 
         return "Inventory %s".formatted(inventory.getUuid());
-    }
-
-    private String albumDescription(ItemInventory inventory) {
-        return "Inventory item [%s]".formatted(inventory.getUuid());
     }
 
     private List<ItemInventoryPhoto> sortedPhotos(Set<ItemInventoryPhoto> photos) {
