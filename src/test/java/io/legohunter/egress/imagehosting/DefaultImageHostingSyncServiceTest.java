@@ -15,6 +15,7 @@ import io.legohunter.data.dto.ExternalItemInventory;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.ExternalSyncStatus;
+import io.legohunter.egress.imagehosting.description.GeneratedDescriptionComposer;
 import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssue;
 import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightIssueType;
 import io.legohunter.egress.imagehosting.preflight.ImageHostingPreflightResult;
@@ -135,7 +136,15 @@ class DefaultImageHostingSyncServiceTest {
                 desiredStateReader,
                 preflightValidator,
                 new ImageHostingRetryTemplate(properties),
-                new ImageHostingPublishingPolicy(properties)
+                new ImageHostingPublishingPolicy(properties),
+                new GeneratedDescriptionComposer(
+                        itemInventoryDao,
+                        itemInventoryPhotoDao,
+                        externalItemDao,
+                        externalItemInventoryDao,
+                        externalImageAlbumDao,
+                        properties
+                )
         );
 
         lenient().when(desiredStateReader.read(any())).thenReturn(validSnapshot());
@@ -453,7 +462,7 @@ class DefaultImageHostingSyncServiceTest {
                         HostedAlbumMetadataUpdate::getTitle,
                         HostedAlbumMetadataUpdate::getDescription
                 )
-                .containsExactly("flickr-album-100", "4558-1 - Metroliner", "Inventory item [inventory-uuid]");
+                .containsExactly("flickr-album-100", "4558-1 - Metroliner", "4558-1 - Metroliner.");
         verify(externalImageAlbumDao, atLeastOnce()).update(album);
         assertThat(album.getTitle()).isEqualTo("4558-1 - Metroliner");
     }
