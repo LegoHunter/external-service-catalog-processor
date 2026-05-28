@@ -13,8 +13,8 @@ import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
-import io.legohunter.imaging.model.AlbumManifest;
 import io.legohunter.imaging.model.HostedAlbum;
+import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
 import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
 import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
@@ -176,17 +176,18 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
             return result(action, SyncActionStatus.FAILED, "Cannot create Flickr album without synced photo ids", startedAt, null, null);
         }
 
-        AlbumManifest manifest = new AlbumManifest();
-        manifest.setUuid(inventory.getUuid());
-        manifest.setTitle(attribute(action, "desiredTitle").orElse(album.getTitle()));
-        manifest.setDescription(attribute(action, "desiredDescription").orElse("Inventory item [%s]".formatted(inventory.getUuid())));
-        manifest.setPhotos(syncedPhotos.stream()
-                .map(this::toManifestPhoto)
-                .toList());
+        HostedAlbumCreateRequest createRequest = HostedAlbumCreateRequest.builder()
+                .title(attribute(action, "desiredTitle").orElse(album.getTitle()))
+                .description(attribute(action, "desiredDescription").orElse("Inventory item [%s]".formatted(inventory.getUuid())))
+                .primaryPhotoId(primaryPhotoId(syncedPhotos))
+                .photoIds(syncedPhotos.stream()
+                        .map(syncedPhoto -> syncedPhoto.externalImage().getExternalServiceImageId())
+                        .toList())
+                .build();
 
         ImageHostingRetryTemplate.AttemptedResponse<HostedAlbum> attemptedResponse = retryTemplate.execute(
                 "createAlbum",
-                () -> imageHostingService().createAlbum(new SimplePhotoServiceRequest<>(manifest))
+                () -> imageHostingService().createAlbum(new SimplePhotoServiceRequest<>(createRequest))
         );
         PhotoServiceResponse<HostedAlbum> response = attemptedResponse.response();
         if (response.isError()) {
@@ -429,14 +430,6 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         externalImageAlbumDao.update(album);
     }
 
-    private PhotoMetaDataV1 toManifestPhoto(SyncedPhoto syncedPhoto) {
-        PhotoMetaDataV1 photoMetaData = new PhotoMetaDataV1(Path.of(publishingPolicy.photoTitle(syncedPhoto.photo())));
-        photoMetaData.setPhotoId(syncedPhoto.externalImage().getExternalServiceImageId());
-        photoMetaData.setPrimary(syncedPhoto.primary());
-        photoMetaData.setMd5(syncedPhoto.photo().getMd5());
-        return photoMetaData;
-    }
-
     private void updateExternalImageMetadata(SyncAction action) {
         ExternalImage image = findImage(action);
         Integer itemInventoryPhotoId = requiredInteger(action, "itemInventoryPhotoId");
@@ -607,6 +600,15 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 .map(String::trim)
                 .filter(this::hasText)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private String primaryPhotoId(List<SyncedPhoto> syncedPhotos) {
+        return syncedPhotos.stream()
+                .filter(SyncedPhoto::primary)
+                .findFirst()
+                .or(() -> syncedPhotos.stream().findFirst())
+                .map(syncedPhoto -> syncedPhoto.externalImage().getExternalServiceImageId())
+                .orElseThrow(() -> new IllegalArgumentException("At least one synced photo is required"));
     }
 
     private void deleteTempFile(PhotoMetaDataV1 photoMetaData) {

@@ -28,7 +28,7 @@ import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
 import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
 import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
-import io.legohunter.imaging.model.AlbumManifest;
+import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.PhotoServiceErrorType;
 import io.legohunter.imaging.model.PhotoServiceRequest;
 import io.legohunter.imaging.model.PhotoServiceResponse;
@@ -277,9 +277,9 @@ class DefaultImageHostingSyncServiceTest {
         verify(externalImageAlbumDao).findOrCreateForItem(albumCaptor.capture());
         assertThat(albumCaptor.getValue().getTitle()).isEqualTo("4558-1 - Metroliner");
 
-        ArgumentCaptor<PhotoServiceRequest<AlbumManifest>> manifestCaptor = ArgumentCaptor.forClass(PhotoServiceRequest.class);
-        verify(imageHostingService).createAlbum(manifestCaptor.capture());
-        assertThat(manifestCaptor.getValue().get().getTitle()).isEqualTo("4558-1 - Metroliner");
+        ArgumentCaptor<PhotoServiceRequest<HostedAlbumCreateRequest>> createRequestCaptor = ArgumentCaptor.forClass(PhotoServiceRequest.class);
+        verify(imageHostingService).createAlbum(createRequestCaptor.capture());
+        assertThat(createRequestCaptor.getValue().get().getTitle()).isEqualTo("4558-1 - Metroliner");
     }
 
     @Test

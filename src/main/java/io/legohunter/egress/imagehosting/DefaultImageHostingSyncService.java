@@ -23,8 +23,8 @@ import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateReader;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateRequest;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
-import io.legohunter.imaging.model.AlbumManifest;
 import io.legohunter.imaging.model.HostedAlbum;
+import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
 import io.legohunter.imaging.model.HostedAlbumMetadataUpdate;
 import io.legohunter.imaging.model.HostedPhotoMetadataUpdate;
@@ -556,17 +556,20 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
                     album.getExternalImageAlbumId(),
                     syncedPhotos.size()
             );
-            AlbumManifest manifest = new AlbumManifest();
-            manifest.setUuid(inventory.getUuid());
-            manifest.setTitle(album.getTitle());
-            manifest.setDescription(albumDescription);
-            manifest.setPhotos(syncedPhotos.stream()
-                    .map(this::toManifestPhoto)
-                    .toList());
+            HostedAlbumCreateRequest createRequest = HostedAlbumCreateRequest.builder()
+                    .title(album.getTitle())
+                    .description(albumDescription)
+                    .primaryPhotoId(primaryPhoto(syncedPhotos)
+                            .map(syncedPhoto -> syncedPhoto.externalImage().getExternalServiceImageId())
+                            .orElseThrow(() -> new IllegalArgumentException("At least one synced photo is required")))
+                    .photoIds(syncedPhotos.stream()
+                            .map(syncedPhoto -> syncedPhoto.externalImage().getExternalServiceImageId())
+                            .toList())
+                    .build();
 
             PhotoServiceResponse<HostedAlbum> response = retryTemplate.execute(
                     "legacyCreateAlbum",
-                    () -> imageHostingService().createAlbum(new SimplePhotoServiceRequest<>(manifest))
+                    () -> imageHostingService().createAlbum(new SimplePhotoServiceRequest<>(createRequest))
             ).response();
             if (response.isError()) {
                 String message = responseMessage(response);
@@ -879,14 +882,6 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         album.setErrorMessage(message);
         album.setLastSyncedAt(ZonedDateTime.now());
         externalImageAlbumDao.update(album);
-    }
-
-    private PhotoMetaDataV1 toManifestPhoto(SyncedPhoto syncedPhoto) {
-        PhotoMetaDataV1 photoMetaData = new PhotoMetaDataV1(Path.of(publishingPolicy.photoTitle(syncedPhoto.photo())));
-        photoMetaData.setPhotoId(syncedPhoto.externalImage().getExternalServiceImageId());
-        photoMetaData.setPrimary(Boolean.TRUE.equals(syncedPhoto.photo().getPrimary()));
-        photoMetaData.setMd5(syncedPhoto.photo().getMd5());
-        return photoMetaData;
     }
 
     private Optional<SyncedPhoto> primaryPhoto(List<SyncedPhoto> syncedPhotos) {
