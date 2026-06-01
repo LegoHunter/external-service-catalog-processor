@@ -136,7 +136,7 @@ public class ImageHostingShortUrlService {
     }
 
     private BitlinksService bitlinksService() {
-        return bitlinksService.orElseThrow(() -> new IllegalStateException("Bitly service is not configured"));
+        return bitlinksService.get();
     }
 
     private ImageHostingShortUrlResult result(
@@ -158,9 +158,6 @@ public class ImageHostingShortUrlService {
     }
 
     private String normalizeUrl(String value) {
-        if (!hasText(value)) {
-            return "";
-        }
         String normalized = value.trim();
         while (normalized.endsWith("/")) {
             normalized = normalized.substring(0, normalized.length() - 1);
@@ -171,7 +168,7 @@ public class ImageHostingShortUrlService {
     private Optional<String> flickrAlbumId(String value) {
         Matcher matcher = FLICKR_ALBUM_ID_PATTERN.matcher(normalizeUrl(value));
         if (matcher.find()) {
-            return Optional.ofNullable(matcher.group(1)).filter(this::hasText);
+            return Optional.of(matcher.group(1));
         }
         return Optional.empty();
     }
