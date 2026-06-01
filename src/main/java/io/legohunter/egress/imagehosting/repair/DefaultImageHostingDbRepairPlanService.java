@@ -40,6 +40,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_AMBIGUOUS;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_BLOCKED;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_FAILED;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_NOT_FOUND;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_STATUS;
+
 @Service
 @RequiredArgsConstructor
 public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRepairPlanService {
@@ -68,7 +74,7 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
                     SyncActionType.REPAIR_ALBUM_ID,
                     SyncActionSafety.BLOCKED,
                     "Desired album state is missing; DB repair cannot discover a remote album",
-                    Map.of()
+                    adoptionAttributes(REMOTE_ADOPTION_BLOCKED, Map.of())
             );
             return buildPlan(desiredState, actions);
         }
@@ -84,7 +90,9 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
                     SyncActionType.REPAIR_ALBUM_ID,
                     SyncActionSafety.BLOCKED,
                     "Remote recovery failed; DB repair cannot safely compare DB state to Flickr state",
-                    Map.of("failureMessages", String.join("; ", remote.failureMessages()))
+                    adoptionAttributes(REMOTE_ADOPTION_FAILED, Map.of(
+                            "failureMessages", String.join("; ", remote.failureMessages())
+                    ))
             );
             return buildPlan(desiredState, actions);
         }
@@ -102,7 +110,9 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
                     SyncActionType.REPAIR_ALBUM_ID,
                     SyncActionSafety.BLOCKED,
                     "No matching remote Flickr album was found for DB repair",
-                    Map.of("desiredTitle", value(desiredAlbum.getDesiredTitle()))
+                    adoptionAttributes(REMOTE_ADOPTION_NOT_FOUND, Map.of(
+                            "desiredTitle", value(desiredAlbum.getDesiredTitle())
+                    ))
             );
             return buildPlan(desiredState, actions);
         }
@@ -303,7 +313,7 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
             if (remoteAlbum.isEmpty()) {
                 return RemoteRecoveryState.blocked(
                         "DB Flickr album id was not found remotely; repair cannot infer a replacement safely",
-                        Map.of("externalAlbumId", currentAlbumId)
+                        adoptionAttributes(REMOTE_ADOPTION_BLOCKED, Map.of("externalAlbumId", currentAlbumId))
                 );
             }
         } else {
@@ -316,13 +326,13 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
             if (titleMatches.size() > 1) {
                 return RemoteRecoveryState.blocked(
                         "Multiple remote Flickr albums match the desired DB album title; repair is ambiguous",
-                        Map.of(
+                        adoptionAttributes(REMOTE_ADOPTION_AMBIGUOUS, Map.of(
                                 "desiredTitle", value(desiredAlbum.getDesiredTitle()),
                                 "matchingRemoteAlbumIds", titleMatches.stream()
                                         .map(HostedAlbum::getId)
                                         .filter(this::hasText)
                                         .collect(Collectors.joining(","))
-                        )
+                        ))
                 );
             }
             remoteAlbum = Optional.of(titleMatches.getFirst());
@@ -540,6 +550,13 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
 
     private String value(Object value) {
         return value == null ? "" : value.toString();
+    }
+
+    private Map<String, String> adoptionAttributes(String status, Map<String, String> attributes) {
+        Map<String, String> values = new LinkedHashMap<>();
+        values.put(REMOTE_ADOPTION_STATUS, status);
+        values.putAll(attributes);
+        return values;
     }
 
     private boolean hasText(String value) {
