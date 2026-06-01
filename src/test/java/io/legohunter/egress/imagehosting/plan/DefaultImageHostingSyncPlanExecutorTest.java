@@ -13,6 +13,9 @@ import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
+import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlResult;
+import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlService;
+import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlStatus;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
@@ -82,6 +85,9 @@ class DefaultImageHostingSyncPlanExecutorTest {
     @Mock
     private ExternalImageAlbumImageDao externalImageAlbumImageDao;
 
+    @Mock
+    private ImageHostingShortUrlService shortUrlService;
+
     private DefaultImageHostingSyncPlanExecutor executor;
 
     @BeforeEach
@@ -99,7 +105,8 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 externalImageAlbumImageDao,
                 properties,
                 new ImageHostingRetryTemplate(properties),
-                new ImageHostingPublishingPolicy(properties)
+                new ImageHostingPublishingPolicy(properties),
+                shortUrlService
         );
     }
 
@@ -226,6 +233,8 @@ class DefaultImageHostingSyncPlanExecutorTest {
         when(externalImageAlbumDao.findByExternalServiceIdAndExternalAlbumId(FLICKR_SERVICE_ID, "album-100"))
                 .thenReturn(Optional.empty());
         when(externalImageAlbumDao.findByExternalImageAlbumId(301L)).thenReturn(Optional.of(album));
+        when(shortUrlService.recoverExistingShortUrl("https://flickr.example/albums/album-100"))
+                .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.RECOVERED_EXISTING, "https://bit.ly/album-100"));
 
         SyncReport report = executor.execute(SyncPlan.builder()
                 .planId("repair-plan-1")
@@ -249,10 +258,17 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 .extracting(
                         ExternalImageAlbum::getExternalAlbumId,
                         ExternalImageAlbum::getAlbumUrl,
+                        ExternalImageAlbum::getShortUrl,
                         ExternalImageAlbum::getTitle,
                         ExternalImageAlbum::getSyncStatus
                 )
-                .containsExactly("album-100", "https://flickr.example/albums/album-100", "4558-1 - Metroliner", SYNCED);
+                .containsExactly(
+                        "album-100",
+                        "https://flickr.example/albums/album-100",
+                        "https://bit.ly/album-100",
+                        "4558-1 - Metroliner",
+                        SYNCED
+                );
         verify(externalImageAlbumDao).update(album);
         verifyNoInteractions(imageHostingService);
     }
@@ -372,6 +388,8 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 .id("album-100")
                 .url("https://flickr.example/albums/album-100")
                 .build()));
+        when(shortUrlService.generateShortUrl("https://flickr.example/albums/album-100"))
+                .thenReturn(shortUrlResult(ImageHostingShortUrlStatus.GENERATED_NEW, "https://bit.ly/album-100"));
 
         SyncReport report = executor.execute(SyncPlan.builder()
                 .planId("plan-1")
@@ -400,6 +418,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 )
                 .containsExactly("4558-1 - Metroliner", "Generated album description", "photo-11");
         assertThat(requestCaptor.getValue().get().getPhotoIds()).containsExactly("photo-11", "photo-12");
+        assertThat(pendingAlbum.getShortUrl()).isEqualTo("https://bit.ly/album-100");
     }
 
     @Test
@@ -587,6 +606,14 @@ class DefaultImageHostingSyncPlanExecutorTest {
 
     private static <T> PhotoServiceResponse<T> response(T value) {
         return new TestPhotoServiceResponse<>(value, false, null, null, PhotoServiceErrorType.UNKNOWN);
+    }
+
+    private static ImageHostingShortUrlResult shortUrlResult(ImageHostingShortUrlStatus status, String shortUrl) {
+        return ImageHostingShortUrlResult.builder()
+                .status(status)
+                .shortUrl(shortUrl)
+                .message(status.name())
+                .build();
     }
 
     private static <T> PhotoServiceResponse<T> errorResponse(

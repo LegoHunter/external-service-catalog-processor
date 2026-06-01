@@ -335,6 +335,21 @@ The executor supports these action types:
 
 Unsupported or legacy action types are skipped.
 
+For album lifecycle actions, the executor also maintains `external_image_album.short_url`
+where possible:
+
+- `CREATE_ALBUM` calls Bitly after Flickr returns the new album URL and stores
+  the generated short URL.
+- Existing-album adoption through `REPAIR_ALBUM_ID` looks up the Flickr album
+  URL in your Bitly account and stores the recovered short URL when one is
+  found.
+- Bitly lookup/generation failures are reported in the action result message
+  but do not fail the Flickr sync action.
+
+Manual historical backfill for existing DB album rows remains a migration-tool
+workflow in `lego-data-migration`. The ingress application only performs short
+URL recovery/generation as part of normal sync-plan apply execution.
+
 Transient provider errors are retried according to
 `lego.image-hosting.sync.retry`. Retryable error types are:
 
