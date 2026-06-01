@@ -20,6 +20,7 @@ public class ImageHostingSyncProperties {
     private String defaultProvider = "flickr";
     private Sync sync = new Sync();
     private Publishing publishing = new Publishing();
+    private Readiness readiness = new Readiness();
     private Map<String, Provider> providers = new LinkedHashMap<>();
 
     public ResolvedProvider resolveProvider(String requestedProvider, Integer requestedExternalServiceId) {
@@ -117,6 +118,14 @@ public class ImageHostingSyncProperties {
         private Integer externalServiceId;
         private String displayName;
         private String metricsTag;
+    }
+
+    @Getter
+    @Setter
+    public static class Readiness {
+        private boolean enabled = true;
+        private boolean requireScheduledSyncEnabled = false;
+        private boolean requireBitlyWhenApplyEnabled = true;
     }
 
     @Getter
