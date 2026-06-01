@@ -1,6 +1,7 @@
 package io.legohunter.egress.imagehosting;
 
 import io.legohunter.data.dao.ExternalImageDao;
+import io.legohunter.data.dao.ImageHostingSyncCandidate;
 import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanExecutor;
 import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanRequest;
 import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanService;
@@ -53,20 +54,39 @@ public class ImageHostingScheduledSyncJob {
         int batchSize = scheduled.effectiveBatchSize();
         int concurrency = scheduled.effectiveConcurrency();
         boolean retryFailed = scheduled.isRetryFailed();
+        boolean apply = scheduled.isApply();
 
         log.info(
-                "image_hosting.sync_job.started provider={} externalServiceId={} batchSize={} concurrency={} retryFailed={}",
+                "image_hosting.sync_job.started provider={} externalServiceId={} batchSize={} concurrency={} retryFailed={} apply={}",
                 provider.provider(),
                 provider.externalServiceId(),
                 batchSize,
                 concurrency,
-                retryFailed
+                retryFailed,
+                apply
         );
 
-        List<Integer> itemInventoryIds = externalImageDao.findItemInventoryIdsNeedingSync(
+        List<ImageHostingSyncCandidate> candidates = externalImageDao.findItemInventorySyncCandidates(
                 provider.externalServiceId(),
                 retryFailed,
                 batchSize
+        );
+        List<Integer> itemInventoryIds = candidates.stream()
+                .map(ImageHostingSyncCandidate::itemInventoryId)
+                .toList();
+        ImageHostingScheduledSyncCandidateCounts candidateCounts =
+                ImageHostingScheduledSyncCandidateCounts.from(candidates);
+
+        log.info(
+                "image_hosting.sync_job.candidates_selected provider={} externalServiceId={} itemInventoriesDiscovered={} missingAlbumLink={} missingPhotoLink={} failedSync={} pendingSync={} metadataChanged={}",
+                provider.provider(),
+                provider.externalServiceId(),
+                itemInventoryIds.size(),
+                candidateCounts.missingAlbumLink(),
+                candidateCounts.missingPhotoLink(),
+                candidateCounts.failedSync(),
+                candidateCounts.pendingSync(),
+                candidateCounts.metadataChanged()
         );
 
         if (itemInventoryIds.isEmpty()) {
@@ -88,7 +108,9 @@ public class ImageHostingScheduledSyncJob {
                     elapsedMillis,
                     List.of(),
                     List.of(),
-                    List.of()
+                    List.of(),
+                    apply,
+                    candidateCounts
             );
         }
 
@@ -96,7 +118,7 @@ public class ImageHostingScheduledSyncJob {
         try {
             List<CompletableFuture<InventorySyncResult>> futures = itemInventoryIds.stream()
                     .map(itemInventoryId -> CompletableFuture.supplyAsync(
-                            () -> syncItemInventory(itemInventoryId, provider),
+                            () -> syncItemInventory(itemInventoryId, provider, apply),
                             executor
                     ))
                     .toList();
@@ -141,7 +163,9 @@ public class ImageHostingScheduledSyncJob {
                     elapsedMillis,
                     itemInventoryIds,
                     syncedItemInventoryIds,
-                    failedItemInventoryIds
+                    failedItemInventoryIds,
+                    apply,
+                    candidateCounts
             );
         } finally {
             executor.shutdown();
@@ -150,7 +174,8 @@ public class ImageHostingScheduledSyncJob {
 
     private InventorySyncResult syncItemInventory(
             Integer itemInventoryId,
-            ImageHostingSyncProperties.ResolvedProvider provider
+            ImageHostingSyncProperties.ResolvedProvider provider,
+            boolean apply
     ) {
         try {
             SyncPlan plan = syncPlanService.plan(ImageHostingSyncPlanRequest.builder()
@@ -165,6 +190,18 @@ public class ImageHostingScheduledSyncJob {
                         provider.externalServiceId(),
                         itemInventoryId,
                         plan.getPlanId()
+                );
+                return new InventorySyncResult(itemInventoryId, true);
+            }
+
+            if (!apply) {
+                log.info(
+                        "image_hosting.sync_job.inventory_planned provider={} externalServiceId={} itemInventoryId={} planId={} plannedActions={} apply=false",
+                        provider.provider(),
+                        provider.externalServiceId(),
+                        itemInventoryId,
+                        plan.getPlanId(),
+                        plan.getActions().size()
                 );
                 return new InventorySyncResult(itemInventoryId, true);
             }
