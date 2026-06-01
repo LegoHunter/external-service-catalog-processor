@@ -595,7 +595,8 @@ lego:
         enabled: false
         batch-size: 25
         concurrency: 2
-        retry-failed: false
+        retry-failed: true
+        apply: false
         fixed-delay-ms: 300000
         initial-delay-ms: 30000
         lock-at-most-for: 10m
@@ -617,6 +618,13 @@ lego:
         hidden: false
         safety-level: safe
 ```
+
+Scheduled sync candidate selection includes item inventories with processed DB
+photos and missing Flickr album links, missing Flickr photo links, failed or
+pending image-hosting sync rows, or metadata hash drift. `apply: false` is the
+conservative default for Kubernetes rollout: the job builds and logs sync plans
+without executing Flickr writes or DB repair/write actions. Set `apply: true`
+after reviewing dry-run logs and candidate counts.
 
 Publishing template variables:
 

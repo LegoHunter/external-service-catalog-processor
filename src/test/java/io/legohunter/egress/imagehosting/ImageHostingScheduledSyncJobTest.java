@@ -1,6 +1,8 @@
 package io.legohunter.egress.imagehosting;
 
 import io.legohunter.data.dao.ExternalImageDao;
+import io.legohunter.data.dao.ImageHostingSyncCandidate;
+import io.legohunter.data.dao.ImageHostingSyncCandidateReason;
 import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanExecutor;
 import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanRequest;
 import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanService;
@@ -21,6 +23,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -74,7 +77,7 @@ class ImageHostingScheduledSyncJobTest {
 
     @Test
     void runOnceRecordsNoWorkWhenDiscoveryReturnsNoInventories() {
-        when(externalImageDao.findItemInventoryIdsNeedingSync(FLICKR_SERVICE_ID, false, 3))
+        when(externalImageDao.findItemInventorySyncCandidates(FLICKR_SERVICE_ID, true, 3))
                 .thenReturn(List.of());
 
         ImageHostingScheduledSyncResult result = job.runOnce();
@@ -82,6 +85,8 @@ class ImageHostingScheduledSyncJobTest {
         assertThat(result.outcome()).isEqualTo("NO_WORK");
         assertThat(result.itemInventoriesDiscovered()).isZero();
         assertThat(result.itemInventoryIds()).isEmpty();
+        assertThat(result.apply()).isFalse();
+        assertThat(result.candidateCounts().missingAlbumLink()).isZero();
         verifyNoInteractions(syncPlanService, syncPlanExecutor);
         assertThat(meterRegistry.counter(
                 "image_hosting_scheduled_sync",
@@ -91,15 +96,49 @@ class ImageHostingScheduledSyncJobTest {
     }
 
     @Test
-    void runOnceSyncsDiscoveredInventoriesWithConfiguredConcurrency() throws Exception {
-        properties.getSync().getScheduled().setRetryFailed(true);
+    void runOncePlansDiscoveredInventoriesWithoutApplyingWhenApplyIsDisabled() {
+        when(externalImageDao.findItemInventorySyncCandidates(FLICKR_SERVICE_ID, true, 3))
+                .thenReturn(List.of(
+                        candidate(101, ImageHostingSyncCandidateReason.MISSING_ALBUM_LINK),
+                        candidate(102, ImageHostingSyncCandidateReason.MISSING_PHOTO_LINK),
+                        candidate(103, ImageHostingSyncCandidateReason.METADATA_CHANGED)
+                ));
+        when(syncPlanService.plan(any())).thenAnswer(invocation -> {
+            ImageHostingSyncPlanRequest request = invocation.getArgument(0);
+            return plan(request.getItemInventoryId());
+        });
+
+        ImageHostingScheduledSyncResult result = job.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.itemInventoryIds()).containsExactly(101, 102, 103);
+        assertThat(result.syncedItemInventoryIds()).containsExactly(101, 102, 103);
+        assertThat(result.apply()).isFalse();
+        assertThat(result.candidateCounts())
+                .extracting(
+                        ImageHostingScheduledSyncCandidateCounts::missingAlbumLink,
+                        ImageHostingScheduledSyncCandidateCounts::missingPhotoLink,
+                        ImageHostingScheduledSyncCandidateCounts::metadataChanged
+                )
+                .containsExactly(1, 1, 1);
+        verify(syncPlanService, times(3)).plan(any());
+        verifyNoInteractions(syncPlanExecutor);
+    }
+
+    @Test
+    void runOnceSyncsDiscoveredInventoriesWithConfiguredConcurrencyWhenApplyIsEnabled() throws Exception {
+        properties.getSync().getScheduled().setApply(true);
         CountDownLatch firstTwoStarted = new CountDownLatch(2);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger active = new AtomicInteger();
         AtomicInteger maxActive = new AtomicInteger();
 
-        when(externalImageDao.findItemInventoryIdsNeedingSync(FLICKR_SERVICE_ID, true, 3))
-                .thenReturn(List.of(101, 102, 103));
+        when(externalImageDao.findItemInventorySyncCandidates(FLICKR_SERVICE_ID, true, 3))
+                .thenReturn(List.of(
+                        candidate(101, ImageHostingSyncCandidateReason.MISSING_ALBUM_LINK),
+                        candidate(102, ImageHostingSyncCandidateReason.MISSING_PHOTO_LINK),
+                        candidate(103, ImageHostingSyncCandidateReason.FAILED_SYNC)
+                ));
         when(syncPlanService.plan(any())).thenAnswer(invocation -> {
             ImageHostingSyncPlanRequest request = invocation.getArgument(0);
             int currentActive = active.incrementAndGet();
@@ -118,6 +157,7 @@ class ImageHostingScheduledSyncJobTest {
 
         assertThat(maxActive.get()).isEqualTo(2);
         assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.apply()).isTrue();
         assertThat(result.itemInventoryIds()).containsExactly(101, 102, 103);
         assertThat(result.syncedItemInventoryIds()).containsExactly(101, 102, 103);
         assertThat(result.failedItemInventoryIds()).isEmpty();
@@ -141,9 +181,14 @@ class ImageHostingScheduledSyncJobTest {
 
     @Test
     void runOnceContinuesWhenAnInventoryFails() {
+        properties.getSync().getScheduled().setApply(true);
         properties.getSync().getScheduled().setConcurrency(1);
-        when(externalImageDao.findItemInventoryIdsNeedingSync(FLICKR_SERVICE_ID, false, 3))
-                .thenReturn(List.of(201, 202, 203));
+        when(externalImageDao.findItemInventorySyncCandidates(FLICKR_SERVICE_ID, true, 3))
+                .thenReturn(List.of(
+                        candidate(201, ImageHostingSyncCandidateReason.PENDING_SYNC),
+                        candidate(202, ImageHostingSyncCandidateReason.FAILED_SYNC),
+                        candidate(203, ImageHostingSyncCandidateReason.METADATA_CHANGED)
+                ));
         when(syncPlanService.plan(any())).thenAnswer(invocation -> {
             ImageHostingSyncPlanRequest request = invocation.getArgument(0);
             if (request.getItemInventoryId() == 202) {
@@ -165,6 +210,8 @@ class ImageHostingScheduledSyncJobTest {
         ImageHostingScheduledSyncResult result = job.runOnce();
 
         assertThat(result.outcome()).isEqualTo("PARTIAL_FAILURE");
+        assertThat(result.candidateCounts().failedSync()).isEqualTo(1);
+        assertThat(result.candidateCounts().pendingSync()).isEqualTo(1);
         assertThat(result.syncedItemInventoryIds()).containsExactly(201);
         assertThat(result.failedItemInventoryIds()).containsExactly(202, 203);
         assertThat(meterRegistry.counter(
@@ -177,6 +224,13 @@ class ImageHostingScheduledSyncJobTest {
                 "provider", "flickr",
                 "result", "failed"
         ).count()).isEqualTo(2.0);
+    }
+
+    private static ImageHostingSyncCandidate candidate(
+            Integer itemInventoryId,
+            ImageHostingSyncCandidateReason reason
+    ) {
+        return new ImageHostingSyncCandidate(itemInventoryId, Set.of(reason));
     }
 
     private static SyncPlan plan(Integer itemInventoryId) {

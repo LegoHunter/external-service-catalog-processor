@@ -65,7 +65,8 @@ public class ImageHostingSyncProperties {
         private boolean enabled = false;
         private int batchSize = 25;
         private int concurrency = 2;
-        private boolean retryFailed = false;
+        private boolean retryFailed = true;
+        private boolean apply = false;
         private long fixedDelayMs = 300_000L;
         private long initialDelayMs = 30_000L;
         private String lockAtMostFor = "10m";
