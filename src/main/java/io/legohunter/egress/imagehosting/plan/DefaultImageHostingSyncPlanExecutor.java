@@ -13,6 +13,8 @@ import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
+import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlResult;
+import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlService;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
@@ -71,6 +73,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     private final ImageHostingSyncProperties properties;
     private final ImageHostingRetryTemplate retryTemplate;
     private final ImageHostingPublishingPolicy publishingPolicy;
+    private final ImageHostingShortUrlService shortUrlService;
 
     @Override
     public SyncReport execute(SyncPlan plan, boolean allowReviewRequired) {
@@ -198,12 +201,24 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         HostedAlbum hostedAlbum = response.get();
         album.setExternalAlbumId(hostedAlbum.getId());
         album.setAlbumUrl(hostedAlbum.getUrl());
+        ImageHostingShortUrlResult shortUrlResult = shortUrlService.generateShortUrl(hostedAlbum.getUrl());
+        if (hasShortUrl(shortUrlResult)) {
+            album.setShortUrl(shortUrlResult.getShortUrl());
+        }
         album.setSyncStatus(SYNCED);
         album.setErrorMessage(null);
         album.setLastSyncedAt(ZonedDateTime.now());
         externalImageAlbumDao.update(album);
         persistAlbumMembership(album, syncedPhotos);
-        return result(action, SyncActionStatus.SUCCEEDED, "Created Flickr album", startedAt, hostedAlbum.getId(), null, attemptedResponse);
+        return result(
+                action,
+                SyncActionStatus.SUCCEEDED,
+                "Created Flickr album; %s".formatted(shortUrlMessage(shortUrlResult)),
+                startedAt,
+                hostedAlbum.getId(),
+                null,
+                attemptedResponse
+        );
     }
 
     private SyncActionResult updatePhotoMetadata(SyncAction action, LocalDateTime startedAt) {
@@ -339,6 +354,10 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         ExternalImageAlbum album = findOrCreateAlbum(action, externalServiceId, itemInventoryId);
         album.setExternalAlbumId(remoteAlbumId);
         attribute(action, "remoteAlbumUrl").filter(this::hasText).ifPresent(album::setAlbumUrl);
+        ImageHostingShortUrlResult shortUrlResult = shortUrlService.recoverExistingShortUrl(album.getAlbumUrl());
+        if (hasShortUrl(shortUrlResult)) {
+            album.setShortUrl(shortUrlResult.getShortUrl());
+        }
         attribute(action, "remoteTitle")
                 .filter(this::hasText)
                 .or(() -> attribute(action, "desiredTitle").filter(this::hasText))
@@ -347,7 +366,14 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         album.setErrorMessage(null);
         album.setLastSyncedAt(ZonedDateTime.now());
         externalImageAlbumDao.update(album);
-        return result(action, SyncActionStatus.SUCCEEDED, "Adopted existing Flickr album into DB", startedAt, remoteAlbumId, null);
+        return result(
+                action,
+                SyncActionStatus.SUCCEEDED,
+                "Adopted existing Flickr album into DB; %s".formatted(shortUrlMessage(shortUrlResult)),
+                startedAt,
+                remoteAlbumId,
+                null
+        );
     }
 
     private SyncActionResult adoptRemotePhoto(SyncAction action, String remotePhotoId, LocalDateTime startedAt) {
@@ -759,6 +785,20 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
             return response.responseMessage();
         }
         return "Image hosting provider returned response code [%s]".formatted(response.responseCode());
+    }
+
+    private String shortUrlMessage(ImageHostingShortUrlResult result) {
+        if (result == null) {
+            return "short URL not attempted";
+        }
+        if (result.hasShortUrl()) {
+            return "%s [%s]".formatted(result.getMessage(), result.getShortUrl());
+        }
+        return "%s [%s]".formatted(result.getMessage(), result.getStatus());
+    }
+
+    private boolean hasShortUrl(ImageHostingShortUrlResult result) {
+        return result != null && result.hasShortUrl();
     }
 
     private ImageHostingService imageHostingService() {
