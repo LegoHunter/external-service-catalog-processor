@@ -251,6 +251,11 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     }
 
     private SyncActionResult updateAlbumMembership(SyncAction action, LocalDateTime startedAt) {
+        Set<String> remotePhotoIds = csvAttribute(action, "remotePhotoIds");
+        if (!remotePhotoIds.isEmpty() && csvAttribute(action, "desiredPhotoIds").isEmpty()) {
+            return repairAlbumMembership(action, remotePhotoIds, startedAt);
+        }
+
         String albumId = requiredAlbumId(action);
         Set<String> photoIds = csvAttribute(action, "desiredPhotoIds");
         if (photoIds.isEmpty()) {
@@ -281,6 +286,11 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     }
 
     private SyncActionResult repairAlbumId(SyncAction action, LocalDateTime startedAt) {
+        Optional<String> remoteAlbumId = attribute(action, "remoteAlbumId").filter(this::hasText);
+        if (remoteAlbumId.isPresent()) {
+            return adoptRemoteAlbum(action, remoteAlbumId.get(), startedAt);
+        }
+
         ExternalImageAlbum album = findAlbum(action);
         album.setExternalAlbumId(null);
         album.setAlbumUrl(null);
@@ -292,6 +302,11 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     }
 
     private SyncActionResult repairPhotoId(SyncAction action, LocalDateTime startedAt) {
+        Optional<String> remotePhotoId = attribute(action, "remotePhotoId").filter(this::hasText);
+        if (remotePhotoId.isPresent()) {
+            return adoptRemotePhoto(action, remotePhotoId.get(), startedAt);
+        }
+
         ExternalImage image = findImage(action);
         image.setExternalServiceImageId(null);
         image.setSyncStatus(PENDING);
@@ -299,6 +314,104 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         image.setLastSyncedAt(ZonedDateTime.now());
         externalImageDao.update(image);
         return result(action, SyncActionStatus.SUCCEEDED, "Cleared stale Flickr photo id from DB", startedAt, null, null);
+    }
+
+    private SyncActionResult adoptRemoteAlbum(SyncAction action, String remoteAlbumId, LocalDateTime startedAt) {
+        Integer externalServiceId = requiredInteger(action, "externalServiceId");
+        Integer itemInventoryId = requiredInteger(action, "itemInventoryId");
+        Optional<ExternalImageAlbum> existingRemoteOwner =
+                externalImageAlbumDao.findByExternalServiceIdAndExternalAlbumId(externalServiceId, remoteAlbumId);
+        if (existingRemoteOwner.isPresent()
+                && !itemInventoryId.equals(existingRemoteOwner.get().getItemInventoryId())) {
+            return result(
+                    action,
+                    SyncActionStatus.FAILED,
+                    "Remote album id [%s] is already linked to item inventory [%s]".formatted(
+                            remoteAlbumId,
+                            existingRemoteOwner.get().getItemInventoryId()
+                    ),
+                    startedAt,
+                    remoteAlbumId,
+                    null
+            );
+        }
+
+        ExternalImageAlbum album = findOrCreateAlbum(action, externalServiceId, itemInventoryId);
+        album.setExternalAlbumId(remoteAlbumId);
+        attribute(action, "remoteAlbumUrl").filter(this::hasText).ifPresent(album::setAlbumUrl);
+        attribute(action, "remoteTitle")
+                .filter(this::hasText)
+                .or(() -> attribute(action, "desiredTitle").filter(this::hasText))
+                .ifPresent(album::setTitle);
+        album.setSyncStatus(SYNCED);
+        album.setErrorMessage(null);
+        album.setLastSyncedAt(ZonedDateTime.now());
+        externalImageAlbumDao.update(album);
+        return result(action, SyncActionStatus.SUCCEEDED, "Adopted existing Flickr album into DB", startedAt, remoteAlbumId, null);
+    }
+
+    private SyncActionResult adoptRemotePhoto(SyncAction action, String remotePhotoId, LocalDateTime startedAt) {
+        Integer externalServiceId = requiredInteger(action, "externalServiceId");
+        Integer itemInventoryPhotoId = requiredInteger(action, "itemInventoryPhotoId");
+        Optional<ExternalImage> existingRemoteOwner =
+                externalImageDao.findByExternalServiceIdAndExternalServiceImageId(externalServiceId, remotePhotoId);
+        if (existingRemoteOwner.isPresent()
+                && !itemInventoryPhotoId.equals(existingRemoteOwner.get().getItemInventoryPhotoId())) {
+            return result(
+                    action,
+                    SyncActionStatus.FAILED,
+                    "Remote photo id [%s] is already linked to item inventory photo [%s]".formatted(
+                            remotePhotoId,
+                            existingRemoteOwner.get().getItemInventoryPhotoId()
+                    ),
+                    startedAt,
+                    null,
+                    remotePhotoId
+            );
+        }
+
+        ItemInventoryPhoto inventoryPhoto = itemInventoryPhotoDao.findByItemInventoryPhotoId(itemInventoryPhotoId)
+                .orElseThrow(() -> new IllegalArgumentException("No item inventory photo found for id [%s]".formatted(itemInventoryPhotoId)));
+        ExternalImage image = findOrCreateImage(action, externalServiceId, itemInventoryPhotoId);
+        image.setExternalServiceImageId(remotePhotoId);
+        attribute(action, "remoteTitle").filter(this::hasText).ifPresent(image::setTitle);
+        attribute(action, "remotePhotoUrl").filter(this::hasText).ifPresent(image::setImageUrl);
+        image.setMd5AtUpload(inventoryPhoto.getMd5());
+        image.setMetadataHashAtSync(inventoryPhoto.getMetadataHash());
+        image.setSyncStatus(SYNCED);
+        image.setErrorMessage(null);
+        image.setUploadedAt(Optional.ofNullable(image.getUploadedAt()).orElse(ZonedDateTime.now()));
+        image.setLastSyncedAt(ZonedDateTime.now());
+        externalImageDao.upsert(image);
+        return result(action, SyncActionStatus.SUCCEEDED, "Adopted existing Flickr photo into DB", startedAt, null, remotePhotoId);
+    }
+
+    private SyncActionResult repairAlbumMembership(SyncAction action, Set<String> remotePhotoIds, LocalDateTime startedAt) {
+        Integer externalServiceId = requiredInteger(action, "externalServiceId");
+        String remoteAlbumId = requiredAlbumId(action);
+        ExternalImageAlbum album = findAlbum(action);
+        String remotePrimaryPhotoId = attribute(action, "remotePrimaryPhotoId")
+                .filter(this::hasText)
+                .orElseGet(() -> remotePhotoIds.stream().findFirst().orElse(null));
+
+        externalImageAlbumImageDao.deleteByExternalImageAlbumId(album.getExternalImageAlbumId());
+        int sortOrder = 1;
+        for (String remotePhotoId : remotePhotoIds) {
+            ExternalImage image = externalImageDao.findByExternalServiceIdAndExternalServiceImageId(externalServiceId, remotePhotoId)
+                    .orElseThrow(() -> new IllegalStateException("No external image row found for Flickr photo id [%s]".formatted(remotePhotoId)));
+            externalImageAlbumImageDao.upsert(ExternalImageAlbumImage.builder()
+                    .externalImageAlbumId(album.getExternalImageAlbumId())
+                    .externalImageId(image.getExternalImageId())
+                    .sortOrder(sortOrder++)
+                    .primary(Objects.equals(remotePrimaryPhotoId, remotePhotoId))
+                    .build());
+        }
+
+        album.setSyncStatus(SYNCED);
+        album.setErrorMessage(null);
+        album.setLastSyncedAt(ZonedDateTime.now());
+        externalImageAlbumDao.update(album);
+        return result(action, SyncActionStatus.SUCCEEDED, "Repaired DB Flickr album membership rows", startedAt, remoteAlbumId, remotePrimaryPhotoId);
     }
 
     private PhotoMetaDataV1 loadPhotoMetaData(ItemInventoryPhoto photo) throws IOException {
@@ -361,6 +474,12 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     }
 
     private ExternalImageAlbum findOrCreateAlbum(SyncAction action, Integer externalServiceId, Integer itemInventoryId) {
+        Optional<Long> externalImageAlbumId = longAttribute(action, "externalImageAlbumId");
+        if (externalImageAlbumId.isPresent()) {
+            return externalImageAlbumDao.findByExternalImageAlbumId(externalImageAlbumId.get())
+                    .orElseThrow(() -> new IllegalArgumentException("No external image album found for id [%s]".formatted(externalImageAlbumId.get())));
+        }
+
         return externalImageAlbumDao.findByExternalServiceIdAndItemInventoryId(externalServiceId, itemInventoryId)
                 .orElseGet(() -> externalImageAlbumDao.insert(ExternalImageAlbum.builder()
                         .externalServiceId(externalServiceId)
@@ -368,6 +487,20 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                         .title(attribute(action, "desiredTitle").orElse(null))
                         .syncStatus(PENDING)
                         .build()));
+    }
+
+    private ExternalImage findOrCreateImage(SyncAction action, Integer externalServiceId, Integer itemInventoryPhotoId) {
+        Optional<Long> externalImageId = longAttribute(action, "externalImageId");
+        if (externalImageId.isPresent()) {
+            return externalImageDao.findByExternalImageId(externalImageId.get())
+                    .orElseThrow(() -> new IllegalArgumentException("No external image found for id [%s]".formatted(externalImageId.get())));
+        }
+
+        return externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(externalServiceId, itemInventoryPhotoId)
+                .orElseGet(() -> ExternalImage.builder()
+                        .externalServiceId(externalServiceId)
+                        .itemInventoryPhotoId(itemInventoryPhotoId)
+                        .build());
     }
 
     private List<SyncedPhoto> syncedPhotos(Integer externalServiceId, Integer itemInventoryId) {

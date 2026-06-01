@@ -4,6 +4,8 @@ import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
+import io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairPlanRequest;
+import io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairPlanService;
 import io.legohunter.egress.imagehosting.remote.ImageHostingRemoteSnapshot;
 import io.legohunter.egress.imagehosting.remote.ImageHostingRemoteSnapshotReader;
 import io.legohunter.egress.imagehosting.remote.ImageHostingRemoteSnapshotRequest;
@@ -12,6 +14,9 @@ import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateReader
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateRequest;
 import io.legohunter.egress.imagehosting.snapshot.ImageHostingDesiredStateSnapshot;
 import io.legohunter.imaging.model.HostedAlbum;
+import io.legohunter.imaging.service.sync.model.SyncAction;
+import io.legohunter.imaging.service.sync.model.SyncActionSafety;
+import io.legohunter.imaging.service.sync.model.SyncActionType;
 import io.legohunter.imaging.service.sync.model.SyncPlan;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +31,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_NOT_FOUND;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_STATUS;
 
 @ExtendWith(MockitoExtension.class)
 class DefaultImageHostingSyncPlanServiceTest {
@@ -35,6 +42,9 @@ class DefaultImageHostingSyncPlanServiceTest {
     @Mock
     private ImageHostingRemoteSnapshotReader remoteSnapshotReader;
 
+    @Mock
+    private ImageHostingDbRepairPlanService dbRepairPlanService;
+
     private DefaultImageHostingSyncPlanService service;
 
     @BeforeEach
@@ -42,6 +52,7 @@ class DefaultImageHostingSyncPlanServiceTest {
         service = new DefaultImageHostingSyncPlanService(
                 desiredStateReader,
                 remoteSnapshotReader,
+                dbRepairPlanService,
                 new ImageHostingReconciliationPlanner(new ImageHostingPublishingPolicy(new ImageHostingSyncProperties()))
         );
     }
@@ -99,14 +110,62 @@ class DefaultImageHostingSyncPlanServiceTest {
     }
 
     @Test
-    void planDoesNotCallRemoteReaderWhenDesiredAlbumHasNoRemoteId() {
+    void planAdoptsExistingRemoteAlbumWhenDesiredAlbumHasNoRemoteId() {
         when(desiredStateReader.read(any())).thenReturn(desiredState(null));
+        SyncPlan repairPlan = SyncPlan.builder()
+                .planId("image-hosting-repair-flickr-100-uuid")
+                .action(SyncAction.builder()
+                        .actionId("001-repair-album-id")
+                        .type(SyncActionType.REPAIR_ALBUM_ID)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .attribute("remoteAlbumId", "album-100")
+                        .build())
+                .build();
+        when(dbRepairPlanService.plan(any())).thenReturn(repairPlan);
+
+        SyncPlan plan = service.plan(ImageHostingSyncPlanRequest.builder()
+                .itemInventoryId(100)
+                .provider("flickr")
+                .externalServiceId(10)
+                .userId("user-123")
+                .build());
+
+        assertThat(plan).isSameAs(repairPlan);
+        verify(remoteSnapshotReader, never()).read(any());
+
+        ArgumentCaptor<ImageHostingDbRepairPlanRequest> repairRequestCaptor =
+                ArgumentCaptor.forClass(ImageHostingDbRepairPlanRequest.class);
+        verify(dbRepairPlanService).plan(repairRequestCaptor.capture());
+        assertThat(repairRequestCaptor.getValue())
+                .extracting(
+                        ImageHostingDbRepairPlanRequest::getItemInventoryId,
+                        ImageHostingDbRepairPlanRequest::getProvider,
+                        ImageHostingDbRepairPlanRequest::getExternalServiceId,
+                        ImageHostingDbRepairPlanRequest::getUserId
+                )
+                .containsExactly(100, "flickr", 10, "user-123");
+    }
+
+    @Test
+    void planFallsBackToCreateAlbumWhenRemoteAdoptionFindsNoMatch() {
+        when(desiredStateReader.read(any())).thenReturn(desiredState(null));
+        when(dbRepairPlanService.plan(any())).thenReturn(SyncPlan.builder()
+                .planId("image-hosting-repair-flickr-100-uuid")
+                .action(SyncAction.builder()
+                        .actionId("001-repair-album-id")
+                        .type(SyncActionType.REPAIR_ALBUM_ID)
+                        .safety(SyncActionSafety.BLOCKED)
+                        .attribute(REMOTE_ADOPTION_STATUS, REMOTE_ADOPTION_NOT_FOUND)
+                        .build())
+                .build());
 
         SyncPlan plan = service.plan(ImageHostingSyncPlanRequest.builder()
                 .itemInventoryId(100)
                 .build());
 
-        assertThat(plan.hasActions()).isTrue();
+        assertThat(plan.getActions())
+                .extracting(action -> action.getType())
+                .containsExactly(SyncActionType.CREATE_ALBUM);
         verify(remoteSnapshotReader, never()).read(any());
     }
 

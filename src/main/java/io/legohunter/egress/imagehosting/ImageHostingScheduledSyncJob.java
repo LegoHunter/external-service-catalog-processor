@@ -1,6 +1,12 @@
 package io.legohunter.egress.imagehosting;
 
 import io.legohunter.data.dao.ExternalImageDao;
+import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanExecutor;
+import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanRequest;
+import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanService;
+import io.legohunter.imaging.service.sync.model.SyncPlan;
+import io.legohunter.imaging.service.sync.model.SyncReport;
+import io.legohunter.imaging.service.sync.model.SyncReportSummary;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -16,15 +22,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.SUCCESS;
-
 @Component
 @Slf4j
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "lego.image-hosting.sync.scheduled", name = "enabled", havingValue = "true")
 public class ImageHostingScheduledSyncJob {
     private final ExternalImageDao externalImageDao;
-    private final ImageHostingSyncService imageHostingSyncService;
+    private final ImageHostingSyncPlanService syncPlanService;
+    private final ImageHostingSyncPlanExecutor syncPlanExecutor;
     private final ImageHostingSyncProperties properties;
     private final ImageHostingSyncMetricsService metricsService;
 
@@ -91,7 +96,7 @@ public class ImageHostingScheduledSyncJob {
         try {
             List<CompletableFuture<InventorySyncResult>> futures = itemInventoryIds.stream()
                     .map(itemInventoryId -> CompletableFuture.supplyAsync(
-                            () -> syncItemInventory(itemInventoryId, provider, retryFailed),
+                            () -> syncItemInventory(itemInventoryId, provider),
                             executor
                     ))
                     .toList();
@@ -145,26 +150,42 @@ public class ImageHostingScheduledSyncJob {
 
     private InventorySyncResult syncItemInventory(
             Integer itemInventoryId,
-            ImageHostingSyncProperties.ResolvedProvider provider,
-            boolean retryFailed
+            ImageHostingSyncProperties.ResolvedProvider provider
     ) {
         try {
-            ImageHostingSyncResult result = imageHostingSyncService.sync(ImageHostingSyncRequest.builder()
+            SyncPlan plan = syncPlanService.plan(ImageHostingSyncPlanRequest.builder()
                     .itemInventoryId(itemInventoryId)
                     .provider(provider.provider())
                     .externalServiceId(provider.externalServiceId())
-                    .retryFailed(retryFailed)
                     .build());
-            boolean synced = SUCCESS.equals(result.getOutcome());
-            if (!synced) {
-                log.warn(
-                        "image_hosting.sync_job.inventory_failed provider={} externalServiceId={} itemInventoryId={} outcome={}",
+            if (!plan.hasActions()) {
+                log.info(
+                        "image_hosting.sync_job.inventory_no_actions provider={} externalServiceId={} itemInventoryId={} planId={}",
                         provider.provider(),
                         provider.externalServiceId(),
                         itemInventoryId,
-                        result.getOutcome()
+                        plan.getPlanId()
                 );
+                return new InventorySyncResult(itemInventoryId, true);
             }
+
+            SyncReport report = syncPlanExecutor.execute(plan, false);
+            SyncReportSummary summary = report.getSummary();
+            boolean synced = !report.hasFailures();
+            log.info(
+                    "image_hosting.sync_job.inventory_completed provider={} externalServiceId={} itemInventoryId={} planId={} reportId={} synced={} plannedActions={} succeededActions={} failedActions={} blockedActions={} skippedActions={}",
+                    provider.provider(),
+                    provider.externalServiceId(),
+                    itemInventoryId,
+                    plan.getPlanId(),
+                    report.getReportId(),
+                    synced,
+                    plan.getActions().size(),
+                    summary.getSucceeded(),
+                    summary.getFailed(),
+                    summary.getBlocked(),
+                    summary.getSkipped()
+            );
             return new InventorySyncResult(itemInventoryId, synced);
         } catch (RuntimeException e) {
             log.warn(

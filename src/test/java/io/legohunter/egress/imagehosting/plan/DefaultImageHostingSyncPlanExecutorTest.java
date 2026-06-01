@@ -217,6 +217,135 @@ class DefaultImageHostingSyncPlanExecutorTest {
     }
 
     @Test
+    void executeAdoptsExistingRemoteAlbumFromRepairAction() {
+        ExternalImageAlbum album = ExternalImageAlbum.builder()
+                .externalImageAlbumId(301L)
+                .externalServiceId(FLICKR_SERVICE_ID)
+                .itemInventoryId(100)
+                .build();
+        when(externalImageAlbumDao.findByExternalServiceIdAndExternalAlbumId(FLICKR_SERVICE_ID, "album-100"))
+                .thenReturn(Optional.empty());
+        when(externalImageAlbumDao.findByExternalImageAlbumId(301L)).thenReturn(Optional.of(album));
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("repair-plan-1")
+                .action(SyncAction.builder()
+                        .actionId("001-repair-album-id")
+                        .type(SyncActionType.REPAIR_ALBUM_ID)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                        .attribute("itemInventoryId", "100")
+                        .attribute("externalImageAlbumId", "301")
+                        .attribute("remoteAlbumId", "album-100")
+                        .attribute("remoteAlbumUrl", "https://flickr.example/albums/album-100")
+                        .attribute("remoteTitle", "4558-1 - Metroliner")
+                        .build())
+                .build(), false);
+
+        assertThat(report.getResults().getFirst())
+                .extracting(SyncActionResult::getStatus, SyncActionResult::getAlbumId)
+                .containsExactly(SyncActionStatus.SUCCEEDED, "album-100");
+        assertThat(album)
+                .extracting(
+                        ExternalImageAlbum::getExternalAlbumId,
+                        ExternalImageAlbum::getAlbumUrl,
+                        ExternalImageAlbum::getTitle,
+                        ExternalImageAlbum::getSyncStatus
+                )
+                .containsExactly("album-100", "https://flickr.example/albums/album-100", "4558-1 - Metroliner", SYNCED);
+        verify(externalImageAlbumDao).update(album);
+        verifyNoInteractions(imageHostingService);
+    }
+
+    @Test
+    void executeAdoptsExistingRemotePhotoFromRepairAction() {
+        ItemInventoryPhoto photo = photo(11, true);
+        ExternalImage image = externalImage(201L, 11, null);
+        when(externalImageDao.findByExternalServiceIdAndExternalServiceImageId(FLICKR_SERVICE_ID, "photo-11"))
+                .thenReturn(Optional.empty());
+        when(itemInventoryPhotoDao.findByItemInventoryPhotoId(11)).thenReturn(Optional.of(photo));
+        when(externalImageDao.findByExternalImageId(201L)).thenReturn(Optional.of(image));
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("repair-plan-1")
+                .action(SyncAction.builder()
+                        .actionId("002-repair-photo-id")
+                        .type(SyncActionType.REPAIR_PHOTO_ID)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                        .attribute("itemInventoryPhotoId", "11")
+                        .attribute("externalImageId", "201")
+                        .attribute("remotePhotoId", "photo-11")
+                        .attribute("remotePhotoUrl", "https://flickr.example/photos/photo-11")
+                        .attribute("remoteTitle", "Front caption")
+                        .build())
+                .build(), false);
+
+        assertThat(report.getResults().getFirst())
+                .extracting(SyncActionResult::getStatus, SyncActionResult::getPhotoId)
+                .containsExactly(SyncActionStatus.SUCCEEDED, "photo-11");
+        assertThat(image)
+                .extracting(
+                        ExternalImage::getExternalServiceImageId,
+                        ExternalImage::getImageUrl,
+                        ExternalImage::getTitle,
+                        ExternalImage::getMd5AtUpload,
+                        ExternalImage::getMetadataHashAtSync,
+                        ExternalImage::getSyncStatus
+                )
+                .containsExactly("photo-11", "https://flickr.example/photos/photo-11", "Front caption", "md5-11", "metadata-11", SYNCED);
+        verify(externalImageDao).upsert(image);
+        verifyNoInteractions(imageHostingService);
+    }
+
+    @Test
+    void executeRepairsDbAlbumMembershipFromRemotePhotoIdsWithoutCallingProvider() {
+        ExternalImageAlbum album = album();
+        ExternalImage primaryImage = externalImage(201L, 11, "photo-11");
+        ExternalImage detailImage = externalImage(202L, 12, "photo-12");
+        when(externalImageAlbumDao.findByExternalImageAlbumId(301L)).thenReturn(Optional.of(album));
+        when(externalImageDao.findByExternalServiceIdAndExternalServiceImageId(FLICKR_SERVICE_ID, "photo-11"))
+                .thenReturn(Optional.of(primaryImage));
+        when(externalImageDao.findByExternalServiceIdAndExternalServiceImageId(FLICKR_SERVICE_ID, "photo-12"))
+                .thenReturn(Optional.of(detailImage));
+
+        SyncReport report = executor.execute(SyncPlan.builder()
+                .planId("repair-plan-1")
+                .action(SyncAction.builder()
+                        .actionId("004-update-album-membership")
+                        .type(SyncActionType.UPDATE_ALBUM_MEMBERSHIP)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
+                        .attribute("itemInventoryId", "100")
+                        .attribute("externalImageAlbumId", "301")
+                        .attribute("externalAlbumId", "album-100")
+                        .attribute("remotePhotoIds", "photo-11,photo-12")
+                        .attribute("remotePrimaryPhotoId", "photo-11")
+                        .build())
+                .build(), false);
+
+        assertThat(report.getResults().getFirst())
+                .extracting(SyncActionResult::getStatus, SyncActionResult::getAlbumId, SyncActionResult::getPhotoId)
+                .containsExactly(SyncActionStatus.SUCCEEDED, "album-100", "photo-11");
+        verify(externalImageAlbumImageDao).deleteByExternalImageAlbumId(301L);
+        ArgumentCaptor<ExternalImageAlbumImage> membershipCaptor = ArgumentCaptor.forClass(ExternalImageAlbumImage.class);
+        verify(externalImageAlbumImageDao, times(2)).upsert(membershipCaptor.capture());
+        assertThat(membershipCaptor.getAllValues())
+                .extracting(
+                        ExternalImageAlbumImage::getExternalImageAlbumId,
+                        ExternalImageAlbumImage::getExternalImageId,
+                        ExternalImageAlbumImage::getSortOrder,
+                        ExternalImageAlbumImage::getPrimary
+                )
+                .containsExactly(
+                        tuple(301L, 201L, 1, true),
+                        tuple(301L, 202L, 2, false)
+                );
+        verify(externalImageAlbumDao).update(album);
+        verifyNoInteractions(imageHostingService);
+    }
+
+    @Test
     void executeCreatesAlbumFromDbBackedCreateRequest() {
         ItemInventoryPhoto primaryPhoto = photo(11, true);
         ItemInventoryPhoto detailPhoto = photo(12, false);

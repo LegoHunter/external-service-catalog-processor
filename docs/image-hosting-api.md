@@ -186,6 +186,13 @@ Build a dry-run reconciliation plan. The plan compares DB desired state against
 current Flickr remote state and lists actions that would bring Flickr into line
 with the DB-backed desired state.
 
+When the DB does not yet have a Flickr album id, normal sync first attempts
+safe remote adoption before planning a new album. If exactly one existing
+Flickr album matches the DB desired title, the plan contains DB repair actions
+that link the album, photos, and membership rows back to the item inventory. If
+multiple remote albums match, the plan is blocked as ambiguous. If no remote
+album matches, the planner falls back to `CREATE_ALBUM`.
+
 This endpoint is read-only. It does not upload photos, update Flickr metadata,
 update album membership, or write repair information to the DB.
 
@@ -213,13 +220,13 @@ The plan may contain these action types:
 | Action type | Meaning | Typical safety |
 | --- | --- | --- |
 | `UPLOAD_PHOTO` | DB has a processed photo without a Flickr photo id; applying uploads the S3 image to Flickr and stores the returned id. | `SAFE_AUTOMATIC` |
-| `CREATE_ALBUM` | DB desired state has no hosted album id; applying creates a Flickr album/photoset. | `SAFE_AUTOMATIC`, or `BLOCKED` when desired album state is missing |
+| `CREATE_ALBUM` | DB desired state has no hosted album id and no existing matching Flickr album was found; applying creates a Flickr album/photoset. | `SAFE_AUTOMATIC`, or `BLOCKED` when desired album state is missing |
 | `UPDATE_PHOTO_METADATA` | Photo metadata hash changed since the last sync; applying updates Flickr title/description/tags. | `SAFE_AUTOMATIC` |
 | `UPDATE_ALBUM_METADATA` | Desired album title or description differs from Flickr. | `SAFE_AUTOMATIC` |
 | `UPDATE_ALBUM_MEMBERSHIP` | Flickr album membership/order differs from DB desired photo ids. | `SAFE_AUTOMATIC` when no unexpected remote-only photos would be removed; otherwise `REQUIRES_REVIEW` |
 | `FIX_PRIMARY_PHOTO` | Flickr primary photo differs from DB desired primary photo. | `SAFE_AUTOMATIC` or `REQUIRES_REVIEW` depending on membership risk |
-| `REPAIR_ALBUM_ID` | DB album id points to a Flickr album that was not found. | Usually `REQUIRES_REVIEW` or `BLOCKED` |
-| `REPAIR_PHOTO_ID` | DB photo id points to a Flickr photo that was not found in the album snapshot. | Usually `REQUIRES_REVIEW` |
+| `REPAIR_ALBUM_ID` | DB album id points to a Flickr album that was not found, or normal sync found one safe existing Flickr album to adopt for an item with missing DB linkage. | `SAFE_AUTOMATIC` for unique adoption, otherwise usually `REQUIRES_REVIEW` or `BLOCKED` |
+| `REPAIR_PHOTO_ID` | DB photo id points to a Flickr photo that was not found in the album snapshot, or normal sync found one safe existing Flickr photo title match during album adoption. | `SAFE_AUTOMATIC` for unique adoption, otherwise usually `REQUIRES_REVIEW` |
 
 Older sync model enum values such as `REBUILD_MANIFEST`, `WRITE_MANIFEST`, and
 `SHORTEN_ALBUM_URL` may exist in shared models for legacy compatibility, but the

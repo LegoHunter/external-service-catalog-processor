@@ -30,6 +30,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_AMBIGUOUS;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_FAILED;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_STATUS;
 
 class DefaultImageHostingDbRepairPlanServiceTest {
     private static final int FLICKR_SERVICE_ID = 10;
@@ -126,7 +129,8 @@ class DefaultImageHostingDbRepairPlanServiceTest {
                         "Multiple remote Flickr albums match the desired DB album title; repair is ambiguous"
                 );
         assertThat(plan.getActions().getFirst().getAttributes())
-                .containsEntry("matchingRemoteAlbumIds", "album-100,album-101");
+                .containsEntry("matchingRemoteAlbumIds", "album-100,album-101")
+                .containsEntry(REMOTE_ADOPTION_STATUS, REMOTE_ADOPTION_AMBIGUOUS);
     }
 
     @Test
@@ -144,6 +148,8 @@ class DefaultImageHostingDbRepairPlanServiceTest {
                 .containsExactly(SyncActionType.REPAIR_ALBUM_ID, SyncActionSafety.BLOCKED);
         assertThat(plan.getActions().getFirst().getAttributes().get("failureMessages"))
                 .startsWith("Flickr unavailable");
+        assertThat(plan.getActions().getFirst().getAttributes())
+                .containsEntry(REMOTE_ADOPTION_STATUS, REMOTE_ADOPTION_FAILED);
     }
 
     private static ImageHostingDesiredStateSnapshot desiredStateWithoutExternalIds() {

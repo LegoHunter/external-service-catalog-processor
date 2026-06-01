@@ -1,7 +1,18 @@
 package io.legohunter.egress.imagehosting;
 
 import io.legohunter.data.dao.ExternalImageDao;
+import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanExecutor;
+import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanRequest;
+import io.legohunter.egress.imagehosting.plan.ImageHostingSyncPlanService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.legohunter.imaging.service.sync.model.SyncAction;
+import io.legohunter.imaging.service.sync.model.SyncActionResult;
+import io.legohunter.imaging.service.sync.model.SyncActionSafety;
+import io.legohunter.imaging.service.sync.model.SyncActionStatus;
+import io.legohunter.imaging.service.sync.model.SyncActionType;
+import io.legohunter.imaging.service.sync.model.SyncPlan;
+import io.legohunter.imaging.service.sync.model.SyncPlanMode;
+import io.legohunter.imaging.service.sync.model.SyncReport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,13 +26,12 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.FAILED;
-import static io.legohunter.egress.imagehosting.ImageHostingSyncOutcome.SUCCESS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -32,7 +42,10 @@ class ImageHostingScheduledSyncJobTest {
     private ExternalImageDao externalImageDao;
 
     @Mock
-    private ImageHostingSyncService imageHostingSyncService;
+    private ImageHostingSyncPlanService syncPlanService;
+
+    @Mock
+    private ImageHostingSyncPlanExecutor syncPlanExecutor;
 
     private ImageHostingSyncProperties properties;
     private SimpleMeterRegistry meterRegistry;
@@ -52,7 +65,8 @@ class ImageHostingScheduledSyncJobTest {
         meterRegistry = new SimpleMeterRegistry();
         job = new ImageHostingScheduledSyncJob(
                 externalImageDao,
-                imageHostingSyncService,
+                syncPlanService,
+                syncPlanExecutor,
                 properties,
                 new ImageHostingSyncMetricsService(meterRegistry)
         );
@@ -68,7 +82,7 @@ class ImageHostingScheduledSyncJobTest {
         assertThat(result.outcome()).isEqualTo("NO_WORK");
         assertThat(result.itemInventoriesDiscovered()).isZero();
         assertThat(result.itemInventoryIds()).isEmpty();
-        verify(imageHostingSyncService, never()).sync(any());
+        verifyNoInteractions(syncPlanService, syncPlanExecutor);
         assertThat(meterRegistry.counter(
                 "image_hosting_scheduled_sync",
                 "provider", "flickr",
@@ -86,21 +100,16 @@ class ImageHostingScheduledSyncJobTest {
 
         when(externalImageDao.findItemInventoryIdsNeedingSync(FLICKR_SERVICE_ID, true, 3))
                 .thenReturn(List.of(101, 102, 103));
-        when(imageHostingSyncService.sync(any())).thenAnswer(invocation -> {
-            ImageHostingSyncRequest request = invocation.getArgument(0);
+        when(syncPlanService.plan(any())).thenAnswer(invocation -> {
+            ImageHostingSyncPlanRequest request = invocation.getArgument(0);
             int currentActive = active.incrementAndGet();
             maxActive.accumulateAndGet(currentActive, Math::max);
             firstTwoStarted.countDown();
             release.await(2, TimeUnit.SECONDS);
             active.decrementAndGet();
-            return ImageHostingSyncResult.builder()
-                    .itemInventoryId(request.getItemInventoryId())
-                    .provider(request.getProvider())
-                    .externalServiceId(request.getExternalServiceId())
-                    .retryFailed(request.isRetryFailed())
-                    .outcome(SUCCESS)
-                    .build();
+            return plan(request.getItemInventoryId());
         });
+        when(syncPlanExecutor.execute(any(), eq(false))).thenReturn(successReport("plan"));
 
         CompletableFuture<ImageHostingScheduledSyncResult> future = CompletableFuture.supplyAsync(job::runOnce);
         assertThat(firstTwoStarted.await(2, TimeUnit.SECONDS)).isTrue();
@@ -112,18 +121,17 @@ class ImageHostingScheduledSyncJobTest {
         assertThat(result.itemInventoryIds()).containsExactly(101, 102, 103);
         assertThat(result.syncedItemInventoryIds()).containsExactly(101, 102, 103);
         assertThat(result.failedItemInventoryIds()).isEmpty();
-        ArgumentCaptor<ImageHostingSyncRequest> requestCaptor = ArgumentCaptor.forClass(ImageHostingSyncRequest.class);
-        verify(imageHostingSyncService, times(3)).sync(requestCaptor.capture());
+        ArgumentCaptor<ImageHostingSyncPlanRequest> requestCaptor = ArgumentCaptor.forClass(ImageHostingSyncPlanRequest.class);
+        verify(syncPlanService, times(3)).plan(requestCaptor.capture());
         assertThat(requestCaptor.getAllValues())
-                .extracting(ImageHostingSyncRequest::getItemInventoryId)
+                .extracting(ImageHostingSyncPlanRequest::getItemInventoryId)
                 .containsExactlyInAnyOrder(101, 102, 103);
         assertThat(requestCaptor.getAllValues())
                 .allSatisfy(request -> {
                     assertThat(request.getProvider()).isEqualTo("flickr");
                     assertThat(request.getExternalServiceId()).isEqualTo(FLICKR_SERVICE_ID);
-                    assertThat(request.isRetryFailed()).isTrue();
-                    assertThat(request.isDryRun()).isFalse();
                 });
+        verify(syncPlanExecutor, times(3)).execute(any(), eq(false));
         assertThat(meterRegistry.counter(
                 "image_hosting_scheduled_sync_inventory",
                 "provider", "flickr",
@@ -136,21 +144,22 @@ class ImageHostingScheduledSyncJobTest {
         properties.getSync().getScheduled().setConcurrency(1);
         when(externalImageDao.findItemInventoryIdsNeedingSync(FLICKR_SERVICE_ID, false, 3))
                 .thenReturn(List.of(201, 202, 203));
-        when(imageHostingSyncService.sync(any())).thenAnswer(invocation -> {
-            ImageHostingSyncRequest request = invocation.getArgument(0);
+        when(syncPlanService.plan(any())).thenAnswer(invocation -> {
+            ImageHostingSyncPlanRequest request = invocation.getArgument(0);
             if (request.getItemInventoryId() == 202) {
-                return ImageHostingSyncResult.builder()
-                        .itemInventoryId(202)
-                        .outcome(FAILED)
-                        .build();
+                return plan(202);
             }
             if (request.getItemInventoryId() == 203) {
                 throw new IllegalStateException("provider unavailable");
             }
-            return ImageHostingSyncResult.builder()
-                    .itemInventoryId(201)
-                    .outcome(SUCCESS)
-                    .build();
+            return plan(201);
+        });
+        when(syncPlanExecutor.execute(any(), eq(false))).thenAnswer(invocation -> {
+            SyncPlan plan = invocation.getArgument(0);
+            if ("plan-202".equals(plan.getPlanId())) {
+                return failedReport("plan-202");
+            }
+            return successReport(plan.getPlanId());
         });
 
         ImageHostingScheduledSyncResult result = job.runOnce();
@@ -168,5 +177,43 @@ class ImageHostingScheduledSyncJobTest {
                 "provider", "flickr",
                 "result", "failed"
         ).count()).isEqualTo(2.0);
+    }
+
+    private static SyncPlan plan(Integer itemInventoryId) {
+        return SyncPlan.builder()
+                .planId("plan-" + itemInventoryId)
+                .mode(SyncPlanMode.DRY_RUN)
+                .action(SyncAction.builder()
+                        .actionId("001-update-album-metadata")
+                        .type(SyncActionType.UPDATE_ALBUM_METADATA)
+                        .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .build())
+                .build();
+    }
+
+    private static SyncReport successReport(String planId) {
+        return SyncReport.builder()
+                .reportId("report-" + planId)
+                .planId(planId)
+                .mode(SyncPlanMode.APPLY)
+                .result(SyncActionResult.builder()
+                        .actionId("001-update-album-metadata")
+                        .type(SyncActionType.UPDATE_ALBUM_METADATA)
+                        .status(SyncActionStatus.SUCCEEDED)
+                        .build())
+                .build();
+    }
+
+    private static SyncReport failedReport(String planId) {
+        return SyncReport.builder()
+                .reportId("report-" + planId)
+                .planId(planId)
+                .mode(SyncPlanMode.APPLY)
+                .result(SyncActionResult.builder()
+                        .actionId("001-update-album-metadata")
+                        .type(SyncActionType.UPDATE_ALBUM_METADATA)
+                        .status(SyncActionStatus.FAILED)
+                        .build())
+                .build();
     }
 }
