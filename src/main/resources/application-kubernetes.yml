@@ -18,7 +18,7 @@ management:
         liveness:
           include: livenessState
         readiness:
-          include: readinessState,db,imageHostingKubernetesReadiness
+          include: readinessState,db,imageHostingReadiness
 
   tracing:
     sampling:

@@ -631,7 +631,7 @@ without executing Flickr writes or DB repair/write actions. Set `apply: true`
 after reviewing dry-run logs and candidate counts.
 
 Kubernetes deployments include the custom actuator health component
-`imageHostingKubernetesReadiness` in the readiness probe. It validates the
+`imageHostingReadiness` in the readiness probe. It validates the
 configuration needed for scheduled Flickr sync:
 
 | Component | Required When | What Is Checked |

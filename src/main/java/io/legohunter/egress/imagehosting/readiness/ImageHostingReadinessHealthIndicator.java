@@ -8,21 +8,21 @@ import org.springframework.boot.actuate.health.Status;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-@Component("imageHostingKubernetesReadiness")
+@Component("imageHostingReadiness")
 @RequiredArgsConstructor
-@ConditionalOnEnabledHealthIndicator("imageHostingKubernetesReadiness")
+@ConditionalOnEnabledHealthIndicator("imageHostingReadiness")
 @ConditionalOnProperty(
         prefix = "lego.image-hosting.readiness",
         name = "enabled",
         havingValue = "true",
         matchIfMissing = true
 )
-public class ImageHostingKubernetesReadinessHealthIndicator implements HealthIndicator {
-    private final ImageHostingKubernetesReadinessService readinessService;
+public class ImageHostingReadinessHealthIndicator implements HealthIndicator {
+    private final ImageHostingReadinessService readinessService;
 
     @Override
     public Health health() {
-        ImageHostingKubernetesReadinessReport report = readinessService.evaluate();
+        ImageHostingReadinessReport report = readinessService.evaluate();
         Health.Builder builder = report.ready()
                 ? Health.status(Status.UP)
                 : Health.status(Status.DOWN);

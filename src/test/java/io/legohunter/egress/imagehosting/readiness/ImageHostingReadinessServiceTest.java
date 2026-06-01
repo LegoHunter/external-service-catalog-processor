@@ -17,11 +17,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-class ImageHostingKubernetesReadinessServiceTest {
+class ImageHostingReadinessServiceTest {
 
     @Test
     void evaluateReportsReadyWhenRequiredKubernetesConfigIsComplete() {
-        ImageHostingKubernetesReadinessReport report = service(
+        ImageHostingReadinessReport report = service(
                 environmentWithDatabaseKey(),
                 Optional.of(mock(DataSource.class)),
                 configuredS3(),
@@ -32,7 +32,7 @@ class ImageHostingKubernetesReadinessServiceTest {
 
         assertThat(report.ready()).isTrue();
         assertThat(report.checks())
-                .extracting(ImageHostingKubernetesReadinessCheck::status)
+                .extracting(ImageHostingReadinessCheck::status)
                 .containsOnly("UP");
         assertThat(check(report, "scheduled-sync").message())
                 .contains("apply=true", "batchSize=25", "concurrency=2");
@@ -41,7 +41,7 @@ class ImageHostingKubernetesReadinessServiceTest {
 
     @Test
     void evaluateReportsDownWhenKubernetesRequiresScheduledSyncButItIsDisabled() {
-        ImageHostingKubernetesReadinessReport report = service(
+        ImageHostingReadinessReport report = service(
                 new MockEnvironment(),
                 Optional.empty(),
                 new S3ClientProperties(),
@@ -53,8 +53,8 @@ class ImageHostingKubernetesReadinessServiceTest {
         assertThat(report.ready()).isFalse();
         assertThat(check(report, "scheduled-sync"))
                 .extracting(
-                        ImageHostingKubernetesReadinessCheck::status,
-                        ImageHostingKubernetesReadinessCheck::required
+                        ImageHostingReadinessCheck::status,
+                        ImageHostingReadinessCheck::required
                 )
                 .containsExactly("DOWN", true);
         assertThat(check(report, "database").message())
@@ -66,7 +66,7 @@ class ImageHostingKubernetesReadinessServiceTest {
     @Test
     void evaluateAllowsBitlyWarningWhenScheduledSyncRunsInDryRunMode() {
         BitlyProperties bitlyProperties = new BitlyProperties();
-        ImageHostingKubernetesReadinessReport report = service(
+        ImageHostingReadinessReport report = service(
                 environmentWithDatabaseKey(),
                 Optional.of(mock(DataSource.class)),
                 configuredS3(),
@@ -78,8 +78,8 @@ class ImageHostingKubernetesReadinessServiceTest {
         assertThat(report.ready()).isTrue();
         assertThat(check(report, "bitly"))
                 .extracting(
-                        ImageHostingKubernetesReadinessCheck::status,
-                        ImageHostingKubernetesReadinessCheck::required
+                        ImageHostingReadinessCheck::status,
+                        ImageHostingReadinessCheck::required
                 )
                 .containsExactly("WARN", false);
         assertThat(check(report, "bitly").message())
@@ -88,10 +88,10 @@ class ImageHostingKubernetesReadinessServiceTest {
 
     @Test
     void healthIndicatorMapsReadinessReportToActuatorHealth() {
-        ImageHostingKubernetesReadinessService readinessService = mock(ImageHostingKubernetesReadinessService.class);
-        ImageHostingKubernetesReadinessReport report = new ImageHostingKubernetesReadinessReport(
+        ImageHostingReadinessService readinessService = mock(ImageHostingReadinessService.class);
+        ImageHostingReadinessReport report = new ImageHostingReadinessReport(
                 false,
-                List.of(new ImageHostingKubernetesReadinessCheck(
+                List.of(new ImageHostingReadinessCheck(
                         "flickr",
                         "DOWN",
                         true,
@@ -100,7 +100,7 @@ class ImageHostingKubernetesReadinessServiceTest {
         );
         when(readinessService.evaluate()).thenReturn(report);
 
-        Health health = new ImageHostingKubernetesReadinessHealthIndicator(readinessService).health();
+        Health health = new ImageHostingReadinessHealthIndicator(readinessService).health();
 
         assertThat(health.getStatus()).isEqualTo(Status.DOWN);
         assertThat(health.getDetails())
@@ -108,7 +108,7 @@ class ImageHostingKubernetesReadinessServiceTest {
                 .containsEntry("checks", report.checks());
     }
 
-    private static ImageHostingKubernetesReadinessService service(
+    private static ImageHostingReadinessService service(
             MockEnvironment environment,
             Optional<DataSource> dataSource,
             S3ClientProperties s3ClientProperties,
@@ -116,7 +116,7 @@ class ImageHostingKubernetesReadinessServiceTest {
             Optional<FlickrProperties> flickrProperties,
             Optional<BitlyProperties> bitlyProperties
     ) {
-        return new ImageHostingKubernetesReadinessService(
+        return new ImageHostingReadinessService(
                 environment,
                 dataSource,
                 s3ClientProperties,
@@ -177,8 +177,8 @@ class ImageHostingKubernetesReadinessServiceTest {
         return properties;
     }
 
-    private static ImageHostingKubernetesReadinessCheck check(
-            ImageHostingKubernetesReadinessReport report,
+    private static ImageHostingReadinessCheck check(
+            ImageHostingReadinessReport report,
             String component
     ) {
         return report.checks().stream()

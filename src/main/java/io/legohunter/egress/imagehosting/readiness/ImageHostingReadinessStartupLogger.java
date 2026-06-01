@@ -16,12 +16,12 @@ import org.springframework.stereotype.Component;
         havingValue = "true",
         matchIfMissing = true
 )
-public class ImageHostingKubernetesReadinessStartupLogger implements ApplicationRunner {
-    private final ImageHostingKubernetesReadinessService readinessService;
+public class ImageHostingReadinessStartupLogger implements ApplicationRunner {
+    private final ImageHostingReadinessService readinessService;
 
     @Override
     public void run(ApplicationArguments args) {
-        ImageHostingKubernetesReadinessReport report = readinessService.evaluate();
+        ImageHostingReadinessReport report = readinessService.evaluate();
         log.info(
                 "image_hosting.readiness.startup ready={} checkCount={}",
                 report.ready(),
@@ -30,7 +30,7 @@ public class ImageHostingKubernetesReadinessStartupLogger implements Application
         report.checks().forEach(check -> logCheck(report.ready(), check));
     }
 
-    private void logCheck(boolean ready, ImageHostingKubernetesReadinessCheck check) {
+    private void logCheck(boolean ready, ImageHostingReadinessCheck check) {
         String message = "image_hosting.readiness.check component={} status={} required={} message={}";
         if (check.down()) {
             log.error(message, check.component(), check.status(), check.required(), check.message());

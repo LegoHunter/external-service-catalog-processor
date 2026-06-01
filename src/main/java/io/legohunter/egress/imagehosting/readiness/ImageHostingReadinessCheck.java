@@ -1,6 +1,6 @@
 package io.legohunter.egress.imagehosting.readiness;
 
-public record ImageHostingKubernetesReadinessCheck(
+public record ImageHostingReadinessCheck(
         String component,
         String status,
         boolean required,

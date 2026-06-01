@@ -15,7 +15,7 @@ import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
-public class ImageHostingKubernetesReadinessService {
+public class ImageHostingReadinessService {
     private static final String UP = "UP";
     private static final String WARN = "WARN";
     private static final String DOWN = "DOWN";
@@ -27,8 +27,8 @@ public class ImageHostingKubernetesReadinessService {
     private final Optional<FlickrProperties> flickrProperties;
     private final Optional<BitlyProperties> bitlyProperties;
 
-    public ImageHostingKubernetesReadinessReport evaluate() {
-        List<ImageHostingKubernetesReadinessCheck> checks = new ArrayList<>();
+    public ImageHostingReadinessReport evaluate() {
+        List<ImageHostingReadinessCheck> checks = new ArrayList<>();
         ImageHostingSyncProperties.Scheduled scheduled = imageHostingProperties.getSync().getScheduled();
         ImageHostingSyncProperties.Readiness readiness = imageHostingProperties.getReadiness();
         boolean scheduledRequired = readiness.isRequireScheduledSyncEnabled();
@@ -42,12 +42,12 @@ public class ImageHostingKubernetesReadinessService {
         validateFlickr(checks, syncRuntimeRequired);
         validateBitly(checks, scheduledEnabled && applyEnabled && readiness.isRequireBitlyWhenApplyEnabled());
 
-        boolean ready = checks.stream().noneMatch(ImageHostingKubernetesReadinessCheck::down);
-        return new ImageHostingKubernetesReadinessReport(ready, checks);
+        boolean ready = checks.stream().noneMatch(ImageHostingReadinessCheck::down);
+        return new ImageHostingReadinessReport(ready, checks);
     }
 
     private void validateScheduledSync(
-            List<ImageHostingKubernetesReadinessCheck> checks,
+            List<ImageHostingReadinessCheck> checks,
             ImageHostingSyncProperties.Scheduled scheduled,
             boolean required
     ) {
@@ -82,7 +82,7 @@ public class ImageHostingKubernetesReadinessService {
         ));
     }
 
-    private void validateDatabase(List<ImageHostingKubernetesReadinessCheck> checks, boolean required) {
+    private void validateDatabase(List<ImageHostingReadinessCheck> checks, boolean required) {
         List<String> missing = new ArrayList<>();
         if (!hasText(environment.getProperty("spring.datasource.database-key-name"))) {
             missing.add("spring.datasource.database-key-name");
@@ -93,7 +93,7 @@ public class ImageHostingKubernetesReadinessService {
         addConfigCheck(checks, "database", required, missing);
     }
 
-    private void validateS3(List<ImageHostingKubernetesReadinessCheck> checks, boolean required) {
+    private void validateS3(List<ImageHostingReadinessCheck> checks, boolean required) {
         List<String> missing = new ArrayList<>();
         if (!hasText(s3ClientProperties.getUrl())) {
             missing.add("lego.minio.url");
@@ -107,7 +107,7 @@ public class ImageHostingKubernetesReadinessService {
         addConfigCheck(checks, "s3", required, missing);
     }
 
-    private void validateFlickr(List<ImageHostingKubernetesReadinessCheck> checks, boolean required) {
+    private void validateFlickr(List<ImageHostingReadinessCheck> checks, boolean required) {
         List<String> missing = new ArrayList<>();
         ImageHostingSyncProperties.Provider flickrProvider = imageHostingProperties.getProviders().get("flickr");
         if (flickrProvider == null) {
@@ -149,7 +149,7 @@ public class ImageHostingKubernetesReadinessService {
         addConfigCheck(checks, "flickr", required, missing);
     }
 
-    private void validateBitly(List<ImageHostingKubernetesReadinessCheck> checks, boolean required) {
+    private void validateBitly(List<ImageHostingReadinessCheck> checks, boolean required) {
         List<String> missing = new ArrayList<>();
         if (bitlyProperties.isEmpty()) {
             missing.add("bitly configuration");
@@ -169,7 +169,7 @@ public class ImageHostingKubernetesReadinessService {
     }
 
     private void addConfigCheck(
-            List<ImageHostingKubernetesReadinessCheck> checks,
+            List<ImageHostingReadinessCheck> checks,
             String component,
             boolean required,
             List<String> missing
@@ -186,13 +186,13 @@ public class ImageHostingKubernetesReadinessService {
         ));
     }
 
-    private ImageHostingKubernetesReadinessCheck check(
+    private ImageHostingReadinessCheck check(
             String component,
             String status,
             boolean required,
             String message
     ) {
-        return new ImageHostingKubernetesReadinessCheck(component, status, required, message);
+        return new ImageHostingReadinessCheck(component, status, required, message);
     }
 
     private boolean hasText(String value) {
