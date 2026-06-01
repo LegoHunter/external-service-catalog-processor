@@ -1,7 +1,5 @@
 package io.legohunter.egress.imagehosting.shorturl;
 
-import io.legohunter.data.dao.ExternalImageAlbumDao;
-import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.imaging.bitly.config.BitlyProperties;
 import io.legohunter.imaging.bitly.impl.BitlinksService;
 import io.legohunter.imaging.bitly.model.bitly.Bitlink;
@@ -14,35 +12,28 @@ import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class ImageHostingShortUrlServiceTest {
-    private static final int FLICKR_SERVICE_ID = 10;
-
     private BitlinksService bitlinksService;
-    private ExternalImageAlbumDao externalImageAlbumDao;
     private BitlyProperties bitlyProperties;
     private ImageHostingShortUrlService service;
 
     @BeforeEach
     void setUp() {
         bitlinksService = mock(BitlinksService.class);
-        externalImageAlbumDao = mock(ExternalImageAlbumDao.class);
         bitlyProperties = new BitlyProperties();
         bitlyProperties.setAccessToken("token");
         bitlyProperties.setGroupGuid("group-1");
         service = new ImageHostingShortUrlService(
                 Optional.of(bitlinksService),
-                bitlyProperties,
-                externalImageAlbumDao
+                bitlyProperties
         );
     }
 
@@ -121,33 +112,6 @@ class ImageHostingShortUrlServiceTest {
                 .containsExactly("group-1", "https://www.flickr.com/photos/example/albums/721577200");
     }
 
-    @Test
-    void backfillMissingShortUrlsUpdatesOnlyRecoveredAlbums() {
-        ExternalImageAlbum matchingAlbum = album(301L, "https://www.flickr.com/photos/example/albums/721577100", null);
-        ExternalImageAlbum missingAlbum = album(302L, "https://www.flickr.com/photos/example/albums/721577200", null);
-        ExternalImageAlbum alreadyFilledAlbum = album(303L, "https://www.flickr.com/photos/example/albums/721577300", "https://bit.ly/filled");
-        when(externalImageAlbumDao.findAll()).thenReturn(Set.of(matchingAlbum, missingAlbum, alreadyFilledAlbum));
-        when(bitlinksService.listBitlinks("group-1", 100, null, "both"))
-                .thenReturn(page(List.of(bitlink(
-                        "https://www.flickr.com/photos/example/albums/721577100",
-                        "https://bit.ly/album-100"
-                )), null));
-
-        ImageHostingShortUrlBackfillReport report = service.backfillMissingShortUrls("flickr", FLICKR_SERVICE_ID);
-
-        assertThat(report)
-                .extracting(
-                        ImageHostingShortUrlBackfillReport::getScannedAlbumCount,
-                        ImageHostingShortUrlBackfillReport::getEligibleAlbumCount,
-                        ImageHostingShortUrlBackfillReport::getRecoveredCount,
-                        ImageHostingShortUrlBackfillReport::getLookupMissCount
-                )
-                .containsExactly(3, 2, 1, 1);
-        assertThat(matchingAlbum.getShortUrl()).isEqualTo("https://bit.ly/album-100");
-        verify(externalImageAlbumDao).update(matchingAlbum);
-        verify(externalImageAlbumDao, times(1)).update(any());
-    }
-
     private static BitlinksPage page(List<Bitlink> links, String searchAfter) {
         Pagination pagination = new Pagination();
         pagination.setSearchAfter(searchAfter);
@@ -164,14 +128,4 @@ class ImageHostingShortUrlServiceTest {
         return bitlink;
     }
 
-    private static ExternalImageAlbum album(Long externalImageAlbumId, String albumUrl, String shortUrl) {
-        return ExternalImageAlbum.builder()
-                .externalImageAlbumId(externalImageAlbumId)
-                .externalServiceId(FLICKR_SERVICE_ID)
-                .itemInventoryId(100 + externalImageAlbumId.intValue())
-                .externalAlbumId("album-" + externalImageAlbumId)
-                .albumUrl(albumUrl)
-                .shortUrl(shortUrl)
-                .build();
-    }
 }

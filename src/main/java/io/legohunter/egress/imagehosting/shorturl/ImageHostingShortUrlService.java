@@ -1,7 +1,5 @@
 package io.legohunter.egress.imagehosting.shorturl;
 
-import io.legohunter.data.dao.ExternalImageAlbumDao;
-import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.imaging.bitly.config.BitlyProperties;
 import io.legohunter.imaging.bitly.impl.BitlinksService;
 import io.legohunter.imaging.bitly.model.bitly.Bitlink;
@@ -12,13 +10,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,7 +34,6 @@ public class ImageHostingShortUrlService {
 
     private final Optional<BitlinksService> bitlinksService;
     private final BitlyProperties bitlyProperties;
-    private final ExternalImageAlbumDao externalImageAlbumDao;
 
     private BitlyShortUrlLookup cachedLookup;
 
@@ -89,61 +83,6 @@ public class ImageHostingShortUrlService {
             log.warn("image_hosting.short_url.generate.failed albumUrl={} message={}", albumUrl, e.getMessage(), e);
             return result(FAILED, albumUrl, null, e.getMessage());
         }
-    }
-
-    public ImageHostingShortUrlBackfillReport backfillMissingShortUrls(String provider, Integer externalServiceId) {
-        LocalDateTime startedAt = LocalDateTime.now();
-        Set<ExternalImageAlbum> albums = externalImageAlbumDao.findAll();
-        List<ExternalImageAlbum> eligibleAlbums = albums.stream()
-                .filter(album -> externalServiceId == null || Objects.equals(externalServiceId, album.getExternalServiceId()))
-                .filter(album -> hasText(album.getAlbumUrl()))
-                .filter(album -> !hasText(album.getShortUrl()))
-                .toList();
-
-        ImageHostingShortUrlBackfillReport.ImageHostingShortUrlBackfillReportBuilder report =
-                ImageHostingShortUrlBackfillReport.builder()
-                        .provider(provider)
-                        .externalServiceId(externalServiceId)
-                        .startedAt(startedAt)
-                        .scannedAlbumCount(albums.size())
-                        .eligibleAlbumCount(eligibleAlbums.size());
-
-        int recovered = 0;
-        int lookupMiss = 0;
-        int failed = 0;
-        int disabled = 0;
-        for (ExternalImageAlbum album : eligibleAlbums) {
-            ImageHostingShortUrlResult result = recoverExistingShortUrl(album.getAlbumUrl());
-            if (result.hasShortUrl()) {
-                album.setShortUrl(result.getShortUrl());
-                externalImageAlbumDao.update(album);
-            }
-            switch (result.getStatus()) {
-                case RECOVERED_EXISTING -> recovered++;
-                case LOOKUP_MISS -> lookupMiss++;
-                case DISABLED -> disabled++;
-                case FAILED -> failed++;
-                default -> {
-                }
-            }
-            report.item(ImageHostingShortUrlBackfillItem.builder()
-                    .externalImageAlbumId(album.getExternalImageAlbumId())
-                    .itemInventoryId(album.getItemInventoryId())
-                    .externalAlbumId(album.getExternalAlbumId())
-                    .albumUrl(album.getAlbumUrl())
-                    .shortUrl(result.getShortUrl())
-                    .status(result.getStatus())
-                    .message(result.getMessage())
-                    .build());
-        }
-
-        return report
-                .recoveredCount(recovered)
-                .lookupMissCount(lookupMiss)
-                .disabledCount(disabled)
-                .failedCount(failed)
-                .finishedAt(LocalDateTime.now())
-                .build();
     }
 
     private BitlyShortUrlLookup lookup() {

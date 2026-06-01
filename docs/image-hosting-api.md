@@ -90,7 +90,6 @@ accepting the risk described by the action.
 | `POST` | `/item-inventories/{itemInventoryId}/sync-plan/apply` | Build and apply the current sync plan. | Yes, for applicable actions | Yes |
 | `GET` | `/item-inventories/{itemInventoryId}/repair-plan` | Build a dry-run DB repair plan from Flickr state. | No | No |
 | `POST` | `/item-inventories/{itemInventoryId}/repair-plan/apply` | Build and apply a DB repair plan. | Usually no Flickr writes; may update membership for safe repair actions | Yes |
-| `POST` | `/short-urls/backfill` | Recover missing DB short URLs from existing Bitly account links. | No | Yes, for recovered matches |
 | `POST` | `/item-inventories/{itemInventoryId}/sync` | Legacy direct sync workflow. Prefer sync-plan endpoints for Phase 3. | Yes when `dryRun=false` | Yes when `dryRun=false` |
 
 ## Generated Description
@@ -347,6 +346,10 @@ where possible:
 - Bitly lookup/generation failures are reported in the action result message
   but do not fail the Flickr sync action.
 
+Manual historical backfill for existing DB album rows remains a migration-tool
+workflow in `lego-data-migration`. The ingress application only performs short
+URL recovery/generation as part of normal sync-plan apply execution.
+
 Transient provider errors are retried according to
 `lego.image-hosting.sync.retry`. Retryable error types are:
 
@@ -461,47 +464,6 @@ repairing local DB state from Flickr, not for normal publishing.
 ```http
 POST /internal/image-hosting/item-inventories/335/repair-plan/apply
 ```
-
-## Short URL Backfill
-
-### POST `/internal/image-hosting/short-urls/backfill`
-
-Recover missing `external_image_album.short_url` values from existing Bitly
-account links. The backfill reads DB albums that already have an `album_url` and
-no `short_url`, pages through Bitly links for the configured group, and matches
-Bitly `long_url` values back to Flickr album URLs. It matches exact normalized
-URLs and Flickr album ids across `/albums/{id}` and `/sets/{id}` URL variants.
-
-This endpoint does not create new Bitly links. It only preserves existing Bitly
-links that are already present in your Bitly account. New Flickr album creation
-uses the sync-plan apply path to generate a fresh Bitly short URL.
-
-#### Parameters
-
-| Parameter | Location | Required | Default | Valid values | Description |
-| --- | --- | --- | --- | --- | --- |
-| `provider` | Query | No | Default provider | Configured provider key | Selects the image-hosting provider context. |
-| `externalServiceId` | Query | No | Resolved provider external service id | External service id integer | Limits backfill to album rows for one external service. |
-
-#### Example
-
-```http
-POST /internal/image-hosting/short-urls/backfill?provider=flickr
-```
-
-#### Response Fields
-
-| Field | Description |
-| --- | --- |
-| `provider` | Resolved provider key. |
-| `externalServiceId` | External service id used to filter DB rows. |
-| `scannedAlbumCount` | Total DB album rows inspected before filtering. |
-| `eligibleAlbumCount` | Album rows with `album_url` and missing `short_url`. |
-| `recoveredCount` | Rows updated with an existing Bitly short URL. |
-| `lookupMissCount` | Rows where no existing Bitly link matched. |
-| `failedCount` | Rows where Bitly lookup failed. |
-| `disabledCount` | Rows skipped because Bitly lookup is not configured. |
-| `items` | Per-album backfill results with DB album id, item inventory id, URL, status, and message. |
 
 ## Legacy Direct Sync
 
