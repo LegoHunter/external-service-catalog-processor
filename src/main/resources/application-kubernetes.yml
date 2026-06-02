@@ -14,6 +14,11 @@ management:
     health:
       probes:
         enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db,imageHostingReadiness
 
   tracing:
     sampling:
@@ -29,3 +34,6 @@ management:
 lego:
   minio:
     url: http://minio.minio-dev.svc.cluster.local
+  image-hosting:
+    readiness:
+      require-scheduled-sync-enabled: true

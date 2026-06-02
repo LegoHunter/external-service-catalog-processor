@@ -607,6 +607,10 @@ lego:
         initial-backoff-ms: 500
         backoff-multiplier: 2.0
         max-backoff-ms: 5000
+    readiness:
+      enabled: true
+      require-scheduled-sync-enabled: false
+      require-bitly-when-apply-enabled: true
     publishing:
       photo:
         title-template: "{captionOrFilename}"
@@ -625,6 +629,22 @@ pending image-hosting sync rows, or metadata hash drift. `apply: false` is the
 conservative default for Kubernetes rollout: the job builds and logs sync plans
 without executing Flickr writes or DB repair/write actions. Set `apply: true`
 after reviewing dry-run logs and candidate counts.
+
+Kubernetes deployments include the custom actuator health component
+`imageHostingReadiness` in the readiness probe. It validates the
+configuration needed for scheduled Flickr sync:
+
+| Component | Required When | What Is Checked |
+| --- | --- | --- |
+| `scheduled-sync` | `lego.image-hosting.readiness.require-scheduled-sync-enabled=true` | Scheduled sync is enabled, and batch size/concurrency are greater than zero. |
+| `database` | Scheduled sync is enabled or required | `spring.datasource.database-key-name` is configured and a `DataSource` bean exists. |
+| `s3` | Scheduled sync is enabled or required | `lego.minio.url`, `lego.minio.access-key`, and `lego.minio.secret-key` are configured. |
+| `flickr` | Scheduled sync is enabled or required | Flickr provider config, external service id, user id, API key/secret, OAuth token, and OAuth token secret are configured. |
+| `bitly` | Scheduled sync is enabled with `apply=true` | Bitly base URL, access token, and group GUID are configured. Missing Bitly config is only a warning in dry-run mode. |
+
+Startup logs emit one summary line and one line per readiness check using the
+`image_hosting.readiness.*` log keys. Secret values are never logged; only
+missing property names are reported.
 
 Publishing template variables:
 

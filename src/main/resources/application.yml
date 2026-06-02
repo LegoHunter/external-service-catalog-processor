@@ -41,6 +41,10 @@ lego:
         initial-delay-ms: 30000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
+    readiness:
+      enabled: true
+      require-scheduled-sync-enabled: false
+      require-bitly-when-apply-enabled: true
 
 kafka:
   bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092
