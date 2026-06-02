@@ -11,10 +11,12 @@ import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
+import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlResult;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlService;
+import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlStatus;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
@@ -74,6 +76,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
     private final ImageHostingRetryTemplate retryTemplate;
     private final ImageHostingPublishingPolicy publishingPolicy;
     private final ImageHostingShortUrlService shortUrlService;
+    private final ImageHostingSyncMetricsService metricsService;
 
     @Override
     public SyncReport execute(SyncPlan plan, boolean allowReviewRequired) {
@@ -202,6 +205,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         album.setExternalAlbumId(hostedAlbum.getId());
         album.setAlbumUrl(hostedAlbum.getUrl());
         ImageHostingShortUrlResult shortUrlResult = shortUrlService.generateShortUrl(hostedAlbum.getUrl());
+        recordShortUrlResult(action, "generate", shortUrlResult);
         if (hasShortUrl(shortUrlResult)) {
             album.setShortUrl(shortUrlResult.getShortUrl());
         }
@@ -210,6 +214,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         album.setLastSyncedAt(ZonedDateTime.now());
         externalImageAlbumDao.update(album);
         persistAlbumMembership(album, syncedPhotos);
+        metricsService.recordAlbumCreation(providerTag(action), "created");
         return result(
                 action,
                 SyncActionStatus.SUCCEEDED,
@@ -338,6 +343,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
                 externalImageAlbumDao.findByExternalServiceIdAndExternalAlbumId(externalServiceId, remoteAlbumId);
         if (existingRemoteOwner.isPresent()
                 && !itemInventoryId.equals(existingRemoteOwner.get().getItemInventoryId())) {
+            metricsService.recordAlbumAdoption(providerTag(action), "blocked");
             return result(
                     action,
                     SyncActionStatus.FAILED,
@@ -355,6 +361,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         album.setExternalAlbumId(remoteAlbumId);
         attribute(action, "remoteAlbumUrl").filter(this::hasText).ifPresent(album::setAlbumUrl);
         ImageHostingShortUrlResult shortUrlResult = shortUrlService.recoverExistingShortUrl(album.getAlbumUrl());
+        recordShortUrlResult(action, "recover", shortUrlResult);
         if (hasShortUrl(shortUrlResult)) {
             album.setShortUrl(shortUrlResult.getShortUrl());
         }
@@ -366,6 +373,7 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
         album.setErrorMessage(null);
         album.setLastSyncedAt(ZonedDateTime.now());
         externalImageAlbumDao.update(album);
+        metricsService.recordAlbumAdoption(providerTag(action), "adopted");
         return result(
                 action,
                 SyncActionStatus.SUCCEEDED,
@@ -799,6 +807,31 @@ public class DefaultImageHostingSyncPlanExecutor implements ImageHostingSyncPlan
 
     private boolean hasShortUrl(ImageHostingShortUrlResult result) {
         return result != null && result.hasShortUrl();
+    }
+
+    private void recordShortUrlResult(
+            SyncAction action,
+            String operation,
+            ImageHostingShortUrlResult result
+    ) {
+        ImageHostingShortUrlStatus status = Optional.ofNullable(result)
+                .map(ImageHostingShortUrlResult::getStatus)
+                .orElse(ImageHostingShortUrlStatus.FAILED);
+        metricsService.recordShortUrl(providerTag(action), operation, shortUrlResultTag(status));
+    }
+
+    private String shortUrlResultTag(ImageHostingShortUrlStatus status) {
+        return switch (status) {
+            case RECOVERED_EXISTING -> "recovered";
+            case GENERATED_NEW -> "generated";
+            case LOOKUP_MISS -> "lookup_miss";
+            case DISABLED -> "disabled";
+            case FAILED -> "failed";
+        };
+    }
+
+    private String providerTag(SyncAction action) {
+        return attribute(action, "provider").filter(this::hasText).orElse("unknown");
     }
 
     private ImageHostingService imageHostingService() {

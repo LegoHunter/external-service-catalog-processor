@@ -646,6 +646,25 @@ Startup logs emit one summary line and one line per readiness check using the
 `image_hosting.readiness.*` log keys. Secret values are never logged; only
 missing property names are reported.
 
+## Observability
+
+Phase 4 scheduled sync emits Prometheus metrics through the standard actuator
+Prometheus endpoint. The Phase 4.5 adoption-specific counters are:
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `image_hosting_album_creation` | `provider`, `result` | Counts successful album creation. `result=created` means a new Flickr album was created and persisted. |
+| `image_hosting_album_adoption` | `provider`, `result` | Counts DB adoption outcomes for existing remote albums. Expected results include `adopted`, `ambiguous`, `no_match`, `blocked`, and `failed`. |
+| `image_hosting_short_url` | `provider`, `operation`, `result` | Counts Bitly short URL recovery/generation outcomes. `operation` is `recover` or `generate`; expected results include `recovered`, `generated`, `lookup_miss`, `disabled`, and `failed`. |
+
+The same events also emit structured logs using:
+
+| Log Key | Meaning |
+| --- | --- |
+| `image_hosting.album_creation` | Album creation outcome. |
+| `image_hosting.album_adoption` | Adoption outcome, including ambiguity and no-match cases. |
+| `image_hosting.short_url` | Bitly recovery/generation outcome. |
+
 Publishing template variables:
 
 | Variable | Meaning |

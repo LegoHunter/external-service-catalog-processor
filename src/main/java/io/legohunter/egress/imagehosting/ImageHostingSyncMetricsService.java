@@ -4,12 +4,14 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ImageHostingSyncMetricsService {
     private static final String PROVIDER_TAG = "provider";
     private static final String OUTCOME_TAG = "outcome";
@@ -55,6 +57,64 @@ public class ImageHostingSyncMetricsService {
                 .increment();
     }
 
+    public void recordAlbumCreation(String providerTag, String result) {
+        Counter.builder("image_hosting_album_creation")
+                .tag(PROVIDER_TAG, providerTag(providerTag))
+                .tag(RESULT_TAG, result)
+                .register(meterRegistry)
+                .increment();
+        log.info(
+                "image_hosting.album_creation provider={} result={}",
+                providerTag(providerTag),
+                result
+        );
+    }
+
+    public void recordAlbumAdoption(String providerTag, String result) {
+        Counter.builder("image_hosting_album_adoption")
+                .tag(PROVIDER_TAG, providerTag(providerTag))
+                .tag(RESULT_TAG, result)
+                .register(meterRegistry)
+                .increment();
+        if ("adopted".equals(result) || "no_match".equals(result)) {
+            log.info(
+                    "image_hosting.album_adoption provider={} result={}",
+                    providerTag(providerTag),
+                    result
+            );
+        } else {
+            log.warn(
+                    "image_hosting.album_adoption provider={} result={}",
+                    providerTag(providerTag),
+                    result
+            );
+        }
+    }
+
+    public void recordShortUrl(String providerTag, String operation, String result) {
+        Counter.builder("image_hosting_short_url")
+                .tag(PROVIDER_TAG, providerTag(providerTag))
+                .tag(OPERATION_TAG, operation)
+                .tag(RESULT_TAG, result)
+                .register(meterRegistry)
+                .increment();
+        if ("failed".equals(result)) {
+            log.warn(
+                    "image_hosting.short_url provider={} operation={} result={}",
+                    providerTag(providerTag),
+                    operation,
+                    result
+            );
+        } else {
+            log.info(
+                    "image_hosting.short_url provider={} operation={} result={}",
+                    providerTag(providerTag),
+                    operation,
+                    result
+            );
+        }
+    }
+
     public void recordScheduledSync(String providerTag, String outcome, long elapsedMillis) {
         Counter.builder("image_hosting_scheduled_sync")
                 .tag(PROVIDER_TAG, providerTag)
@@ -78,5 +138,9 @@ public class ImageHostingSyncMetricsService {
                 .tag(RESULT_TAG, result)
                 .register(meterRegistry)
                 .increment(count);
+    }
+
+    private String providerTag(String providerTag) {
+        return providerTag == null || providerTag.isBlank() ? "unknown" : providerTag;
     }
 }
