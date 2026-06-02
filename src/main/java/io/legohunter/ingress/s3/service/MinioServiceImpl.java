@@ -1,7 +1,9 @@
 package io.legohunter.ingress.s3.service;
 
 import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.s3.exception.S3ObjectNotFoundException;
 import io.minio.*;
+import io.minio.errors.ErrorResponseException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -19,6 +21,12 @@ public class MinioServiceImpl implements MinioService {
             return minioClient.getObject(
                     GetObjectArgs.builder().bucket(bucket).object(key).build()
             );
+        } catch (ErrorResponseException e) {
+            if (isObjectNotFound(e)) {
+                throw new S3ObjectNotFoundException(bucket, key, e);
+            }
+
+            throw new RuntimeException(e);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -80,5 +88,10 @@ public class MinioServiceImpl implements MinioService {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private boolean isObjectNotFound(ErrorResponseException e) {
+        return e.errorResponse() != null
+                && "NoSuchKey".equals(e.errorResponse().code());
     }
 }

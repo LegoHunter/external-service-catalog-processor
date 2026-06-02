@@ -16,6 +16,7 @@ import io.legohunter.data.dto.ExternalItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.PhotoStatus;
+import io.legohunter.ingress.s3.exception.S3ObjectNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -154,6 +155,35 @@ class PhotoProcessingServiceTest {
         verify(itemInventoryPhotoDao).setPrimaryPhoto(999, "md5-1");
         verify(minioService).deleteObject("lego-uploads-sandbox", "photos/test.jpg");
         verify(photoMetricsService).incrementProcessed("event");
+    }
+
+    @Test
+    void process_event_shouldAcknowledgeStaleObjectEventsWhenSourceObjectIsMissing() {
+        PhotoUploadEvent event = new PhotoUploadEvent("lego-uploads-sandbox", "photos/missing.jpg");
+
+        when(minioService.getObject("lego-uploads-sandbox", "photos/missing.jpg"))
+                .thenThrow(new S3ObjectNotFoundException("lego-uploads-sandbox", "photos/missing.jpg", null));
+
+        service.process(event);
+
+        verify(photoMetricsService, never()).incrementProcessed(anyString());
+        verify(photoMetricsService, never()).incrementFailed(anyString());
+        verify(photoMetricsService, never()).incrementDuplicate(anyString());
+        verify(minioService, never()).copyObject(anyString(), anyString(), anyString(), anyString());
+        verify(minioService, never()).deleteObject(anyString(), anyString());
+        verify(itemInventoryDao, never()).upsert(any());
+        verify(itemInventoryPhotoDao, never()).insertPhoto(
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                anyLong(),
+                anyBoolean(),
+                any(),
+                any(PhotoStatus.class)
+        );
     }
 
     @Test

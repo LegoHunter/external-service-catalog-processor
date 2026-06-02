@@ -8,6 +8,7 @@ import io.legohunter.imaging.metadata.model.ImageMetadata;
 import io.legohunter.imaging.scaling.ImageScalingService;
 import io.legohunter.ingress.common.logging.LoggingContext;
 import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.s3.exception.S3ObjectNotFoundException;
 import io.legohunter.ingress.source.photo.metrics.PhotoMetricsService;
 import io.legohunter.ingress.source.photo.model.PhotoUploadEvent;
 import io.legohunter.ingress.util.exception.Unchecked;
@@ -128,6 +129,16 @@ public class PhotoProcessingService {
                     "photo.process.success mode={} filename={}",
                     mode,
                     filename
+            );
+
+        } catch (S3ObjectNotFoundException e) {
+
+            log.warn(
+                    "photo.process.source_missing mode={} filename={} bucket={} key={} reason=stale_object_event",
+                    mode,
+                    filename,
+                    e.getBucket(),
+                    e.getKey()
             );
 
         } catch (Exception e) {
