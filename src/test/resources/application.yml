@@ -1,8 +1,11 @@
-import-path: /dev/config
-
 spring:
   config:
-    import: classpath:${import-path}/database/database-configuration.yml,classpath:${import-path}/minio/minio-configuration.yml,classpath:${import-path}/kafka/kafka-configuration.yml
+    import:
+      - classpath:/dev/config/database-configuration.yml
+      - classpath:/dev/config/minio-configuration.yml
+      - classpath:/dev/config/kafka-configuration.yml
+      - classpath:/dev/config/bitly-configuration.yml
+      - classpath:/dev/config/flickr-configuration.yml
   datasource:
     database-key-name: test
 

@@ -1,6 +1,11 @@
 spring:
   config:
-    import: file:${import-path}/database-configuration.yml, file:${import-path}/kafka-configuration.yml, file:${import-path}/minio-configuration.yml, file:${import-path}/flickr-configuration.yml, file:${import-path}/bitly-configuration.yml
+    import:
+      - file:${import-path}/database-configuration.yml
+      - file:${import-path}/kafka-configuration.yml
+      - file:${import-path}/minio-configuration.yml
+      - file:${import-path}/flickr-configuration.yml
+      - file:${import-path}/bitly-configuration.yml
   datasource:
     database-key-name: rasppi5-01-lego-sandbox
     hikari:
