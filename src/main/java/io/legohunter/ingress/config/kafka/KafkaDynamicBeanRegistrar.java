@@ -17,8 +17,10 @@ import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static io.legohunter.ingress.common.util.KafkaNamingUtil.kebabToCamel;
@@ -32,6 +34,12 @@ public class KafkaDynamicBeanRegistrar {
     private static final String PRODUCER_FACTORY_BEAN_NAME_TEMPLATE = "%sProducerFactory";
     private static final String KAFKA_TEMPLATE_BEAN_NAME_TEMPLATE = "%sKafkaTemplate";
     private static final String CONTAINER_FACTORY_BEAN_NAME_TEMPLATE = "%sContainerFactory";
+    private static final String MASKED_VALUE = "[masked]";
+    private static final Set<String> SENSITIVE_PROPERTY_NAMES = Set.of(
+            "sasl.jaas.config",
+            "ssl.key.password",
+            "ssl.keystore.password",
+            "ssl.truststore.password");
 
     @Bean
     public static BeanDefinitionRegistryPostProcessor beanDefinitionRegistryPostProcessor(Environment environment) {
@@ -72,7 +80,7 @@ public class KafkaDynamicBeanRegistrar {
         consumers.forEach((topicConfigurationName, consumer) -> {
             String beanName = beanName(CONSUMER_FACTORY_BEAN_NAME_TEMPLATE, topicConfigurationName);
             Map<String, Object> properties = kafkaCustomProperties.getConsumerProperties(topicConfigurationName);
-            log.info("Registering consumer bean [{}] for topic {} with properties {}", beanName, topicConfigurationName, properties);
+            log.info("Registering consumer bean [{}] for topic {} with properties {}", beanName, topicConfigurationName, sanitizedProperties(properties));
             BeanDefinitionBuilder builder = BeanDefinitionBuilder.genericBeanDefinition(DefaultKafkaConsumerFactory.class);
             builder.addConstructorArgValue(properties);
             registry.registerBeanDefinition(beanName, builder.getBeanDefinition());
@@ -86,7 +94,7 @@ public class KafkaDynamicBeanRegistrar {
         producers.forEach((topicConfigurationName, producer) -> {
             String beanName = beanName(PRODUCER_FACTORY_BEAN_NAME_TEMPLATE, topicConfigurationName);
             Map<String, Object> properties = kafkaCustomProperties.getProducerProperties(topicConfigurationName);
-            log.info("Registering producer bean [{}] for topic {} with properties {}", beanName, topicConfigurationName, properties);
+            log.info("Registering producer bean [{}] for topic {} with properties {}", beanName, topicConfigurationName, sanitizedProperties(properties));
             BeanDefinitionBuilder builder = BeanDefinitionBuilder.genericBeanDefinition(DefaultKafkaProducerFactory.class);
             builder.addConstructorArgValue(properties);
             registry.registerBeanDefinition(beanName, builder.getBeanDefinition());
@@ -122,5 +130,15 @@ public class KafkaDynamicBeanRegistrar {
 
     private static String beanName(String template, String topic) {
         return String.format(template, kebabToCamel(topic));
+    }
+
+    static Map<String, Object> sanitizedProperties(Map<String, Object> properties) {
+        Map<String, Object> sanitized = new LinkedHashMap<>();
+        properties.forEach((key, value) -> sanitized.put(key, isSensitiveProperty(key) ? MASKED_VALUE : value));
+        return sanitized;
+    }
+
+    private static boolean isSensitiveProperty(String propertyName) {
+        return SENSITIVE_PROPERTY_NAMES.contains(propertyName.toLowerCase());
     }
 }
