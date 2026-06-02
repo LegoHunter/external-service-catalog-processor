@@ -133,6 +133,8 @@ public class PhotoProcessingService {
 
         } catch (S3ObjectNotFoundException e) {
 
+            photoMetricsService.incrementSkipped(mode, "source_missing");
+
             log.warn(
                     "photo.process.source_missing mode={} filename={} bucket={} key={} reason=stale_object_event",
                     mode,

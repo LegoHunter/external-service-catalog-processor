@@ -169,6 +169,7 @@ class PhotoProcessingServiceTest {
         verify(photoMetricsService, never()).incrementProcessed(anyString());
         verify(photoMetricsService, never()).incrementFailed(anyString());
         verify(photoMetricsService, never()).incrementDuplicate(anyString());
+        verify(photoMetricsService).incrementSkipped("event", "source_missing");
         verify(minioService, never()).copyObject(anyString(), anyString(), anyString(), anyString());
         verify(minioService, never()).deleteObject(anyString(), anyString());
         verify(itemInventoryDao, never()).upsert(any());

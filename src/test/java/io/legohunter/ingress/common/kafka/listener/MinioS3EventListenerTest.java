@@ -62,6 +62,55 @@ class MinioS3EventListenerTest {
     }
 
     @Test
+    void handleS3Event_ignoresUnknownMinioFields() {
+        listener.handleS3Event("""
+                {
+                  "EventName": "s3:ObjectCreated:Put",
+                  "Key": "lego-upload-sandbox/photos/item.jpg",
+                  "unexpectedTopLevel": "ignored",
+                  "Records": [
+                    {
+                      "eventName": "s3:ObjectCreated:Put",
+                      "unexpectedRecordField": "ignored",
+                      "s3": {
+                        "unexpectedS3Field": "ignored",
+                        "bucket": {
+                          "name": "lego-upload-sandbox",
+                          "unexpectedBucketField": "ignored"
+                        },
+                        "object": {
+                          "key": "photos%2Fitem.jpg",
+                          "size": 1,
+                          "eTag": "etag",
+                          "contentType": "image/jpeg",
+                          "userMetadata": {},
+                          "sequencer": "seq",
+                          "versionId": "null"
+                        }
+                      }
+                    }
+                  ]
+                }
+                """);
+
+        ArgumentCaptor<ObjectUploadedEvent> captor = ArgumentCaptor.forClass(ObjectUploadedEvent.class);
+        verify(objectStorageEventRouter)
+                .routeUpload(captor.capture());
+
+        assertThat(captor.getValue())
+                .extracting(
+                        ObjectUploadedEvent::getBucket,
+                        ObjectUploadedEvent::getKey,
+                        ObjectUploadedEvent::getEventName
+                )
+                .containsExactly(
+                        "lego-upload-sandbox",
+                        "photos/item.jpg",
+                        "s3:ObjectCreated:Put"
+                );
+    }
+
+    @Test
     void handleS3Event_routesObjectRemovedRecordAsDeleteEvent() {
         listener.handleS3Event(payload(
                 "s3:ObjectRemoved:Delete",
