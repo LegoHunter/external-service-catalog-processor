@@ -3,6 +3,7 @@ package io.legohunter.egress.imagehosting.repair;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
+import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingAlbum;
@@ -21,6 +22,7 @@ import io.legohunter.imaging.service.hosting.api.ImageHostingService;
 import io.legohunter.imaging.service.sync.model.SyncActionSafety;
 import io.legohunter.imaging.service.sync.model.SyncActionType;
 import io.legohunter.imaging.service.sync.model.SyncPlan;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -32,6 +34,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_AMBIGUOUS;
 import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_FAILED;
+import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_NOT_FOUND;
 import static io.legohunter.egress.imagehosting.repair.ImageHostingDbRepairAttributes.REMOTE_ADOPTION_STATUS;
 
 class DefaultImageHostingDbRepairPlanServiceTest {
@@ -39,19 +42,22 @@ class DefaultImageHostingDbRepairPlanServiceTest {
 
     private ImageHostingDesiredStateReader desiredStateReader;
     private ImageHostingService imageHostingService;
+    private SimpleMeterRegistry meterRegistry;
     private DefaultImageHostingDbRepairPlanService service;
 
     @BeforeEach
     void setUp() {
         desiredStateReader = mock(ImageHostingDesiredStateReader.class);
         imageHostingService = mock(ImageHostingService.class);
+        meterRegistry = new SimpleMeterRegistry();
         ImageHostingSyncProperties properties = new ImageHostingSyncProperties();
         properties.getSync().getRetry().setInitialBackoffMs(0L);
         service = new DefaultImageHostingDbRepairPlanService(
                 desiredStateReader,
                 Optional.of(imageHostingService),
                 new ImageHostingRetryTemplate(properties),
-                new ImageHostingPublishingPolicy(properties)
+                new ImageHostingPublishingPolicy(properties),
+                new ImageHostingSyncMetricsService(meterRegistry)
         );
     }
 
@@ -131,6 +137,11 @@ class DefaultImageHostingDbRepairPlanServiceTest {
         assertThat(plan.getActions().getFirst().getAttributes())
                 .containsEntry("matchingRemoteAlbumIds", "album-100,album-101")
                 .containsEntry(REMOTE_ADOPTION_STATUS, REMOTE_ADOPTION_AMBIGUOUS);
+        assertThat(meterRegistry.counter(
+                "image_hosting_album_adoption",
+                "provider", "flickr",
+                "result", "ambiguous"
+        ).count()).isEqualTo(1.0);
     }
 
     @Test
@@ -150,6 +161,34 @@ class DefaultImageHostingDbRepairPlanServiceTest {
                 .startsWith("Flickr unavailable");
         assertThat(plan.getActions().getFirst().getAttributes())
                 .containsEntry(REMOTE_ADOPTION_STATUS, REMOTE_ADOPTION_FAILED);
+        assertThat(meterRegistry.counter(
+                "image_hosting_album_adoption",
+                "provider", "flickr",
+                "result", "failed"
+        ).count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void planRecordsNoMatchMetricWhenRemoteAlbumAdoptionFindsNoMatch() {
+        when(desiredStateReader.read(any())).thenReturn(desiredStateWithoutExternalIds());
+        when(imageHostingService.listAlbums(any())).thenReturn(response(HostedAlbumPage.builder()
+                .album(remoteAlbum("album-200", "Other album"))
+                .page(1)
+                .pages(1)
+                .build()));
+
+        SyncPlan plan = service.plan(ImageHostingDbRepairPlanRequest.builder()
+                .itemInventoryId(100)
+                .build());
+
+        assertThat(plan.getActions()).hasSize(1);
+        assertThat(plan.getActions().getFirst().getAttributes())
+                .containsEntry(REMOTE_ADOPTION_STATUS, REMOTE_ADOPTION_NOT_FOUND);
+        assertThat(meterRegistry.counter(
+                "image_hosting_album_adoption",
+                "provider", "flickr",
+                "result", "no_match"
+        ).count()).isEqualTo(1.0);
     }
 
     private static ImageHostingDesiredStateSnapshot desiredStateWithoutExternalIds() {

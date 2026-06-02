@@ -11,11 +11,13 @@ import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
+import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlResult;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlService;
 import io.legohunter.egress.imagehosting.shorturl.ImageHostingShortUrlStatus;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.legohunter.imaging.model.HostedAlbum;
 import io.legohunter.imaging.model.HostedAlbumCreateRequest;
 import io.legohunter.imaging.model.HostedAlbumMembershipRequest;
@@ -88,6 +90,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
     @Mock
     private ImageHostingShortUrlService shortUrlService;
 
+    private SimpleMeterRegistry meterRegistry;
     private DefaultImageHostingSyncPlanExecutor executor;
 
     @BeforeEach
@@ -95,6 +98,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
         ImageHostingSyncProperties properties = new ImageHostingSyncProperties();
         properties.getSync().setTempDirectory(tempDirectory);
         properties.getSync().getRetry().setInitialBackoffMs(0L);
+        meterRegistry = new SimpleMeterRegistry();
         executor = new DefaultImageHostingSyncPlanExecutor(
                 Optional.of(imageHostingService),
                 minioService,
@@ -106,7 +110,8 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 properties,
                 new ImageHostingRetryTemplate(properties),
                 new ImageHostingPublishingPolicy(properties),
-                shortUrlService
+                shortUrlService,
+                new ImageHostingSyncMetricsService(meterRegistry)
         );
     }
 
@@ -242,6 +247,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
                         .actionId("001-repair-album-id")
                         .type(SyncActionType.REPAIR_ALBUM_ID)
                         .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .attribute("provider", "flickr")
                         .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
                         .attribute("itemInventoryId", "100")
                         .attribute("externalImageAlbumId", "301")
@@ -271,6 +277,17 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 );
         verify(externalImageAlbumDao).update(album);
         verifyNoInteractions(imageHostingService);
+        assertThat(meterRegistry.counter(
+                "image_hosting_album_adoption",
+                "provider", "flickr",
+                "result", "adopted"
+        ).count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter(
+                "image_hosting_short_url",
+                "provider", "flickr",
+                "operation", "recover",
+                "result", "recovered"
+        ).count()).isEqualTo(1.0);
     }
 
     @Test
@@ -397,6 +414,7 @@ class DefaultImageHostingSyncPlanExecutorTest {
                         .actionId("001-create-album")
                         .type(SyncActionType.CREATE_ALBUM)
                         .safety(SyncActionSafety.SAFE_AUTOMATIC)
+                        .attribute("provider", "flickr")
                         .attribute("externalServiceId", Integer.toString(FLICKR_SERVICE_ID))
                         .attribute("itemInventoryId", "100")
                         .attribute("desiredTitle", "4558-1 - Metroliner")
@@ -419,6 +437,17 @@ class DefaultImageHostingSyncPlanExecutorTest {
                 .containsExactly("4558-1 - Metroliner", "Generated album description", "photo-11");
         assertThat(requestCaptor.getValue().get().getPhotoIds()).containsExactly("photo-11", "photo-12");
         assertThat(pendingAlbum.getShortUrl()).isEqualTo("https://bit.ly/album-100");
+        assertThat(meterRegistry.counter(
+                "image_hosting_album_creation",
+                "provider", "flickr",
+                "result", "created"
+        ).count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter(
+                "image_hosting_short_url",
+                "provider", "flickr",
+                "operation", "generate",
+                "result", "generated"
+        ).count()).isEqualTo(1.0);
     }
 
     @Test

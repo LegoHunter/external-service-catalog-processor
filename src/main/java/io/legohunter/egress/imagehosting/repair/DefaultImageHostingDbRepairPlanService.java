@@ -3,6 +3,7 @@ package io.legohunter.egress.imagehosting.repair;
 import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.egress.imagehosting.ImageHostingRetryTemplate;
+import io.legohunter.egress.imagehosting.ImageHostingSyncMetricsService;
 import io.legohunter.egress.imagehosting.publishing.ImageHostingPublishingPolicy;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingAlbum;
 import io.legohunter.egress.imagehosting.snapshot.DesiredImageHostingPhoto;
@@ -55,6 +56,7 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
     private final Optional<ImageHostingService> imageHostingService;
     private final ImageHostingRetryTemplate retryTemplate;
     private final ImageHostingPublishingPolicy publishingPolicy;
+    private final ImageHostingSyncMetricsService metricsService;
 
     @Override
     public SyncPlan plan(ImageHostingDbRepairPlanRequest request) {
@@ -70,6 +72,7 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
         PlanActionBuilder actions = new PlanActionBuilder(desiredState);
         DesiredImageHostingAlbum desiredAlbum = desiredState.getAlbum();
         if (desiredAlbum == null) {
+            recordAdoptionStatus(desiredState, REMOTE_ADOPTION_BLOCKED);
             actions.add(
                     SyncActionType.REPAIR_ALBUM_ID,
                     SyncActionSafety.BLOCKED,
@@ -86,6 +89,7 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
             remote = RemoteRecoveryState.failed(e.getMessage());
         }
         if (!remote.failureMessages().isEmpty()) {
+            recordAdoptionStatus(desiredState, REMOTE_ADOPTION_FAILED);
             actions.add(
                     SyncActionType.REPAIR_ALBUM_ID,
                     SyncActionSafety.BLOCKED,
@@ -97,6 +101,8 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
             return buildPlan(desiredState, actions);
         }
         if (remote.blockedMessage() != null) {
+            Optional.ofNullable(remote.blockedAttributes().get(REMOTE_ADOPTION_STATUS))
+                    .ifPresent(status -> recordAdoptionStatus(desiredState, status));
             actions.add(
                     SyncActionType.REPAIR_ALBUM_ID,
                     SyncActionSafety.BLOCKED,
@@ -106,6 +112,7 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
             return buildPlan(desiredState, actions);
         }
         if (remote.album().isEmpty()) {
+            recordAdoptionStatus(desiredState, REMOTE_ADOPTION_NOT_FOUND);
             actions.add(
                     SyncActionType.REPAIR_ALBUM_ID,
                     SyncActionSafety.BLOCKED,
@@ -557,6 +564,25 @@ public class DefaultImageHostingDbRepairPlanService implements ImageHostingDbRep
         values.put(REMOTE_ADOPTION_STATUS, status);
         values.putAll(attributes);
         return values;
+    }
+
+    private void recordAdoptionStatus(ImageHostingDesiredStateSnapshot desiredState, String status) {
+        metricsService.recordAlbumAdoption(
+                providerTag(desiredState),
+                switch (status) {
+                    case REMOTE_ADOPTION_NOT_FOUND -> "no_match";
+                    case REMOTE_ADOPTION_AMBIGUOUS -> "ambiguous";
+                    case REMOTE_ADOPTION_BLOCKED -> "blocked";
+                    case REMOTE_ADOPTION_FAILED -> "failed";
+                    default -> status == null || status.isBlank() ? "unknown" : status.toLowerCase();
+                }
+        );
+    }
+
+    private String providerTag(ImageHostingDesiredStateSnapshot desiredState) {
+        return Optional.ofNullable(desiredState.getProvider())
+                .filter(this::hasText)
+                .orElse("unknown");
     }
 
     private boolean hasText(String value) {
