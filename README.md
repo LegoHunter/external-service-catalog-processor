@@ -97,7 +97,7 @@ If an already-hosted photo is reprocessed with the same normalized filename but 
 
 ### Local Flickr Configuration
 
-`application-sandbox.yml` imports an optional `${import-path}/flickr-configuration.yml`. Locally, `application-local.yml` sets `import-path: /dev/config`; Kubernetes sets `import-path: /etc/.credentials`.
+`application-sandbox.yml` imports optional `${import-path}/flickr-configuration.yml` and `${import-path}/bitly-configuration.yml` files. Locally, `application-local.yml` sets `import-path: /dev/config`; Kubernetes sets `import-path: /etc/.credentials`.
 
 Example local `/dev/config/flickr-configuration.yml`:
 
@@ -117,6 +117,40 @@ flickr:
 ```
 
 For Kubernetes, keep the same logical shape and let Infisical project the file into `/etc/.credentials/flickr-configuration.yml`.
+
+Example local `/dev/config/bitly-configuration.yml`:
+
+```yaml
+bitly:
+  access-token: your-bitly-token
+  group-guid: your-bitly-group-guid
+```
+
+For Kubernetes, project the same logical shape into `/etc/.credentials/bitly-configuration.yml`. Bitly is optional while the scheduled Flickr sync runs in dry-run mode, but it is required before enabling apply mode because new Flickr albums need generated short URLs and adopted albums should recover existing short URLs.
+
+### Kubernetes Flickr Sync Rollout
+
+The Kubernetes profile enables scheduled Flickr sync with conservative dry-run defaults:
+
+```yaml
+lego:
+  image-hosting:
+    sync:
+      scheduled:
+        enabled: true
+        apply: false
+```
+
+With `apply: false`, the job selects candidates, builds sync plans, logs actions, and emits metrics without creating Flickr albums, uploading photos, updating Flickr metadata, or writing DB repair state. This keeps the pod readiness check meaningful while allowing the first deployment to validate DB, S3, Flickr, and candidate selection safely.
+
+Recommended rollout:
+
+1. Deploy with `sandbox,kubernetes` profiles and confirm `/actuator/health/readiness` is `UP`.
+2. Watch `image_hosting.sync_job.*`, `image_hosting.album_adoption`, and `image_hosting.short_url` logs.
+3. Review `/actuator/prometheus` for scheduled sync, adoption, and Bitly counters.
+4. Confirm candidate counts look correct for missing album links, missing photo links, failed sync rows, and metadata changes.
+5. Project Bitly configuration before switching to apply mode.
+6. Override `lego.image-hosting.sync.scheduled.apply=true` only after the dry-run output looks correct.
 
 ### Logging
 

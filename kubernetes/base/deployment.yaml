@@ -63,8 +63,6 @@ spec:
                 -XX:+UseG1GC
                 -XX:MaxGCPauseMillis=200
                 -XX:+UseContainerSupport
-            - name: ABC
-              value: "1234"
           volumeMounts:
             - name: services-sandbox-external-secret
               mountPath: /etc/.credentials
