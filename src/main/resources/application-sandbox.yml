@@ -23,7 +23,7 @@ spring:
 kafka:
   bootstrap-servers: redpanda-dev-0.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-1.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-2.redpanda-dev.redpanda-dev.svc.cluster.local:9092
   properties:
-    security.protocol: SASL_PLAINTEXT
+    security.protocol: SASL_SSL
     sasl.mechanism: SCRAM-SHA-512
   consumer-defaults:
     key-deserializer: org.apache.kafka.common.serialization.StringDeserializer

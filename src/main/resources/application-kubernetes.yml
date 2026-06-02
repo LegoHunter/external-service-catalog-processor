@@ -31,6 +31,10 @@ management:
 #      export:
 #        url: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/metrics
 
+kafka:
+  properties:
+    security.protocol: SASL_PLAINTEXT
+
 lego:
   minio:
     url: http://minio.minio-dev.svc.cluster.local

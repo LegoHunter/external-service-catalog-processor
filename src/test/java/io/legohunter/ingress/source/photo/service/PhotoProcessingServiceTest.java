@@ -552,8 +552,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.extractMetadata(any(byte[].class)))
                 .thenThrow(new RuntimeException("not an image"));
 
-        assertThatThrownBy(() -> service.process(event))
-                .isInstanceOf(PhotoProcessingException.class);
+        service.process(event);
 
         verify(minioService).copyObject(
                 "bucket",
@@ -566,7 +565,7 @@ class PhotoProcessingServiceTest {
     }
 
     @Test
-    void process_shouldFailWhenRequiredMetadataIsMissing() {
+    void process_shouldMoveSourceToRejectedWhenRequiredMetadataIsMissing() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
         when(minioService.getObject("bucket", "photos/photo.jpg"))
@@ -574,9 +573,7 @@ class PhotoProcessingServiceTest {
         when(metadataExtractorService.extractMetadata(originalBytes))
                 .thenReturn(metadata(null, "3001", null, null, null, null));
 
-        assertThatThrownBy(() -> service.process(event))
-                .isInstanceOf(PhotoProcessingException.class)
-                .hasMessageContaining("Photo processing failed");
+        service.process(event);
 
         verify(minioService).copyObject(
                 "bucket",
@@ -590,7 +587,7 @@ class PhotoProcessingServiceTest {
     }
 
     @Test
-    void process_shouldFailWhenExternalItemIsNotFound() {
+    void process_shouldMoveSourceToRejectedWhenExternalItemIsNotFound() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
         when(minioService.getObject("bucket", "photos/photo.jpg"))
@@ -608,8 +605,7 @@ class PhotoProcessingServiceTest {
         when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "9999"))
                 .thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.process(event))
-                .isInstanceOf(PhotoProcessingException.class);
+        service.process(event);
 
         verify(minioService).copyObject(
                 "bucket",
@@ -620,6 +616,42 @@ class PhotoProcessingServiceTest {
         verify(minioService).deleteObject("bucket", "photos/photo.jpg");
         verify(minioService, never()).putObject(any(), any(), any(), anyLong(), any());
         verify(photoMetricsService).incrementFailed("event");
+    }
+
+    @Test
+    void process_deletesNestedSourceFolderMarkersAfterSuccessfulEventProcessing() {
+        PhotoUploadEvent event = new PhotoUploadEvent("lego-uploads-sandbox", "photos/nested/album/test.jpg");
+        ImageMetadata metadata = metadata(
+                "uuid-1",
+                "3001",
+                true,
+                true,
+                false,
+                "Front view"
+        );
+
+        when(minioService.getObject("lego-uploads-sandbox", "photos/nested/album/test.jpg"))
+                .thenReturn(new ByteArrayInputStream(originalBytes));
+        when(metadataExtractorService.extractMetadata(originalBytes))
+                .thenReturn(metadata);
+        when(imageScalingService.scale(originalBytes))
+                .thenReturn(scaledBytes);
+        when(metadataExtractorService.calculateMd5(scaledBytes))
+                .thenReturn("md5-1");
+        when(itemInventoryDao.findByUuid("uuid-1"))
+                .thenReturn(Optional.empty());
+        when(itemInventoryPhotoDao.findByMd5("md5-1"))
+                .thenReturn(Optional.empty());
+        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
+                .thenReturn(Optional.of(externalItem(123)));
+        setGeneratedItemInventoryId(999);
+
+        service.process(event);
+
+        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/nested/album/test.jpg");
+        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/nested/album/");
+        verify(minioService).deleteObject("lego-uploads-sandbox", "photos/nested/");
+        verify(minioService, never()).deleteObject("lego-uploads-sandbox", "photos/");
     }
 
     @Test
