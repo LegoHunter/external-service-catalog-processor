@@ -30,7 +30,7 @@ public class PhotoUploadS3EventListener {
             topics = "${kafka.topic-configuration.upload-photo.topic}",
             groupId = "${kafka.topic-configuration.upload-photo.consumer.group-id}",
             containerFactory = "uploadPhotoContainerFactory",
-            concurrency = "6")
+            concurrency = "${kafka.topic-configuration.upload-photo.consumer.concurrency:1}")
     public void consume(ObjectUploadedEvent event) {
 
         long start = System.currentTimeMillis();

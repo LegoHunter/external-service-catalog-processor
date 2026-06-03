@@ -71,6 +71,7 @@ kafka:
       topic: sandbox-upload-photo
       consumer:
         group-id: sandbox-upload-photo-group
+        concurrency: 1
         properties:
           max-poll-records: 1
           max-poll-interval-ms: 1800000
