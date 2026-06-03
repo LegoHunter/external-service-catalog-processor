@@ -2,6 +2,7 @@ package io.legohunter.ingress.config.kafka;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,5 +39,30 @@ class KafkaDynamicBeanRegistrarTest {
         assertThat(properties)
                 .containsEntry("sasl.jaas.config", "plain-secret")
                 .containsEntry("security.protocol", "SASL_PLAINTEXT");
+    }
+
+    @Test
+    void consumerPropertiesConvertHyphenatedConsumerOverridesToKafkaPropertyNames() {
+        KafkaCustomProperties properties = new KafkaCustomProperties();
+        KafkaCustomProperties.TopicConfiguration topicConfiguration = new KafkaCustomProperties.TopicConfiguration();
+        KafkaCustomProperties.ConsumerConfiguration consumerConfiguration = new KafkaCustomProperties.ConsumerConfiguration();
+
+        consumerConfiguration.setGroupId("sandbox-upload-photo-group");
+        consumerConfiguration.setProperties(new HashMap<>(Map.of(
+                "max-poll-records", 1,
+                "max-poll-interval-ms", 1800000,
+                "spring-json-value-default-type", "io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent")));
+        topicConfiguration.setConsumer(consumerConfiguration);
+        properties.setTopicConfiguration(Map.of("upload-photo", topicConfiguration));
+
+        Map<String, Object> consumerProperties = properties.getConsumerProperties("upload-photo");
+
+        assertThat(consumerProperties)
+                .containsEntry("group.id", "sandbox-upload-photo-group")
+                .containsEntry("max.poll.records", 1)
+                .containsEntry("max.poll.interval.ms", 1800000)
+                .containsEntry(
+                        "spring.json.value.default.type",
+                        "io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent");
     }
 }

@@ -72,6 +72,8 @@ kafka:
       consumer:
         group-id: sandbox-upload-photo-group
         properties:
+          max-poll-records: 1
+          max-poll-interval-ms: 1800000
           spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
