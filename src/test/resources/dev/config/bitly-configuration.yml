@@ -1,0 +1,7 @@
+bitly:
+  baseUrl: https://api-ssl.bitly.com/v4
+  groupGuid: 11111111111111111
+  accessToken: 11111111111111111111111111
+  oauth2:
+     client-id: 11111111111111111111111111
+     client-secret: 11111111111111111111111111

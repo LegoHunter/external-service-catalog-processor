@@ -39,6 +39,14 @@ public class PhotoMetricsService {
                 .increment();
     }
 
+    public void incrementSkipped(String mode, String reason) {
+        Counter.builder("photo.skipped")
+                .tag("mode", mode)
+                .tag("reason", reason)
+                .register(meterRegistry)
+                .increment();
+    }
+
     // =========================
     // Timer
     // =========================

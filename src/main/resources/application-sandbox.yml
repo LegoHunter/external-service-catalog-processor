@@ -1,6 +1,11 @@
 spring:
   config:
-    import: file:${import-path}/database-configuration.yml, file:${import-path}/kafka-configuration.yml, file:${import-path}/minio-configuration.yml, file:${import-path}/flickr-configuration.yml, file:${import-path}/bitly-configuration.yml
+    import:
+      - file:${import-path}/database-configuration.yml
+      - file:${import-path}/kafka-configuration.yml
+      - file:${import-path}/minio-configuration.yml
+      - file:${import-path}/flickr-configuration.yml
+      - file:${import-path}/bitly-configuration.yml
   datasource:
     database-key-name: rasppi5-01-lego-sandbox
     hikari:
@@ -18,7 +23,7 @@ spring:
 kafka:
   bootstrap-servers: redpanda-dev-0.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-1.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-2.redpanda-dev.redpanda-dev.svc.cluster.local:9092
   properties:
-    security.protocol: SASL_PLAINTEXT
+    security.protocol: SASL_SSL
     sasl.mechanism: SCRAM-SHA-512
   consumer-defaults:
     key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
@@ -66,7 +71,10 @@ kafka:
       topic: sandbox-upload-photo
       consumer:
         group-id: sandbox-upload-photo-group
+        concurrency: 1
         properties:
+          max-poll-records: 1
+          max-poll-interval-ms: 1800000
           spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3

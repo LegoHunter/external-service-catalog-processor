@@ -1,7 +1,9 @@
 package io.legohunter.ingress.common.storage.model.s3.minio;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record ResponseElements(
         @JsonProperty("x-amz-id-2")
         String xAmzId2,

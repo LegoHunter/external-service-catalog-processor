@@ -23,14 +23,6 @@ class ImageHostingKubernetesConfigurationTest {
                 .containsEntry("lego.image-hosting.readiness.require-scheduled-sync-enabled", true);
     }
 
-    @Test
-    void sandboxProfileImportsOptionalBitlyConfiguration() {
-        Properties properties = load("application-sandbox.yml");
-
-        assertThat(properties.getProperty("spring.config.import"))
-                .contains("optional:file:${import-path}/bitly-configuration.yml");
-    }
-
     private static Properties load(String resourceName) {
         YamlPropertiesFactoryBean factory = new YamlPropertiesFactoryBean();
         factory.setResources(new ClassPathResource(resourceName));

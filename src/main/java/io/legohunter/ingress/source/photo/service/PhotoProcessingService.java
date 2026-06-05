@@ -8,6 +8,7 @@ import io.legohunter.imaging.metadata.model.ImageMetadata;
 import io.legohunter.imaging.scaling.ImageScalingService;
 import io.legohunter.ingress.common.logging.LoggingContext;
 import io.legohunter.ingress.s3.api.MinioService;
+import io.legohunter.ingress.s3.exception.S3ObjectNotFoundException;
 import io.legohunter.ingress.source.photo.metrics.PhotoMetricsService;
 import io.legohunter.ingress.source.photo.model.PhotoUploadEvent;
 import io.legohunter.ingress.util.exception.Unchecked;
@@ -25,6 +26,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -128,16 +131,39 @@ public class PhotoProcessingService {
                     filename
             );
 
+        } catch (S3ObjectNotFoundException e) {
+
+            photoMetricsService.incrementSkipped(mode, "source_missing");
+
+            log.warn(
+                    "photo.process.source_missing mode={} filename={} bucket={} key={} reason=stale_object_event",
+                    mode,
+                    filename,
+                    e.getBucket(),
+                    e.getKey()
+            );
+
         } catch (Exception e) {
 
             photoMetricsService.incrementFailed(mode);
 
             if (event != null && e instanceof RejectedPhotoUploadException) {
-                moveSourceObject(
+                boolean moved =
+                        moveSourceObject(
                         event,
                         REJECTED_PHOTO_PREFIX,
                         "rejected"
                 );
+
+                if (moved) {
+                    log.warn(
+                            "photo.process.rejected mode={} filename={} reason={}",
+                            mode,
+                            filename,
+                            e.getMessage()
+                    );
+                    return;
+                }
             }
 
             log.error(
@@ -649,6 +675,7 @@ public class PhotoProcessingService {
                         event.getBucket(),
                         event.getObjectKey()
                 );
+                deleteSourceFolderMarkers(event.getBucket(), event.getObjectKey());
 
                 log.info(
                         "photo.source.deleted bucket={} key={}",
@@ -862,7 +889,7 @@ public class PhotoProcessingService {
         return normalizedFileName;
     }
 
-    private void moveSourceObject(
+    private boolean moveSourceObject(
             PhotoUploadEvent event,
             String destinationPrefix,
             String reason
@@ -881,7 +908,7 @@ public class PhotoProcessingService {
                     bucket,
                     sourceKey
             );
-            return;
+            return false;
         }
 
         String destinationKey =
@@ -900,6 +927,7 @@ public class PhotoProcessingService {
                     bucket,
                     sourceKey
             );
+            deleteSourceFolderMarkers(bucket, sourceKey);
 
             log.info(
                     "photo.source.moved reason={} bucket={} sourceKey={} destinationKey={}",
@@ -908,6 +936,7 @@ public class PhotoProcessingService {
                     sourceKey,
                     destinationKey
             );
+            return true;
 
         } catch (Exception e) {
 
@@ -919,7 +948,57 @@ public class PhotoProcessingService {
                     destinationKey,
                     e
             );
+            return false;
         }
+    }
+
+    private void deleteSourceFolderMarkers(String bucket, String sourceKey) {
+        for (String folderMarkerKey : folderMarkerKeys(sourceKey)) {
+            try {
+                minioService.deleteObject(bucket, folderMarkerKey);
+
+                log.info(
+                        "photo.source.folder_marker.deleted bucket={} key={}",
+                        bucket,
+                        folderMarkerKey
+                );
+            } catch (Exception e) {
+                log.debug(
+                        "photo.source.folder_marker.delete.skipped bucket={} key={}",
+                        bucket,
+                        folderMarkerKey,
+                        e
+                );
+            }
+        }
+    }
+
+    private List<String> folderMarkerKeys(String sourceKey) {
+        List<String> folderMarkerKeys = new ArrayList<>();
+
+        if (sourceKey == null || sourceKey.isBlank()) {
+            return folderMarkerKeys;
+        }
+
+        String normalizedKey =
+                sourceKey.replace('\\', '/');
+
+        int slashIndex =
+                normalizedKey.lastIndexOf('/');
+
+        while (slashIndex > PHOTO_UPLOAD_PREFIX.length() - 1) {
+            String folderMarkerKey =
+                    normalizedKey.substring(0, slashIndex + 1);
+
+            if (!PHOTO_UPLOAD_PREFIX.equals(folderMarkerKey)) {
+                folderMarkerKeys.add(folderMarkerKey);
+            }
+
+            slashIndex =
+                    normalizedKey.lastIndexOf('/', slashIndex - 1);
+        }
+
+        return folderMarkerKeys;
     }
 
     private boolean isMovablePhotoUploadKey(String key) {

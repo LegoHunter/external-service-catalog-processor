@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 @Component
 @Slf4j
 public class TestCronJob {
-    @Scheduled(cron = "0 * * * * *") // every minute
+    @Scheduled(cron = "-") // disabled
     @SchedulerLock(name = "TestCronJob_lock", lockAtMostFor = "30s", lockAtLeastFor = "5s")
     public void run() {
         log.info("TestCronJob executed at {}", System.currentTimeMillis());
