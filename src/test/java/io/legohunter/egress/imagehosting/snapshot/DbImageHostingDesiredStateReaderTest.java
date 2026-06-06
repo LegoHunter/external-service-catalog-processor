@@ -3,15 +3,15 @@ package io.legohunter.egress.imagehosting.snapshot;
 import io.legohunter.data.dao.ExternalImageAlbumDao;
 import io.legohunter.data.dao.ExternalImageAlbumImageDao;
 import io.legohunter.data.dao.ExternalImageDao;
-import io.legohunter.data.dao.ExternalItemDao;
-import io.legohunter.data.dao.ExternalItemInventoryDao;
+import io.legohunter.data.dao.ExternalCatalogItemDao;
+import io.legohunter.data.dao.ItemInventoryExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
-import io.legohunter.data.dto.ExternalItem;
-import io.legohunter.data.dto.ExternalItemInventory;
+import io.legohunter.data.dto.ExternalCatalogItem;
+import io.legohunter.data.dto.ItemInventoryExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.ExternalSyncStatus;
@@ -43,10 +43,10 @@ class DbImageHostingDesiredStateReaderTest {
     private ItemInventoryPhotoDao itemInventoryPhotoDao;
 
     @Mock
-    private ExternalItemDao externalItemDao;
+    private ExternalCatalogItemDao externalCatalogItemDao;
 
     @Mock
-    private ExternalItemInventoryDao externalItemInventoryDao;
+    private ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
 
     @Mock
     private ExternalImageDao externalImageDao;
@@ -64,8 +64,8 @@ class DbImageHostingDesiredStateReaderTest {
         reader = new DbImageHostingDesiredStateReader(
                 itemInventoryDao,
                 itemInventoryPhotoDao,
-                externalItemDao,
-                externalItemInventoryDao,
+                externalCatalogItemDao,
+                itemInventoryExternalCatalogItemDao,
                 externalImageDao,
                 externalImageAlbumDao,
                 externalImageAlbumImageDao,
@@ -73,8 +73,8 @@ class DbImageHostingDesiredStateReaderTest {
                 new GeneratedDescriptionComposer(
                         itemInventoryDao,
                         itemInventoryPhotoDao,
-                        externalItemDao,
-                        externalItemInventoryDao,
+                        externalCatalogItemDao,
+                        itemInventoryExternalCatalogItemDao,
                         externalImageAlbumDao,
                         properties()
                 )
@@ -86,7 +86,7 @@ class DbImageHostingDesiredStateReaderTest {
         ItemInventory inventory = inventory("inventory-uuid", "Inventory album");
         ItemInventoryPhoto primaryPhoto = photo(11, "front.jpg", true);
         ItemInventoryPhoto detailPhoto = photo(12, "detail.jpg", false);
-        ExternalItem externalItem = externalItem(501, "4558-1", "Metroliner");
+        ExternalCatalogItem externalCatalogItem = externalCatalogItem(501, "4558-1", "Metroliner");
         ExternalImageAlbum album = album();
         ExternalImage primaryImage = externalImage(201L, 11, "flickr-photo-11");
         ExternalImage detailImage = externalImage(202L, 12, "flickr-photo-12");
@@ -95,11 +95,11 @@ class DbImageHostingDesiredStateReaderTest {
 
         when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
         when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(detailPhoto, primaryPhoto));
-        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of(ExternalItemInventory.builder()
-                .externalItemId(501)
+        when(itemInventoryExternalCatalogItemDao.findByItemInventoryId(100)).thenReturn(Set.of(ItemInventoryExternalCatalogItem.builder()
+                .externalCatalogItemId(501)
                 .itemInventoryId(100)
                 .build()));
-        when(externalItemDao.findByExternalItemId(501)).thenReturn(Optional.of(externalItem));
+        when(externalCatalogItemDao.findByExternalCatalogItemId(501)).thenReturn(Optional.of(externalCatalogItem));
         when(externalImageAlbumDao.findByExternalServiceIdAndItemInventoryId(FLICKR_SERVICE_ID, 100))
                 .thenReturn(Optional.of(album));
         when(externalImageAlbumImageDao.findByExternalImageAlbumId(301L))
@@ -116,7 +116,7 @@ class DbImageHostingDesiredStateReaderTest {
         assertThat(snapshot.getProvider()).isEqualTo("flickr");
         assertThat(snapshot.getExternalServiceId()).isEqualTo(FLICKR_SERVICE_ID);
         assertThat(snapshot.getItemInventoryId()).isEqualTo(100);
-        assertThat(snapshot.getExternalItem()).isEqualTo(externalItem);
+        assertThat(snapshot.getExternalCatalogItem()).isEqualTo(externalCatalogItem);
         assertThat(snapshot.getAlbum())
                 .extracting(
                         DesiredImageHostingAlbum::getDesiredTitle,
@@ -168,7 +168,7 @@ class DbImageHostingDesiredStateReaderTest {
 
         when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
         when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
-        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of());
+        when(itemInventoryExternalCatalogItemDao.findByItemInventoryId(100)).thenReturn(Set.of());
         when(externalImageAlbumDao.findByExternalServiceIdAndItemInventoryId(FLICKR_SERVICE_ID, 100))
                 .thenReturn(Optional.empty());
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
@@ -178,7 +178,7 @@ class DbImageHostingDesiredStateReaderTest {
                 .itemInventoryId(100)
                 .build());
 
-        assertThat(snapshot.externalItemOptional()).isEmpty();
+        assertThat(snapshot.externalCatalogItemOptional()).isEmpty();
         assertThat(snapshot.getAlbum())
                 .extracting(
                         DesiredImageHostingAlbum::getDesiredTitle,
@@ -203,7 +203,7 @@ class DbImageHostingDesiredStateReaderTest {
 
         when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
         when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of());
-        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of());
+        when(itemInventoryExternalCatalogItemDao.findByItemInventoryId(100)).thenReturn(Set.of());
         when(externalImageAlbumDao.findByExternalServiceIdAndItemInventoryId(44, 100))
                 .thenReturn(Optional.empty());
 
@@ -280,13 +280,13 @@ class DbImageHostingDesiredStateReaderTest {
                 .build();
     }
 
-    private static ExternalItem externalItem(Integer externalItemId, String externalNumber, String name) {
-        ExternalItem externalItem = new ExternalItem();
-        externalItem.setExternalItemId(externalItemId);
-        externalItem.setServiceId(2);
-        externalItem.setExternalNumber(externalNumber);
-        externalItem.setName(name);
-        return externalItem;
+    private static ExternalCatalogItem externalCatalogItem(Integer externalCatalogItemId, String externalNumber, String name) {
+        ExternalCatalogItem externalCatalogItem = new ExternalCatalogItem();
+        externalCatalogItem.setExternalCatalogItemId(externalCatalogItemId);
+        externalCatalogItem.setExternalServiceId(2);
+        externalCatalogItem.setExternalItemKey(externalNumber);
+        externalCatalogItem.setItemName(name);
+        return externalCatalogItem;
     }
 
     private static ExternalImageAlbum album() {

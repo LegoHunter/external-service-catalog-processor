@@ -1,10 +1,10 @@
 package io.legohunter.ingress.source.rebrickable.categories.kafka;
 
+import io.legohunter.data.dao.ExternalCategoryDao;
+import io.legohunter.data.dto.ExternalCategory;
 import io.legohunter.ingress.source.rebrickable.categories.model.RebrickableThemeEntry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import io.legohunter.data.dao.CategoryDao;
-import io.legohunter.data.dto.Category;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class RebrickableThemeEntryConsumer {
 
-    private final CategoryDao categoryDao;
+    private final ExternalCategoryDao externalCategoryDao;
 
     private Integer rebrickableServiceId = 9;
 
@@ -24,18 +24,25 @@ public class RebrickableThemeEntryConsumer {
             containerFactory = "rebrickableThemeEntryContainerFactory")
     public void listen(@Payload RebrickableThemeEntry entry) {
         try {
+            ExternalCategory category = ExternalCategory.builder()
+                    .externalServiceId(rebrickableServiceId)
+                    .externalCategoryKey(String.valueOf(entry.getId()))
+                    .categoryName(entry.getName())
+                    .parentExternalCategoryId(parentExternalCategoryId(entry.getParentId()))
+                    .build();
 
-            // Map CatalogEntry → ExternalItem
-            Category category = new Category();
-            category.setExternalServiceId(rebrickableServiceId);
-            category.setExternalCategoryId(entry.getId());
-            category.setCategoryName(entry.getName());
-            category.setParentId(entry.getParentId());
-
-            // Upsert into MySQL
-            categoryDao.upsert(category);
+            externalCategoryDao.upsert(category);
         } catch (Exception e) {
             log.error("Failed to process Rebrickable Theme entry {} message: {}", entry, e.getMessage(), e);
         }
+    }
+
+    private Integer parentExternalCategoryId(Integer parentId) {
+        if (parentId == null) {
+            return null;
+        }
+        return externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(rebrickableServiceId, String.valueOf(parentId))
+                .map(ExternalCategory::getExternalCategoryId)
+                .orElse(null);
     }
 }

@@ -3,15 +3,15 @@ package io.legohunter.egress.imagehosting.snapshot;
 import io.legohunter.data.dao.ExternalImageAlbumDao;
 import io.legohunter.data.dao.ExternalImageAlbumImageDao;
 import io.legohunter.data.dao.ExternalImageDao;
-import io.legohunter.data.dao.ExternalItemDao;
-import io.legohunter.data.dao.ExternalItemInventoryDao;
+import io.legohunter.data.dao.ExternalCatalogItemDao;
+import io.legohunter.data.dao.ItemInventoryExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
-import io.legohunter.data.dto.ExternalItem;
-import io.legohunter.data.dto.ExternalItemInventory;
+import io.legohunter.data.dto.ExternalCatalogItem;
+import io.legohunter.data.dto.ItemInventoryExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
@@ -27,15 +27,15 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static io.legohunter.data.dto.ExternalService.ExternalServiceType.BRICKLINK;
-
 @Service
 @RequiredArgsConstructor
 public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStateReader {
+    private static final int BRICKLINK_SERVICE_ID = 2;
+
     private final ItemInventoryDao itemInventoryDao;
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
-    private final ExternalItemDao externalItemDao;
-    private final ExternalItemInventoryDao externalItemInventoryDao;
+    private final ExternalCatalogItemDao externalCatalogItemDao;
+    private final ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
     private final ExternalImageDao externalImageDao;
     private final ExternalImageAlbumDao externalImageAlbumDao;
     private final ExternalImageAlbumImageDao externalImageAlbumImageDao;
@@ -57,9 +57,9 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
                 .orElseThrow(() -> new IllegalArgumentException(
                         "No item inventory found for id [%s]".formatted(request.getItemInventoryId())
                 ));
-        ExternalItem externalItem = bricklinkExternalItem(inventory).orElse(null);
+        ExternalCatalogItem externalCatalogItem = bricklinkExternalCatalogItem(inventory).orElse(null);
         List<ItemInventoryPhoto> photos = sortedPhotos(itemInventoryPhotoDao.findByItemInventoryId(inventory.getItemInventoryId()));
-        DesiredImageHostingAlbum album = desiredAlbum(provider, inventory, externalItem, photos);
+        DesiredImageHostingAlbum album = desiredAlbum(provider, inventory, externalCatalogItem, photos);
         Set<ExternalImageAlbumImage> albumMemberships = albumMemberships(album);
         Map<Long, ExternalImageAlbumImage> membershipsByExternalImageId = membershipsByExternalImageId(albumMemberships);
 
@@ -68,7 +68,7 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
                         .provider(provider.provider())
                         .externalServiceId(provider.externalServiceId())
                         .inventory(inventory)
-                        .externalItem(externalItem)
+                        .externalCatalogItem(externalCatalogItem)
                         .album(album)
                         .albumMemberships(albumMemberships);
 
@@ -84,7 +84,7 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
     private DesiredImageHostingAlbum desiredAlbum(
             ImageHostingSyncProperties.ResolvedProvider provider,
             ItemInventory inventory,
-            ExternalItem externalItem,
+            ExternalCatalogItem externalCatalogItem,
             List<ItemInventoryPhoto> photos
     ) {
         ExternalImageAlbum externalAlbum =
@@ -94,11 +94,11 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
                 ).orElse(null);
 
         return DesiredImageHostingAlbum.builder()
-                .desiredTitle(albumTitle(inventory, externalItem))
+                .desiredTitle(albumTitle(inventory, externalCatalogItem))
                 .desiredDescription(descriptionComposer.compose(
                         provider,
                         inventory,
-                        externalItem,
+                        externalCatalogItem,
                         externalAlbum,
                         photos
                 ).getDescription())
@@ -149,20 +149,20 @@ public class DbImageHostingDesiredStateReader implements ImageHostingDesiredStat
                 ));
     }
 
-    private Optional<ExternalItem> bricklinkExternalItem(ItemInventory inventory) {
-        return externalItemInventoryDao.findByItemInventoryId(inventory.getItemInventoryId()).stream()
-                .map(ExternalItemInventory::getExternalItemId)
-                .map(externalItemDao::findByExternalItemId)
+    private Optional<ExternalCatalogItem> bricklinkExternalCatalogItem(ItemInventory inventory) {
+        return itemInventoryExternalCatalogItemDao.findByItemInventoryId(inventory.getItemInventoryId()).stream()
+                .map(ItemInventoryExternalCatalogItem::getExternalCatalogItemId)
+                .map(externalCatalogItemDao::findByExternalCatalogItemId)
                 .flatMap(Optional::stream)
-                .filter(item -> BRICKLINK.getExternalServiceId().equals(item.getServiceId()))
-                .filter(item -> hasText(item.getExternalNumber()))
-                .filter(item -> hasText(item.getName()))
+                .filter(item -> BRICKLINK_SERVICE_ID == item.getExternalServiceId())
+                .filter(item -> hasText(item.getExternalItemKey()))
+                .filter(item -> hasText(item.getItemName()))
                 .findFirst();
     }
 
-    private String albumTitle(ItemInventory inventory, ExternalItem externalItem) {
-        if (externalItem != null) {
-            return "%s - %s".formatted(externalItem.getExternalNumber(), externalItem.getName());
+    private String albumTitle(ItemInventory inventory, ExternalCatalogItem externalCatalogItem) {
+        if (externalCatalogItem != null) {
+            return "%s - %s".formatted(externalCatalogItem.getExternalItemKey(), externalCatalogItem.getItemName());
         }
 
         if (hasText(inventory.getDescription())) {

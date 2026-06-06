@@ -1,13 +1,13 @@
 package io.legohunter.egress.imagehosting.description;
 
 import io.legohunter.data.dao.ExternalImageAlbumDao;
-import io.legohunter.data.dao.ExternalItemDao;
-import io.legohunter.data.dao.ExternalItemInventoryDao;
+import io.legohunter.data.dao.ExternalCatalogItemDao;
+import io.legohunter.data.dao.ItemInventoryExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ExternalImageAlbum;
-import io.legohunter.data.dto.ExternalItem;
-import io.legohunter.data.dto.ExternalItemInventory;
+import io.legohunter.data.dto.ExternalCatalogItem;
+import io.legohunter.data.dto.ItemInventoryExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
@@ -29,8 +29,8 @@ class GeneratedDescriptionComposerTest {
 
     private ItemInventoryDao itemInventoryDao;
     private ItemInventoryPhotoDao itemInventoryPhotoDao;
-    private ExternalItemDao externalItemDao;
-    private ExternalItemInventoryDao externalItemInventoryDao;
+    private ExternalCatalogItemDao externalCatalogItemDao;
+    private ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
     private ExternalImageAlbumDao externalImageAlbumDao;
     private GeneratedDescriptionComposer composer;
 
@@ -38,14 +38,14 @@ class GeneratedDescriptionComposerTest {
     void setUp() {
         itemInventoryDao = mock(ItemInventoryDao.class);
         itemInventoryPhotoDao = mock(ItemInventoryPhotoDao.class);
-        externalItemDao = mock(ExternalItemDao.class);
-        externalItemInventoryDao = mock(ExternalItemInventoryDao.class);
+        externalCatalogItemDao = mock(ExternalCatalogItemDao.class);
+        itemInventoryExternalCatalogItemDao = mock(ItemInventoryExternalCatalogItemDao.class);
         externalImageAlbumDao = mock(ExternalImageAlbumDao.class);
         composer = new GeneratedDescriptionComposer(
                 itemInventoryDao,
                 itemInventoryPhotoDao,
-                externalItemDao,
-                externalItemInventoryDao,
+                externalCatalogItemDao,
+                itemInventoryExternalCatalogItemDao,
                 externalImageAlbumDao,
                 properties()
         );
@@ -54,7 +54,7 @@ class GeneratedDescriptionComposerTest {
     @Test
     void composeBuildsDescriptionFromDurableDbState() {
         ItemInventory inventory = inventory();
-        ExternalItem externalItem = externalItem();
+        ExternalCatalogItem externalCatalogItem = externalCatalogItem();
         ExternalImageAlbum album = ExternalImageAlbum.builder()
                 .shortUrl("https://flic.kr/s/a100")
                 .albumUrl("https://www.flickr.com/photos/example/albums/100")
@@ -63,7 +63,7 @@ class GeneratedDescriptionComposerTest {
         GeneratedItemDescription description = composer.compose(
                 new ImageHostingSyncProperties.ResolvedProvider("flickr", "Flickr", "flickr", FLICKR_SERVICE_ID),
                 inventory,
-                externalItem,
+                externalCatalogItem,
                 album,
                 List.of(photo(12, "Back caption"), photo(11, "Front caption"))
         );
@@ -98,19 +98,19 @@ class GeneratedDescriptionComposerTest {
     }
 
     @Test
-    void composeRequestLoadsInventoryExternalItemAlbumAndSortedPhotos() {
+    void composeRequestLoadsInventoryExternalCatalogItemAlbumAndSortedPhotos() {
         ItemInventory inventory = inventory();
-        ExternalItem externalItem = externalItem();
+        ExternalCatalogItem externalCatalogItem = externalCatalogItem();
         ExternalImageAlbum album = ExternalImageAlbum.builder()
                 .albumUrl("https://www.flickr.com/photos/example/albums/100")
                 .build();
 
         when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
-        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of(ExternalItemInventory.builder()
-                .externalItemId(501)
+        when(itemInventoryExternalCatalogItemDao.findByItemInventoryId(100)).thenReturn(Set.of(ItemInventoryExternalCatalogItem.builder()
+                .externalCatalogItemId(501)
                 .itemInventoryId(100)
                 .build()));
-        when(externalItemDao.findByExternalItemId(501)).thenReturn(Optional.of(externalItem));
+        when(externalCatalogItemDao.findByExternalCatalogItemId(501)).thenReturn(Optional.of(externalCatalogItem));
         when(externalImageAlbumDao.findByExternalServiceIdAndItemInventoryId(FLICKR_SERVICE_ID, 100))
                 .thenReturn(Optional.of(album));
         when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(
@@ -202,13 +202,13 @@ class GeneratedDescriptionComposerTest {
         return inventory;
     }
 
-    private static ExternalItem externalItem() {
-        ExternalItem externalItem = new ExternalItem();
-        externalItem.setExternalItemId(501);
-        externalItem.setServiceId(2);
-        externalItem.setExternalNumber("4558-1");
-        externalItem.setName("Metroliner");
-        return externalItem;
+    private static ExternalCatalogItem externalCatalogItem() {
+        ExternalCatalogItem externalCatalogItem = new ExternalCatalogItem();
+        externalCatalogItem.setExternalCatalogItemId(501);
+        externalCatalogItem.setExternalServiceId(2);
+        externalCatalogItem.setExternalItemKey("4558-1");
+        externalCatalogItem.setItemName("Metroliner");
+        return externalCatalogItem;
     }
 
     private static ItemInventoryPhoto photo(Integer itemInventoryPhotoId, String caption) {

@@ -9,10 +9,11 @@ import io.legohunter.imaging.scaling.ImageScalingService;
 import io.legohunter.ingress.s3.api.MinioService;
 import io.legohunter.ingress.source.photo.metrics.PhotoMetricsService;
 import io.legohunter.ingress.source.photo.model.PhotoUploadEvent;
-import io.legohunter.data.dao.ExternalItemDao;
+import io.legohunter.data.dao.ExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryDao;
+import io.legohunter.data.dao.ItemInventoryExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
-import io.legohunter.data.dto.ExternalItem;
+import io.legohunter.data.dto.ExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.PhotoStatus;
@@ -30,7 +31,6 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.Optional;
 
-import static io.legohunter.data.dto.ExternalService.ExternalServiceType.BRICKLINK;
 import static io.legohunter.data.enums.PhotoStatus.PROCESSED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -48,6 +48,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class PhotoProcessingServiceTest {
+    private static final int BRICKLINK_SERVICE_ID = 2;
 
     @Mock
     private MinioService minioService;
@@ -71,7 +72,10 @@ class PhotoProcessingServiceTest {
     private ItemInventoryPhotoDao itemInventoryPhotoDao;
 
     @Mock
-    private ExternalItemDao externalItemDao;
+    private ExternalCatalogItemDao externalCatalogItemDao;
+
+    @Mock
+    private ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
 
     @InjectMocks
     private PhotoProcessingService service;
@@ -84,6 +88,9 @@ class PhotoProcessingServiceTest {
         originalBytes = "original-image".getBytes();
         scaledBytes = "scaled-image".getBytes();
         lenient().when(metadataFingerprintService.calculateHash(any())).thenReturn("metadata-hash");
+        lenient().doAnswer(invocation -> invocation.getArgument(0))
+                .when(itemInventoryDao)
+                .upsert(any(ItemInventory.class));
     }
 
     @Test
@@ -97,7 +104,7 @@ class PhotoProcessingServiceTest {
                 false,
                 "Front view"
         );
-        ExternalItem externalItem = externalItem(123);
+        ExternalCatalogItem externalCatalogItem = externalCatalogItem(123);
 
         when(minioService.getObject("lego-uploads-sandbox", "photos/test.jpg"))
                 .thenReturn(new ByteArrayInputStream(originalBytes));
@@ -111,8 +118,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.empty());
         when(itemInventoryPhotoDao.findByMd5("md5-1"))
                 .thenReturn(Optional.empty());
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
-                .thenReturn(Optional.of(externalItem));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem));
         setGeneratedItemInventoryId(999);
 
         service.process(event);
@@ -206,8 +213,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.empty());
         when(itemInventoryPhotoDao.findByMd5("md5-2"))
                 .thenReturn(Optional.empty());
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3002"))
-                .thenReturn(Optional.of(externalItem(100)));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3002"))
+                .thenReturn(Optional.of(externalCatalogItem(100)));
         setGeneratedItemInventoryId(200);
 
         service.process(file);
@@ -255,8 +262,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.of(existingPhoto));
         when(itemInventoryPhotoDao.findByMd5("new-md5"))
                 .thenReturn(Optional.empty());
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
-                .thenReturn(Optional.of(externalItem(123)));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
         when(itemInventoryPhotoDao.replaceStoredObject(
                 10,
                 "test.jpg",
@@ -348,8 +355,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.of(existingPhoto));
         when(itemInventoryPhotoDao.findByMd5("same-md5"))
                 .thenReturn(Optional.of(existingPhoto));
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
-                .thenReturn(Optional.of(externalItem(123)));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
         when(itemInventoryPhotoDao.updateMetadata(10, "test.jpg", "metadata-hash", false, "Metadata-only caption", PROCESSED))
                 .thenReturn(1);
 
@@ -418,8 +425,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.of(existingPhoto));
         when(itemInventoryPhotoDao.findByMd5("new-md5"))
                 .thenReturn(Optional.empty());
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
-                .thenReturn(Optional.of(externalItem(123)));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
         when(itemInventoryPhotoDao.replaceStoredObject(
                 10,
                 "test.jpg",
@@ -505,8 +512,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.of(existingPhoto));
         when(itemInventoryPhotoDao.findByMd5("7f7580228caebdd153e1d3fea8089833"))
                 .thenReturn(Optional.of(existingPhoto));
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "1682-1"))
-                .thenReturn(Optional.of(externalItem(123)));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "1682-1"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
 
         service.process(event);
 
@@ -570,7 +577,7 @@ class PhotoProcessingServiceTest {
         );
         verify(minioService).deleteObject("bucket", "photos/photo.jpg");
         verify(itemInventoryDao, never()).upsert(any());
-        verify(externalItemDao, never()).findByExternalServiceAndNumber(any(), any());
+        verify(externalCatalogItemDao, never()).findByExternalServiceIdAndExternalItemKey(any(), any());
         verify(minioService, never()).putObject(any(), any(), any(), anyLong(), any());
     }
 
@@ -618,7 +625,7 @@ class PhotoProcessingServiceTest {
     }
 
     @Test
-    void process_shouldMoveSourceToRejectedWhenExternalItemIsNotFound() {
+    void process_shouldMoveSourceToRejectedWhenExternalCatalogItemIsNotFound() {
         PhotoUploadEvent event = new PhotoUploadEvent("bucket", "photos/photo.jpg");
 
         when(minioService.getObject("bucket", "photos/photo.jpg"))
@@ -633,7 +640,7 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.empty());
         when(itemInventoryPhotoDao.findByMd5("md5"))
                 .thenReturn(Optional.empty());
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "9999"))
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "9999"))
                 .thenReturn(Optional.empty());
 
         service.process(event);
@@ -673,8 +680,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.empty());
         when(itemInventoryPhotoDao.findByMd5("md5-1"))
                 .thenReturn(Optional.empty());
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
-                .thenReturn(Optional.of(externalItem(123)));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
         setGeneratedItemInventoryId(999);
 
         service.process(event);
@@ -701,8 +708,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.empty());
         when(itemInventoryPhotoDao.findByMd5("md5-fail"))
                 .thenReturn(Optional.empty());
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
-                .thenReturn(Optional.of(externalItem(123)));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
         doThrow(new RuntimeException("upload failed"))
                 .when(minioService)
                 .putObject(any(), any(), any(), anyLong(), any());
@@ -743,8 +750,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.empty());
         when(itemInventoryPhotoDao.findByMd5("md5-rollback"))
                 .thenReturn(Optional.empty());
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
-                .thenReturn(Optional.of(externalItem(123)));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
         setGeneratedItemInventoryId(500);
         doThrow(new RuntimeException("db insert failed"))
                 .when(itemInventoryPhotoDao)
@@ -786,8 +793,8 @@ class PhotoProcessingServiceTest {
                 .thenReturn(Optional.empty());
         when(itemInventoryPhotoDao.findByMd5("md5"))
                 .thenReturn(Optional.empty());
-        when(externalItemDao.findByExternalServiceAndNumber(BRICKLINK.getExternalServiceId(), "3001"))
-                .thenReturn(Optional.of(externalItem(123)));
+        when(externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(BRICKLINK_SERVICE_ID, "3001"))
+                .thenReturn(Optional.of(externalCatalogItem(123)));
         setGeneratedItemInventoryId(600);
 
         service.process(event);
@@ -799,14 +806,14 @@ class PhotoProcessingServiceTest {
         doAnswer(invocation -> {
             ItemInventory itemInventory = invocation.getArgument(0);
             itemInventory.setItemInventoryId(itemInventoryId);
-            return null;
+            return itemInventory;
         }).when(itemInventoryDao).upsert(any(ItemInventory.class));
     }
 
-    private ExternalItem externalItem(Integer externalItemId) {
-        ExternalItem externalItem = new ExternalItem();
-        externalItem.setExternalItemId(externalItemId);
-        return externalItem;
+    private ExternalCatalogItem externalCatalogItem(Integer externalCatalogItemId) {
+        ExternalCatalogItem externalCatalogItem = new ExternalCatalogItem();
+        externalCatalogItem.setExternalCatalogItemId(externalCatalogItemId);
+        return externalCatalogItem;
     }
 
     private ItemInventory itemInventory(Integer itemInventoryId, String uuid) {
@@ -840,7 +847,7 @@ class PhotoProcessingServiceTest {
 
     private ImageMetadata metadata(
             String uuid,
-            String externalItemNumber,
+            String externalCatalogItemNumber,
             Boolean primary,
             Boolean sealed,
             Boolean builtOnce,
@@ -848,7 +855,7 @@ class PhotoProcessingServiceTest {
     ) {
         return metadata(
                 uuid,
-                externalItemNumber,
+                externalCatalogItemNumber,
                 primary,
                 sealed,
                 builtOnce,
@@ -861,7 +868,7 @@ class PhotoProcessingServiceTest {
 
     private ImageMetadata metadata(
             String uuid,
-            String externalItemNumber,
+            String externalCatalogItemNumber,
             Boolean primary,
             Boolean sealed,
             Boolean builtOnce,
@@ -872,7 +879,7 @@ class PhotoProcessingServiceTest {
     ) {
         return new ImageMetadata(
                 uuid,
-                externalItemNumber,
+                externalCatalogItemNumber,
                 primary,
                 sealed,
                 builtOnce,
