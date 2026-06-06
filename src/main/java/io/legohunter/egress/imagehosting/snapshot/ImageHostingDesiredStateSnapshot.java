@@ -1,6 +1,6 @@
 package io.legohunter.egress.imagehosting.snapshot;
 
-import io.legohunter.data.dto.ExternalItem;
+import io.legohunter.data.dto.ExternalCatalogItem;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
 import io.legohunter.data.dto.ItemInventory;
 import lombok.Builder;
@@ -17,7 +17,7 @@ public class ImageHostingDesiredStateSnapshot {
     private String provider;
     private Integer externalServiceId;
     private ItemInventory inventory;
-    private ExternalItem externalItem;
+    private ExternalCatalogItem externalCatalogItem;
     private DesiredImageHostingAlbum album;
 
     @Singular
@@ -38,8 +38,8 @@ public class ImageHostingDesiredStateSnapshot {
         return Optional.ofNullable(albumMemberships).orElse(Collections.emptyList());
     }
 
-    public Optional<ExternalItem> externalItemOptional() {
-        return Optional.ofNullable(externalItem);
+    public Optional<ExternalCatalogItem> externalCatalogItemOptional() {
+        return Optional.ofNullable(externalCatalogItem);
     }
 
     public Optional<DesiredImageHostingAlbum> albumOptional() {

@@ -3,15 +3,15 @@ package io.legohunter.egress.imagehosting;
 import io.legohunter.data.dao.ExternalImageAlbumDao;
 import io.legohunter.data.dao.ExternalImageAlbumImageDao;
 import io.legohunter.data.dao.ExternalImageDao;
-import io.legohunter.data.dao.ExternalItemDao;
-import io.legohunter.data.dao.ExternalItemInventoryDao;
+import io.legohunter.data.dao.ExternalCatalogItemDao;
+import io.legohunter.data.dao.ItemInventoryExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
-import io.legohunter.data.dto.ExternalItem;
-import io.legohunter.data.dto.ExternalItemInventory;
+import io.legohunter.data.dto.ExternalCatalogItem;
+import io.legohunter.data.dto.ItemInventoryExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.ExternalSyncStatus;
@@ -81,10 +81,10 @@ class DefaultImageHostingSyncServiceTest {
     private ItemInventoryPhotoDao itemInventoryPhotoDao;
 
     @Mock
-    private ExternalItemDao externalItemDao;
+    private ExternalCatalogItemDao externalCatalogItemDao;
 
     @Mock
-    private ExternalItemInventoryDao externalItemInventoryDao;
+    private ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
 
     @Mock
     private ExternalImageDao externalImageDao;
@@ -126,8 +126,8 @@ class DefaultImageHostingSyncServiceTest {
                 minioService,
                 itemInventoryDao,
                 itemInventoryPhotoDao,
-                externalItemDao,
-                externalItemInventoryDao,
+                externalCatalogItemDao,
+                itemInventoryExternalCatalogItemDao,
                 externalImageDao,
                 externalImageAlbumDao,
                 externalImageAlbumImageDao,
@@ -140,8 +140,8 @@ class DefaultImageHostingSyncServiceTest {
                 new GeneratedDescriptionComposer(
                         itemInventoryDao,
                         itemInventoryPhotoDao,
-                        externalItemDao,
-                        externalItemInventoryDao,
+                        externalCatalogItemDao,
+                        itemInventoryExternalCatalogItemDao,
                         externalImageAlbumDao,
                         properties
                 )
@@ -241,18 +241,18 @@ class DefaultImageHostingSyncServiceTest {
     }
 
     @Test
-    void syncItemInventory_usesBricklinkExternalItemForCreatedAlbumTitle() {
+    void syncItemInventory_usesBricklinkExternalCatalogItemForCreatedAlbumTitle() {
         ItemInventory inventory = inventory();
         ItemInventoryPhoto photo = photo(11, true);
         ExternalImageAlbum album = album(null);
 
         when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
         when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
-        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of(ExternalItemInventory.builder()
-                .externalItemId(501)
+        when(itemInventoryExternalCatalogItemDao.findByItemInventoryId(100)).thenReturn(Set.of(ItemInventoryExternalCatalogItem.builder()
+                .externalCatalogItemId(501)
                 .itemInventoryId(100)
                 .build()));
-        when(externalItemDao.findByExternalItemId(501)).thenReturn(Optional.of(externalItem(501, 2, "4558-1", "Metroliner")));
+        when(externalCatalogItemDao.findByExternalCatalogItemId(501)).thenReturn(Optional.of(externalCatalogItem(501, 2, "4558-1", "Metroliner")));
         when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.empty());
@@ -388,11 +388,11 @@ class DefaultImageHostingSyncServiceTest {
 
         when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
         when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
-        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of(ExternalItemInventory.builder()
-                .externalItemId(501)
+        when(itemInventoryExternalCatalogItemDao.findByItemInventoryId(100)).thenReturn(Set.of(ItemInventoryExternalCatalogItem.builder()
+                .externalCatalogItemId(501)
                 .itemInventoryId(100)
                 .build()));
-        when(externalItemDao.findByExternalItemId(501)).thenReturn(Optional.of(externalItem(501, 2, "4558-1", "Metroliner")));
+        when(externalCatalogItemDao.findByExternalCatalogItemId(501)).thenReturn(Optional.of(externalCatalogItem(501, 2, "4558-1", "Metroliner")));
         when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.of(existingImage));
@@ -421,7 +421,7 @@ class DefaultImageHostingSyncServiceTest {
     }
 
     @Test
-    void syncItemInventory_updatesExistingHostedAlbumTitleWhenExternalItemTitleDiffers() {
+    void syncItemInventory_updatesExistingHostedAlbumTitleWhenExternalCatalogItemTitleDiffers() {
         ItemInventory inventory = inventory();
         ItemInventoryPhoto photo = photo(11, true);
         ExternalImage existingImage = ExternalImage.builder()
@@ -439,11 +439,11 @@ class DefaultImageHostingSyncServiceTest {
 
         when(itemInventoryDao.findByItemInventoryId(100)).thenReturn(Optional.of(inventory));
         when(itemInventoryPhotoDao.findByItemInventoryId(100)).thenReturn(Set.of(photo));
-        when(externalItemInventoryDao.findByItemInventoryId(100)).thenReturn(List.of(ExternalItemInventory.builder()
-                .externalItemId(501)
+        when(itemInventoryExternalCatalogItemDao.findByItemInventoryId(100)).thenReturn(Set.of(ItemInventoryExternalCatalogItem.builder()
+                .externalCatalogItemId(501)
                 .itemInventoryId(100)
                 .build()));
-        when(externalItemDao.findByExternalItemId(501)).thenReturn(Optional.of(externalItem(501, 2, "4558-1", "Metroliner")));
+        when(externalCatalogItemDao.findByExternalCatalogItemId(501)).thenReturn(Optional.of(externalCatalogItem(501, 2, "4558-1", "Metroliner")));
         when(externalImageAlbumDao.findOrCreateForItem(any())).thenReturn(album);
         when(externalImageDao.findByExternalServiceIdAndItemInventoryPhotoId(FLICKR_SERVICE_ID, 11))
                 .thenReturn(Optional.of(existingImage));
@@ -817,13 +817,13 @@ class DefaultImageHostingSyncServiceTest {
                 .build();
     }
 
-    private static ExternalItem externalItem(Integer externalItemId, Integer serviceId, String externalNumber, String name) {
-        ExternalItem externalItem = new ExternalItem();
-        externalItem.setExternalItemId(externalItemId);
-        externalItem.setServiceId(serviceId);
-        externalItem.setExternalNumber(externalNumber);
-        externalItem.setName(name);
-        return externalItem;
+    private static ExternalCatalogItem externalCatalogItem(Integer externalCatalogItemId, Integer serviceId, String externalNumber, String name) {
+        ExternalCatalogItem externalCatalogItem = new ExternalCatalogItem();
+        externalCatalogItem.setExternalCatalogItemId(externalCatalogItemId);
+        externalCatalogItem.setExternalServiceId(serviceId);
+        externalCatalogItem.setExternalItemKey(externalNumber);
+        externalCatalogItem.setItemName(name);
+        return externalCatalogItem;
     }
 
     private static <T> PhotoServiceResponse<T> response(T value) {

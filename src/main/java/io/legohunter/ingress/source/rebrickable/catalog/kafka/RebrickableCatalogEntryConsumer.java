@@ -1,10 +1,10 @@
 package io.legohunter.ingress.source.rebrickable.catalog.kafka;
 
+import io.legohunter.data.dao.ExternalCatalogItemDao;
+import io.legohunter.data.dto.ExternalCatalogItem;
 import io.legohunter.ingress.source.rebrickable.catalog.model.RebrickableCatalogEntry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import io.legohunter.data.dao.ExternalItemDao;
-import io.legohunter.data.dto.ExternalItem;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class RebrickableCatalogEntryConsumer {
 
-    private final ExternalItemDao externalItemDao;
+    private final ExternalCatalogItemDao externalCatalogItemDao;
 
     private Integer rebrickableServiceId = 9;
 
@@ -24,18 +24,17 @@ public class RebrickableCatalogEntryConsumer {
             containerFactory = "rebrickableCatalogEntryContainerFactory")
     public void listen(@Payload RebrickableCatalogEntry entry) {
         try {
-            ExternalItem externalItem = new ExternalItem();
-            externalItem.setServiceId(rebrickableServiceId);
-            externalItem.setExternalNumber(entry.getSetNum());
-            externalItem.setUniqueId(0L);
-            externalItem.setName(entry.getName());
-            externalItem.setItemType("S");
-            externalItem.setCategoryId(entry.getThemeId());
-            externalItem.setYearReleased(entry.getYear());
-            externalItem.setUrl(String.format("https://rebrickable.com/sets/%s/", entry.getSetNum()));
+            ExternalCatalogItem externalCatalogItem = ExternalCatalogItem.builder()
+                    .externalServiceId(rebrickableServiceId)
+                    .externalItemKey(entry.getSetNum())
+                    .externalUniqueKey(null)
+                    .itemName(entry.getName())
+                    .itemTypeCode("S")
+                    .yearReleased(entry.getYear())
+                    .itemUrl(String.format("https://rebrickable.com/sets/%s/", entry.getSetNum()))
+                    .build();
 
-            // Upsert into MySQL
-            externalItemDao.upsert(externalItem);
+            externalCatalogItemDao.upsert(externalCatalogItem);
         } catch (Exception e) {
             log.error("Failed to process Rebrickable entry {},  message: {}", entry, e.getMessage(), e);
         }

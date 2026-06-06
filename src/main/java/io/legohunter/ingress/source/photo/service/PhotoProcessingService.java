@@ -14,11 +14,13 @@ import io.legohunter.ingress.source.photo.model.PhotoUploadEvent;
 import io.legohunter.ingress.util.exception.Unchecked;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import io.legohunter.data.dao.ExternalItemDao;
+import io.legohunter.data.dao.ExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryDao;
+import io.legohunter.data.dao.ItemInventoryExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
-import io.legohunter.data.dto.ExternalItem;
+import io.legohunter.data.dto.ExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
+import io.legohunter.data.dto.ItemInventoryExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
@@ -32,7 +34,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 
-import static io.legohunter.data.dto.ExternalService.ExternalServiceType.BRICKLINK;
 import static io.legohunter.data.enums.PhotoStatus.PROCESSED;
 
 @Slf4j
@@ -44,6 +45,7 @@ public class PhotoProcessingService {
     private static final String PHOTO_UPLOAD_PREFIX = "photos/";
     private static final String REJECTED_PHOTO_PREFIX = "photos/rejected/";
     private static final String DUPLICATE_PHOTO_PREFIX = "photos/duplicate/";
+    private static final int BRICKLINK_SERVICE_ID = 2;
 
     private final MinioService minioService;
     private final ImageScalingService imageScalingService;
@@ -53,7 +55,8 @@ public class PhotoProcessingService {
 
     private final ItemInventoryDao itemInventoryDao;
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
-    private final ExternalItemDao externalItemDao;
+    private final ExternalCatalogItemDao externalCatalogItemDao;
+    private final ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
 
     // =========================================================
     // EVENT INGESTION
@@ -390,9 +393,9 @@ public class PhotoProcessingService {
         // FIND EXTERNAL ITEM
         // =========================================================
 
-        ExternalItem externalItem =
-                externalItemDao.findByExternalServiceAndNumber(
-                                BRICKLINK.getExternalServiceId(),
+        ExternalCatalogItem externalCatalogItem =
+                externalCatalogItemDao.findByExternalServiceIdAndExternalItemKey(
+                                BRICKLINK_SERVICE_ID,
                                 bricklinkItemNumber
                         )
                         .orElseThrow(() ->
@@ -425,7 +428,6 @@ public class PhotoProcessingService {
         ItemInventory itemInventory =
                 buildItemInventory(
                         uuid,
-                        externalItem.getExternalItemId(),
                         description,
                         metadata,
                         existingItemInventory
@@ -533,7 +535,12 @@ public class PhotoProcessingService {
 
         try {
 
-            itemInventoryDao.upsert(itemInventory);
+            itemInventory = itemInventoryDao.upsert(itemInventory);
+            itemInventoryExternalCatalogItemDao.upsert(ItemInventoryExternalCatalogItem.builder()
+                    .itemInventoryId(itemInventory.getItemInventoryId())
+                    .externalCatalogItemId(externalCatalogItem.getExternalCatalogItemId())
+                    .primary(true)
+                    .build());
 
             log.info(
                     "photo.db.inventory.upsert uuid={} id={}",
@@ -701,7 +708,6 @@ public class PhotoProcessingService {
 
     private ItemInventory buildItemInventory(
             String uuid,
-            Integer externalItemId,
             String description,
             ImageMetadata metadata,
             Optional<ItemInventory> existingItemInventory

@@ -1,13 +1,13 @@
 package io.legohunter.egress.imagehosting.description;
 
 import io.legohunter.data.dao.ExternalImageAlbumDao;
-import io.legohunter.data.dao.ExternalItemDao;
-import io.legohunter.data.dao.ExternalItemInventoryDao;
+import io.legohunter.data.dao.ExternalCatalogItemDao;
+import io.legohunter.data.dao.ItemInventoryExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ExternalImageAlbum;
-import io.legohunter.data.dto.ExternalItem;
-import io.legohunter.data.dto.ExternalItemInventory;
+import io.legohunter.data.dto.ExternalCatalogItem;
+import io.legohunter.data.dto.ItemInventoryExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
@@ -21,15 +21,15 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-import static io.legohunter.data.dto.ExternalService.ExternalServiceType.BRICKLINK;
-
 @Service
 @RequiredArgsConstructor
 public class GeneratedDescriptionComposer {
+    private static final int BRICKLINK_SERVICE_ID = 2;
+
     private final ItemInventoryDao itemInventoryDao;
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
-    private final ExternalItemDao externalItemDao;
-    private final ExternalItemInventoryDao externalItemInventoryDao;
+    private final ExternalCatalogItemDao externalCatalogItemDao;
+    private final ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
     private final ExternalImageAlbumDao externalImageAlbumDao;
     private final ImageHostingSyncProperties properties;
 
@@ -46,7 +46,7 @@ public class GeneratedDescriptionComposer {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "No item inventory found for id [%s]".formatted(request.getItemInventoryId())
                 ));
-        ExternalItem externalItem = bricklinkExternalItem(inventory).orElse(null);
+        ExternalCatalogItem externalCatalogItem = bricklinkExternalCatalogItem(inventory).orElse(null);
         ExternalImageAlbum album = externalImageAlbumDao.findByExternalServiceIdAndItemInventoryId(
                 provider.externalServiceId(),
                 inventory.getItemInventoryId()
@@ -55,13 +55,13 @@ public class GeneratedDescriptionComposer {
                 inventory.getItemInventoryId()
         ));
 
-        return compose(provider, inventory, externalItem, album, photos);
+        return compose(provider, inventory, externalCatalogItem, album, photos);
     }
 
     public GeneratedItemDescription compose(
             ImageHostingSyncProperties.ResolvedProvider provider,
             ItemInventory inventory,
-            ExternalItem externalItem,
+            ExternalCatalogItem externalCatalogItem,
             ExternalImageAlbum album,
             List<ItemInventoryPhoto> photos
     ) {
@@ -72,7 +72,7 @@ public class GeneratedDescriptionComposer {
             throw new IllegalArgumentException("inventory is required");
         }
 
-        String title = title(inventory, externalItem);
+        String title = title(inventory, externalCatalogItem);
         List<String> facts = facts(inventory);
         List<String> captions = captions(photos);
         String photoUrl = photoUrl(album);
@@ -90,20 +90,20 @@ public class GeneratedDescriptionComposer {
         return builder.build();
     }
 
-    private Optional<ExternalItem> bricklinkExternalItem(ItemInventory inventory) {
-        return externalItemInventoryDao.findByItemInventoryId(inventory.getItemInventoryId()).stream()
-                .map(ExternalItemInventory::getExternalItemId)
-                .map(externalItemDao::findByExternalItemId)
+    private Optional<ExternalCatalogItem> bricklinkExternalCatalogItem(ItemInventory inventory) {
+        return itemInventoryExternalCatalogItemDao.findByItemInventoryId(inventory.getItemInventoryId()).stream()
+                .map(ItemInventoryExternalCatalogItem::getExternalCatalogItemId)
+                .map(externalCatalogItemDao::findByExternalCatalogItemId)
                 .flatMap(Optional::stream)
-                .filter(item -> BRICKLINK.getExternalServiceId().equals(item.getServiceId()))
-                .filter(item -> hasText(item.getExternalNumber()))
-                .filter(item -> hasText(item.getName()))
+                .filter(item -> BRICKLINK_SERVICE_ID == item.getExternalServiceId())
+                .filter(item -> hasText(item.getExternalItemKey()))
+                .filter(item -> hasText(item.getItemName()))
                 .findFirst();
     }
 
-    private String title(ItemInventory inventory, ExternalItem externalItem) {
-        if (externalItem != null) {
-            return "%s - %s".formatted(externalItem.getExternalNumber(), externalItem.getName());
+    private String title(ItemInventory inventory, ExternalCatalogItem externalCatalogItem) {
+        if (externalCatalogItem != null) {
+            return "%s - %s".formatted(externalCatalogItem.getExternalItemKey(), externalCatalogItem.getItemName());
         }
 
         if (hasText(inventory.getDescription())) {

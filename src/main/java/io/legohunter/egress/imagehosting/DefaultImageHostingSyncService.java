@@ -3,15 +3,15 @@ package io.legohunter.egress.imagehosting;
 import io.legohunter.data.dao.ExternalImageAlbumDao;
 import io.legohunter.data.dao.ExternalImageAlbumImageDao;
 import io.legohunter.data.dao.ExternalImageDao;
-import io.legohunter.data.dao.ExternalItemDao;
-import io.legohunter.data.dao.ExternalItemInventoryDao;
+import io.legohunter.data.dao.ExternalCatalogItemDao;
+import io.legohunter.data.dao.ItemInventoryExternalCatalogItemDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ExternalImage;
 import io.legohunter.data.dto.ExternalImageAlbum;
 import io.legohunter.data.dto.ExternalImageAlbumImage;
-import io.legohunter.data.dto.ExternalItem;
-import io.legohunter.data.dto.ExternalItemInventory;
+import io.legohunter.data.dto.ExternalCatalogItem;
+import io.legohunter.data.dto.ItemInventoryExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.ExternalSyncStatus;
@@ -53,7 +53,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static io.legohunter.data.dto.ExternalService.ExternalServiceType.BRICKLINK;
 import static io.legohunter.data.enums.ExternalSyncStatus.FAILED;
 import static io.legohunter.data.enums.ExternalSyncStatus.PENDING;
 import static io.legohunter.data.enums.ExternalSyncStatus.SYNCED;
@@ -63,13 +62,14 @@ import static io.legohunter.data.enums.ExternalSyncStatus.SYNCED;
 @RequiredArgsConstructor
 public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     private static final String TEMP_FILE_SUFFIX = ".jpg";
+    private static final int BRICKLINK_SERVICE_ID = 2;
 
     private final Optional<ImageHostingService> imageHostingService;
     private final MinioService minioService;
     private final ItemInventoryDao itemInventoryDao;
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
-    private final ExternalItemDao externalItemDao;
-    private final ExternalItemInventoryDao externalItemInventoryDao;
+    private final ExternalCatalogItemDao externalCatalogItemDao;
+    private final ItemInventoryExternalCatalogItemDao itemInventoryExternalCatalogItemDao;
     private final ExternalImageDao externalImageDao;
     private final ExternalImageAlbumDao externalImageAlbumDao;
     private final ExternalImageAlbumImageDao externalImageAlbumImageDao;
@@ -898,10 +898,10 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
     }
 
     private String albumTitle(ItemInventory inventory) {
-        Optional<ExternalItem> externalItem = bricklinkExternalItem(inventory);
-        if (externalItem.isPresent()) {
-            ExternalItem item = externalItem.get();
-            return "%s - %s".formatted(item.getExternalNumber(), item.getName());
+        Optional<ExternalCatalogItem> externalCatalogItem = bricklinkExternalCatalogItem(inventory);
+        if (externalCatalogItem.isPresent()) {
+            ExternalCatalogItem item = externalCatalogItem.get();
+            return "%s - %s".formatted(item.getExternalItemKey(), item.getItemName());
         }
         if (!isBlank(inventory.getDescription())) {
             return inventory.getDescription();
@@ -918,20 +918,20 @@ public class DefaultImageHostingSyncService implements ImageHostingSyncService {
         return descriptionComposer.compose(
                 provider,
                 inventory,
-                bricklinkExternalItem(inventory).orElse(null),
+                bricklinkExternalCatalogItem(inventory).orElse(null),
                 album,
                 photos
         ).getDescription();
     }
 
-    private Optional<ExternalItem> bricklinkExternalItem(ItemInventory inventory) {
-        return externalItemInventoryDao.findByItemInventoryId(inventory.getItemInventoryId()).stream()
-                .map(ExternalItemInventory::getExternalItemId)
-                .map(externalItemDao::findByExternalItemId)
+    private Optional<ExternalCatalogItem> bricklinkExternalCatalogItem(ItemInventory inventory) {
+        return itemInventoryExternalCatalogItemDao.findByItemInventoryId(inventory.getItemInventoryId()).stream()
+                .map(ItemInventoryExternalCatalogItem::getExternalCatalogItemId)
+                .map(externalCatalogItemDao::findByExternalCatalogItemId)
                 .flatMap(Optional::stream)
-                .filter(item -> BRICKLINK.getExternalServiceId().equals(item.getServiceId()))
-                .filter(item -> !isBlank(item.getExternalNumber()))
-                .filter(item -> !isBlank(item.getName()))
+                .filter(item -> BRICKLINK_SERVICE_ID == item.getExternalServiceId())
+                .filter(item -> !isBlank(item.getExternalItemKey()))
+                .filter(item -> !isBlank(item.getItemName()))
                 .findFirst();
     }
 
