@@ -1,7 +1,10 @@
 package io.legohunter.ingress.source.bricklink.catalog.kafka;
 
+import io.legohunter.data.dao.ExternalCatalogItemCategoryDao;
 import io.legohunter.data.dao.ExternalCatalogItemDao;
+import io.legohunter.data.dao.ExternalCategoryDao;
 import io.legohunter.data.dto.ExternalCatalogItem;
+import io.legohunter.data.dto.ExternalCatalogItemCategory;
 import io.legohunter.ingress.source.bricklink.catalog.model.CatalogEntry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +18,8 @@ import org.springframework.stereotype.Component;
 public class BricklinkCatalogEntryConsumer {
 
     private final ExternalCatalogItemDao externalCatalogItemDao;
+    private final ExternalCategoryDao externalCategoryDao;
+    private final ExternalCatalogItemCategoryDao externalCatalogItemCategoryDao;
 
     private Integer bricklinkServiceId = 2;
 
@@ -34,7 +39,17 @@ public class BricklinkCatalogEntryConsumer {
                     .itemUrl(buildBricklinkItemUrl(entry.getItemId()))
                     .build();
 
-            externalCatalogItemDao.upsert(externalCatalogItem);
+            externalCatalogItem = externalCatalogItemDao.upsert(externalCatalogItem);
+            final Integer externalCatalogItemId = externalCatalogItem.getExternalCatalogItemId();
+
+            externalCategoryDao.findByExternalServiceIdAndExternalCategoryKey(2, Integer.toString(entry.getCategory())).ifPresent(externalCategory -> {
+                ExternalCatalogItemCategory externalCatalogItemCategory = ExternalCatalogItemCategory.builder()
+                        .externalCatalogItemId(externalCatalogItemId)
+                        .externalCategoryId(externalCategory.getExternalCategoryId())
+                        .primary(true)
+                        .build();
+                externalCatalogItemCategoryDao.upsert(externalCatalogItemCategory);
+            });
         } catch (Exception e) {
             log.error("Failed to process Bricklink entry {},  message: {}", entry, e.getMessage(), e);
         }
