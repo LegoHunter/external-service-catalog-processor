@@ -6,6 +6,20 @@ public record BricklinkOrderProbeResult(
         int ordersFetched,
         int ordersFailed,
         int orderItemsFetched,
-        long elapsedMillis
+        long elapsedMillis,
+        boolean applied,
+        int ordersWritten,
+        int orderItemsWritten,
+        int payloadsWritten
 ) {
+    public BricklinkOrderProbeResult(
+            String outcome,
+            int ordersDiscovered,
+            int ordersFetched,
+            int ordersFailed,
+            int orderItemsFetched,
+            long elapsedMillis
+    ) {
+        this(outcome, ordersDiscovered, ordersFetched, ordersFailed, orderItemsFetched, elapsedMillis, false, 0, 0, 0);
+    }
 }

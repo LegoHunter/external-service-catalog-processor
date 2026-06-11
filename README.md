@@ -2,6 +2,10 @@
 
 ## API Documentation
 
+Operational runbook coverage for controllers, scheduled jobs, event-driven
+ingestion flows, configuration switches, metrics, logs, and rollout procedures
+is maintained in [runbook.md](runbook.md).
+
 Detailed internal image-hosting API documentation for the Flickr Integration
 Phase 3 endpoints is maintained in
 [docs/image-hosting-api.md](docs/image-hosting-api.md).
