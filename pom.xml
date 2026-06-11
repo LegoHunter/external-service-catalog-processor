@@ -18,6 +18,7 @@
         <java.version>21</java.version>
         <spring-cloud.version>2025.0.1</spring-cloud.version>
         <springdoc-openapi.version>2.8.17</springdoc-openapi.version>
+        <bricklink-rest.version>2.0.0-SNAPSHOT</bricklink-rest.version>
         <github.organization>LegoHunter</github.organization>
         <github.repo.url>https://github.com/${github.organization}/lego-data-ingress.git</github.repo.url>
     </properties>
@@ -59,14 +60,6 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-            <!--            &lt;!&ndash; Import OTel BOM BEFORE spring-boot-dependencies &ndash;&gt;-->
-            <!--            <dependency>-->
-            <!--                <groupId>io.opentelemetry.instrumentation</groupId>-->
-            <!--                <artifactId>opentelemetry-instrumentation-bom</artifactId>-->
-            <!--                <version>2.11.0</version>-->
-            <!--                <type>pom</type>-->
-            <!--                <scope>import</scope>-->
-            <!--            </dependency>-->
         </dependencies>
     </dependencyManagement>
 
@@ -108,6 +101,12 @@
             <groupId>io.legohunter</groupId>
             <artifactId>lego-imaging</artifactId>
             <version>1.4.0-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.bricklink.api</groupId>
+            <artifactId>bricklink-rest</artifactId>
+            <version>${bricklink-rest.version}</version>
         </dependency>
 
         <dependency>

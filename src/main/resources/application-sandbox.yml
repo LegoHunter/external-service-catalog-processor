@@ -6,6 +6,7 @@ spring:
       - file:${import-path}/minio-configuration.yml
       - file:${import-path}/flickr-configuration.yml
       - file:${import-path}/bitly-configuration.yml
+      - file:${import-path}/bricklink-client-api-keys.yml
   datasource:
     database-key-name: rasppi5-01-lego-sandbox
     hikari:

@@ -24,13 +24,6 @@ management:
     sampling:
       probability: 1.0
 
-#  otlp:
-#    tracing:
-#      endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/traces
-#    metrics:
-#      export:
-#        url: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318/v1/metrics
-
 kafka:
   properties:
     security.protocol: SASL_PLAINTEXT
@@ -38,6 +31,15 @@ kafka:
 lego:
   minio:
     url: http://minio.minio-dev.svc.cluster.local
+  bricklink:
+    orders:
+      sync:
+        scheduled:
+          enabled: true
+          apply: false
+          batch-size: 25
+          concurrency: 1
+
   image-hosting:
     sync:
       scheduled:

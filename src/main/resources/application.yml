@@ -4,7 +4,27 @@ spring:
   application:
     name: Lego Data Ingress Service
 
+
 lego:
+  bricklink:
+    orders:
+      sync:
+        metrics-tag: bricklink
+        direction: in
+        statuses:
+          - PENDING
+          - UPDATED
+          - READY
+          - PROCESSING
+          - PAID
+          - PACKED
+        include-unfiled-cancelled: true
+        scheduled:
+          enabled: true
+          fixed-delay-ms: 60000
+          initial-delay-ms: 5000
+          lock-at-most-for: 10m
+          lock-at-least-for: 0s
   image-hosting:
     default-provider: flickr
     providers:
@@ -51,3 +71,12 @@ kafka:
   properties:
     security.protocol: SASL_SSL
     sasl.mechanism: SCRAM-SHA-512
+
+bricklink:
+  rest:
+    uri: https://api.bricklink.com/api/store/v1
+    http-logging:
+      enabled: true
+      include-headers: true
+      include-body: true
+      max-body-length: -1

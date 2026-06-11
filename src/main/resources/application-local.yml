@@ -15,6 +15,7 @@ management:
 logging:
   level:
     root: INFO
+    com.bricklink.api: DEBUG
 
 lego:
   minio:
