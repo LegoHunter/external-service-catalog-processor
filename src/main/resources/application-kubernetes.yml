@@ -36,9 +36,9 @@ lego:
       sync:
         scheduled:
           enabled: true
-          apply: false
-          batch-size: 25
-          concurrency: 1
+          apply: true
+          fixed-delay-ms: 43200000
+          initial-delay-ms: 30000
 
   image-hosting:
     sync:

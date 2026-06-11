@@ -6,6 +6,15 @@ import com.bricklink.api.rest.model.v1.Cost;
 import com.bricklink.api.rest.model.v1.Item;
 import com.bricklink.api.rest.model.v1.Order;
 import com.bricklink.api.rest.model.v1.OrderItem;
+import com.bricklink.api.rest.model.v1.Payment;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.legohunter.data.dao.MarketplaceOrderDao;
+import io.legohunter.data.dao.MarketplaceOrderItemDao;
+import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
+import io.legohunter.data.dao.MarketplaceOrderSyncRunDao;
+import io.legohunter.data.dto.MarketplaceOrder;
+import io.legohunter.data.dto.MarketplaceOrderPayload;
+import io.legohunter.data.dto.MarketplaceOrderSyncRun;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,17 +27,29 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class BricklinkOpenOrderProbeServiceTest {
     @Mock
     private BricklinkRestClient bricklinkRestClient;
+    @Mock
+    private MarketplaceOrderSyncRunDao marketplaceOrderSyncRunDao;
+    @Mock
+    private MarketplaceOrderDao marketplaceOrderDao;
+    @Mock
+    private MarketplaceOrderItemDao marketplaceOrderItemDao;
+    @Mock
+    private MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
 
     private BricklinkOrderSyncProperties properties;
     private SimpleMeterRegistry meterRegistry;
@@ -41,7 +62,12 @@ class BricklinkOpenOrderProbeServiceTest {
         probeService = new BricklinkOpenOrderProbeService(
                 bricklinkRestClient,
                 properties,
-                new BricklinkOrderSyncMetricsService(meterRegistry)
+                new BricklinkOrderSyncMetricsService(meterRegistry),
+                marketplaceOrderSyncRunDao,
+                marketplaceOrderDao,
+                marketplaceOrderItemDao,
+                marketplaceOrderPayloadDao,
+                new ObjectMapper().findAndRegisterModules()
         );
     }
 
@@ -57,6 +83,9 @@ class BricklinkOpenOrderProbeServiceTest {
         assertThat(result.ordersFetched()).isZero();
         assertThat(result.ordersFailed()).isZero();
         assertThat(result.orderItemsFetched()).isZero();
+        assertThat(result.applied()).isFalse();
+        assertThat(result.ordersWritten()).isZero();
+        verifyNoInteractions(marketplaceOrderSyncRunDao, marketplaceOrderDao, marketplaceOrderItemDao, marketplaceOrderPayloadDao);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> paramsCaptor = ArgumentCaptor.forClass(Map.class);
@@ -118,6 +147,8 @@ class BricklinkOpenOrderProbeServiceTest {
         assertThat(result.ordersFetched()).isEqualTo(1);
         assertThat(result.ordersFailed()).isZero();
         assertThat(result.orderItemsFetched()).isEqualTo(3);
+        assertThat(result.applied()).isFalse();
+        verifyNoInteractions(marketplaceOrderSyncRunDao, marketplaceOrderDao, marketplaceOrderItemDao, marketplaceOrderPayloadDao);
         assertThat(meterRegistry.counter(
                 "bricklink_order_sync_order",
                 "provider", "bricklink",
@@ -128,6 +159,88 @@ class BricklinkOpenOrderProbeServiceTest {
                 "provider", "bricklink",
                 "result", "fetched"
         ).count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void runOncePersistsOrdersItemsPayloadsAndSyncRunWhenApplyIsEnabled() {
+        properties.getScheduled().setApply(true);
+        properties.setStatuses(List.of("PENDING"));
+        properties.setIncludeUnfiledCancelled(false);
+        Order summary = order("100", "PENDING");
+        Order detail = order("100", "PAID");
+        detail.setBuyer_name("buyer-one");
+        detail.setBuyer_email("buyer@example.com");
+        detail.setTotal_count(2);
+        detail.setUnique_count(2);
+        detail.setTotal_weight(12.5);
+        detail.setCost(cost("USD", 30.0, 38.0, 8.0));
+        detail.setPayment(payment("Received"));
+        io.legohunter.data.dto.MarketplaceOrderItem existingItem = marketplaceOrderItem(10, 20, "100:inventory:3001");
+        io.legohunter.data.dto.MarketplaceOrderItem staleItem = marketplaceOrderItem(11, 20, "100:inventory:stale");
+
+        when(marketplaceOrderSyncRunDao.insert(any(MarketplaceOrderSyncRun.class)))
+                .thenAnswer(invocation -> {
+                    MarketplaceOrderSyncRun syncRun = invocation.getArgument(0);
+                    syncRun.setMarketplaceOrderSyncRunId(10);
+                    return syncRun;
+                });
+        when(bricklinkRestClient.getOrders(anyMap(), any()))
+                .thenReturn(resource(List.of(summary)));
+        when(bricklinkRestClient.getOrder("100"))
+                .thenReturn(resource(detail));
+        when(bricklinkRestClient.getOrderItems("100"))
+                .thenReturn(resource(List.of(List.of(orderItem("3001"), orderItem("3002")))));
+        when(marketplaceOrderDao.findByMarketplaceCodeAndExternalOrderId("BRICKLINK", "100"))
+                .thenReturn(Optional.of(MarketplaceOrder.builder()
+                        .marketplaceOrderId(20)
+                        .marketplaceCode("BRICKLINK")
+                        .externalOrderId("100")
+                        .build()));
+        when(marketplaceOrderItemDao.findByMarketplaceOrderId(20))
+                .thenReturn(Set.of(existingItem, staleItem));
+
+        BricklinkOrderProbeResult result = probeService.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.applied()).isTrue();
+        assertThat(result.ordersWritten()).isEqualTo(1);
+        assertThat(result.orderItemsWritten()).isEqualTo(2);
+        assertThat(result.payloadsWritten()).isEqualTo(2);
+
+        ArgumentCaptor<MarketplaceOrder> orderCaptor = ArgumentCaptor.forClass(MarketplaceOrder.class);
+        verify(marketplaceOrderDao).upsert(orderCaptor.capture());
+        assertThat(orderCaptor.getValue())
+                .extracting(
+                        MarketplaceOrder::getMarketplaceCode,
+                        MarketplaceOrder::getExternalOrderId,
+                        MarketplaceOrder::getExternalStatusCode,
+                        MarketplaceOrder::getBuyerDisplayName,
+                        MarketplaceOrder::getBuyerEmail,
+                        MarketplaceOrder::getPaymentStatusCode,
+                        MarketplaceOrder::getCurrencyCode
+                )
+                .containsExactly("BRICKLINK", "100", "PAID", "buyer-one", "buyer@example.com", "Received", "USD");
+        assertThat(orderCaptor.getValue().getPayloadHash()).hasSize(64);
+
+        ArgumentCaptor<io.legohunter.data.dto.MarketplaceOrderItem> itemCaptor =
+                ArgumentCaptor.forClass(io.legohunter.data.dto.MarketplaceOrderItem.class);
+        verify(marketplaceOrderItemDao).update(itemCaptor.capture());
+        assertThat(itemCaptor.getValue().getMarketplaceOrderItemId()).isEqualTo(10);
+        assertThat(itemCaptor.getValue().getExternalInventoryId()).isEqualTo("3001");
+        verify(marketplaceOrderItemDao).insert(any(io.legohunter.data.dto.MarketplaceOrderItem.class));
+        verify(marketplaceOrderItemDao).delete(11);
+
+        ArgumentCaptor<MarketplaceOrderPayload> payloadCaptor = ArgumentCaptor.forClass(MarketplaceOrderPayload.class);
+        verify(marketplaceOrderPayloadDao, org.mockito.Mockito.times(2)).insert(payloadCaptor.capture());
+        assertThat(payloadCaptor.getAllValues())
+                .extracting(MarketplaceOrderPayload::getPayloadTypeCode)
+                .containsExactly("ORDER_RESPONSE", "ORDER_ITEMS_RESPONSE");
+
+        ArgumentCaptor<MarketplaceOrderSyncRun> syncRunCaptor = ArgumentCaptor.forClass(MarketplaceOrderSyncRun.class);
+        verify(marketplaceOrderSyncRunDao, org.mockito.Mockito.atLeastOnce()).update(syncRunCaptor.capture());
+        assertThat(syncRunCaptor.getAllValues().getLast().getSyncStatusCode()).isEqualTo("SUCCESS");
+        assertThat(syncRunCaptor.getAllValues().getLast().getOrdersFetched()).isEqualTo(1);
+        assertThat(syncRunCaptor.getAllValues().getLast().getOrdersFailed()).isZero();
     }
 
     @Test
@@ -152,6 +265,7 @@ class BricklinkOpenOrderProbeServiceTest {
         assertThat(result.ordersDiscovered()).isEqualTo(2);
         assertThat(result.ordersFetched()).isEqualTo(1);
         assertThat(result.ordersFailed()).isEqualTo(1);
+        verifyNoInteractions(marketplaceOrderSyncRunDao, marketplaceOrderDao, marketplaceOrderItemDao, marketplaceOrderPayloadDao);
         assertThat(meterRegistry.counter(
                 "bricklink_order_sync",
                 "provider", "bricklink",
@@ -195,7 +309,25 @@ class BricklinkOpenOrderProbeServiceTest {
         orderItem.setInventory_id(Long.valueOf(inventoryId));
         orderItem.setItem(item);
         orderItem.setQuantity(1);
+        orderItem.setNew_or_used("N");
+        orderItem.setCompleteness("C");
+        orderItem.setUnit_price(5.99);
+        orderItem.setUnit_price_final(5.49);
+        orderItem.setCurrency_code("USD");
         return orderItem;
+    }
+
+    private static io.legohunter.data.dto.MarketplaceOrderItem marketplaceOrderItem(
+            Integer marketplaceOrderItemId,
+            Integer marketplaceOrderId,
+            String externalOrderItemId
+    ) {
+        return io.legohunter.data.dto.MarketplaceOrderItem.builder()
+                .marketplaceOrderItemId(marketplaceOrderItemId)
+                .marketplaceOrderId(marketplaceOrderId)
+                .externalOrderItemId(externalOrderItemId)
+                .externalInventoryId(externalOrderItemId.substring(externalOrderItemId.lastIndexOf(':') + 1))
+                .build();
     }
 
     private static Cost cost(String currencyCode, double subtotal, double grandTotal, double shipping) {
@@ -205,6 +337,15 @@ class BricklinkOpenOrderProbeServiceTest {
         cost.setGrand_total(grandTotal);
         cost.setShipping(shipping);
         return cost;
+    }
+
+    private static Payment payment(String status) {
+        Payment payment = new Payment();
+        payment.setMethod("PayPal");
+        payment.setCurrency_code("USD");
+        payment.setDate_paid(LocalDateTime.parse("2026-06-08T12:00:00"));
+        payment.setStatus(status);
+        return payment;
     }
 
     private static <T> BricklinkResource<T> resource(T data) {

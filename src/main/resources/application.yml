@@ -9,6 +9,7 @@ lego:
   bricklink:
     orders:
       sync:
+        marketplace-code: BRICKLINK
         metrics-tag: bricklink
         direction: in
         statuses:
@@ -21,6 +22,7 @@ lego:
         include-unfiled-cancelled: true
         scheduled:
           enabled: true
+          apply: false
           fixed-delay-ms: 60000
           initial-delay-ms: 5000
           lock-at-most-for: 10m

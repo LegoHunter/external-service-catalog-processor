@@ -13,6 +13,7 @@ import java.util.List;
 @Configuration
 @ConfigurationProperties(prefix = "lego.bricklink.orders.sync")
 public class BricklinkOrderSyncProperties {
+    private String marketplaceCode = "BRICKLINK";
     private String metricsTag = "bricklink";
     private String direction = "in";
     private List<String> statuses = new ArrayList<>(List.of(
@@ -48,9 +49,17 @@ public class BricklinkOrderSyncProperties {
         return metricsTag.trim();
     }
 
+    public String effectiveMarketplaceCode() {
+        if (marketplaceCode == null || marketplaceCode.isBlank()) {
+            return "BRICKLINK";
+        }
+        return marketplaceCode.trim().toUpperCase();
+    }
+
     @Getter
     @Setter
     public static class Scheduled {
+        private boolean apply = false;
         private boolean enabled = false;
         private long fixedDelayMs = 300_000L;
         private long initialDelayMs = 30_000L;
