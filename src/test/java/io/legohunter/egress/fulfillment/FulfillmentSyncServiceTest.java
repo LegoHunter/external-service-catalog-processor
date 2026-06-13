@@ -11,6 +11,7 @@ import io.legohunter.data.dao.MarketplaceOrderDao;
 import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -45,6 +46,9 @@ class FulfillmentSyncServiceTest {
                 marketplaceOrderPayloadDao,
                 new BricklinkShipStationOrderMapper(),
                 orderItemImageResolver,
+                new FulfillmentSyncMetricsService(new SimpleMeterRegistry()),
+                Optional.empty(),
+                Optional.empty(),
                 properties,
                 objectMapper
         );
@@ -89,6 +93,10 @@ class FulfillmentSyncServiceTest {
         assertThat(result.payloadsMissing()).isZero();
         assertThat(result.ordersMapped()).isEqualTo(1);
         assertThat(result.ordersFailed()).isZero();
+        assertThat(result.ordersSkipped()).isEqualTo(1);
+        assertThat(result.ordersCreated()).isZero();
+        assertThat(result.ordersUpdated()).isZero();
+        assertThat(result.ordersShippedReconciled()).isZero();
         assertThat(result.mappedOrderNumbers()).containsExactly("BL-100");
         assertThat(result.applied()).isFalse();
         verify(orderItemImageResolver).resolveImageUrls(marketplaceOrder);
