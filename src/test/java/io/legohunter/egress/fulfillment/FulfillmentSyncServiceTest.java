@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,6 +28,7 @@ import static org.mockito.Mockito.when;
 class FulfillmentSyncServiceTest {
     private MarketplaceOrderDao marketplaceOrderDao;
     private MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
+    private FulfillmentOrderItemImageResolver orderItemImageResolver;
     private FulfillmentSyncProperties properties;
     private ObjectMapper objectMapper;
     private FulfillmentSyncService service;
@@ -35,12 +37,14 @@ class FulfillmentSyncServiceTest {
     void setUp() {
         marketplaceOrderDao = mock(MarketplaceOrderDao.class);
         marketplaceOrderPayloadDao = mock(MarketplaceOrderPayloadDao.class);
+        orderItemImageResolver = mock(FulfillmentOrderItemImageResolver.class);
         properties = new FulfillmentSyncProperties();
         objectMapper = new ObjectMapper().findAndRegisterModules();
         service = new FulfillmentSyncService(
                 marketplaceOrderDao,
                 marketplaceOrderPayloadDao,
                 new BricklinkShipStationOrderMapper(),
+                orderItemImageResolver,
                 properties,
                 objectMapper
         );
@@ -74,6 +78,8 @@ class FulfillmentSyncServiceTest {
                 20,
                 FulfillmentSyncService.ORDER_ITEMS_RESPONSE_PAYLOAD
         )).thenReturn(Optional.of(payload(502, 20, FulfillmentSyncService.ORDER_ITEMS_RESPONSE_PAYLOAD, objectMapper.writeValueAsString(orderItems))));
+        when(orderItemImageResolver.resolveImageUrls(marketplaceOrder))
+                .thenReturn(Map.of("100:inventory:3001", "https://photos.example/primary.jpg"));
 
         FulfillmentSyncResult result = service.runOnce();
 
@@ -85,6 +91,7 @@ class FulfillmentSyncServiceTest {
         assertThat(result.ordersFailed()).isZero();
         assertThat(result.mappedOrderNumbers()).containsExactly("BL-100");
         assertThat(result.applied()).isFalse();
+        verify(orderItemImageResolver).resolveImageUrls(marketplaceOrder);
     }
 
     @Test

@@ -21,7 +21,9 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.stream.IntStream;
 
 @Component
 public class BricklinkShipStationOrderMapper {
@@ -30,6 +32,15 @@ public class BricklinkShipStationOrderMapper {
             Order order,
             List<OrderItem> orderItems,
             FulfillmentSyncProperties.Shipstation properties
+    ) {
+        return map(order, orderItems, properties, Map.of());
+    }
+
+    public ShipStationOrder map(
+            Order order,
+            List<OrderItem> orderItems,
+            FulfillmentSyncProperties.Shipstation properties,
+            Map<String, String> imageUrlsByExternalOrderItemId
     ) {
         if (order == null || order.getOrder_id() == null || order.getOrder_id().isBlank()) {
             throw new IllegalArgumentException("BrickLink order id is required");
@@ -40,9 +51,11 @@ public class BricklinkShipStationOrderMapper {
         Payment payment = order.getPayment();
         Shipping shipping = order.getShipping();
         Double shippingAmount = shippingAmount(cost);
-        List<com.shipstation.api.rest.model.OrderItem> shipStationItems = orderItems.stream()
+        List<OrderItem> safeOrderItems = orderItems == null ? List.of() : orderItems;
+        Map<String, String> safeImageUrls = imageUrlsByExternalOrderItemId == null ? Map.of() : imageUrlsByExternalOrderItemId;
+        List<com.shipstation.api.rest.model.OrderItem> shipStationItems = IntStream.range(0, safeOrderItems.size())
+                .mapToObj(index -> mapItem(order.getOrder_id(), safeOrderItems.get(index), index, safeImageUrls))
                 .filter(Objects::nonNull)
-                .map(this::mapItem)
                 .toList();
 
         ShipStationOrder shipStationOrder = ShipStationOrder.builder()
@@ -79,7 +92,15 @@ public class BricklinkShipStationOrderMapper {
         return shipStationOrder;
     }
 
-    private com.shipstation.api.rest.model.OrderItem mapItem(OrderItem orderItem) {
+    private com.shipstation.api.rest.model.OrderItem mapItem(
+            String externalOrderId,
+            OrderItem orderItem,
+            int index,
+            Map<String, String> imageUrlsByExternalOrderItemId
+    ) {
+        if (orderItem == null) {
+            return null;
+        }
         Item item = orderItem.getItem();
         String itemNo = item == null ? null : item.getNo();
         Double weightValue = orderItem.getWeight() == null && item != null ? item.getWeight() : orderItem.getWeight();
@@ -87,7 +108,7 @@ public class BricklinkShipStationOrderMapper {
                 .lineItemKey(lineItemKey(orderItem))
                 .sku(itemNo)
                 .name(itemName(item))
-                .imageUrl(item == null ? null : item.getImage_url())
+                .imageUrl(imageUrlsByExternalOrderItemId.get(externalOrderItemId(externalOrderId, orderItem, index)))
                 .weight(weight(weightValue))
                 .quantity(Objects.requireNonNullElse(orderItem.getQuantity(), 0))
                 .unitPrice(orderItem.getUnit_price_final() == null ? orderItem.getUnit_price() : orderItem.getUnit_price_final())
@@ -194,6 +215,13 @@ public class BricklinkShipStationOrderMapper {
 
     private String lineItemKey(OrderItem orderItem) {
         return orderItem.getInventory_id() == null ? null : "inventory:" + orderItem.getInventory_id();
+    }
+
+    private String externalOrderItemId(String externalOrderId, OrderItem orderItem, int index) {
+        if (orderItem.getInventory_id() != null) {
+            return externalOrderId + ":inventory:" + orderItem.getInventory_id();
+        }
+        return externalOrderId + ":line:" + index;
     }
 
     private String itemName(Item item) {
