@@ -67,6 +67,32 @@ lego:
       enabled: true
       require-scheduled-sync-enabled: false
       require-bitly-when-apply-enabled: true
+  fulfillment:
+    marketplace-code: BRICKLINK
+    metrics-tag: fulfillment
+    statuses:
+      - PENDING
+      - UPDATED
+      - READY
+      - PROCESSING
+      - PAID
+      - PACKED
+    sync:
+      scheduled:
+        enabled: false
+        apply: false
+        batch-size: 25
+        fixed-delay-ms: 300000
+        initial-delay-ms: 30000
+        lock-at-most-for: 10m
+        lock-at-least-for: 0s
+    shipstation:
+      order-number-prefix: BL-
+      domestic-country-code: US
+      carrier-code: stamps_com
+      domestic-service-code: usps_priority_mail
+      international-service-code: usps_priority_mail_international
+      package-code: package
 
 kafka:
   bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092

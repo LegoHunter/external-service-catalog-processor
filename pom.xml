@@ -19,6 +19,7 @@
         <spring-cloud.version>2025.0.1</spring-cloud.version>
         <springdoc-openapi.version>2.8.17</springdoc-openapi.version>
         <bricklink-rest.version>2.0.0-SNAPSHOT</bricklink-rest.version>
+        <shipstation-rest.version>1.0.0-SNAPSHOT</shipstation-rest.version>
         <github.organization>LegoHunter</github.organization>
         <github.repo.url>https://github.com/${github.organization}/lego-data-ingress.git</github.repo.url>
     </properties>
@@ -107,6 +108,12 @@
             <groupId>com.bricklink.api</groupId>
             <artifactId>bricklink-rest</artifactId>
             <version>${bricklink-rest.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.shipstation.api</groupId>
+            <artifactId>shipstation-rest-client</artifactId>
+            <version>${shipstation-rest.version}</version>
         </dependency>
 
         <dependency>
