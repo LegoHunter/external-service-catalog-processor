@@ -8,10 +8,14 @@ import com.bricklink.api.rest.model.v1.Order;
 import com.bricklink.api.rest.model.v1.OrderItem;
 import com.bricklink.api.rest.model.v1.Payment;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.legohunter.data.dao.BricklinkMarketplaceListingDao;
+import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.MarketplaceOrderDao;
 import io.legohunter.data.dao.MarketplaceOrderItemDao;
 import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dao.MarketplaceOrderSyncRunDao;
+import io.legohunter.data.dto.BricklinkMarketplaceListing;
+import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
 import io.legohunter.data.dto.MarketplaceOrderSyncRun;
@@ -50,6 +54,10 @@ class BricklinkOpenOrderProbeServiceTest {
     private MarketplaceOrderItemDao marketplaceOrderItemDao;
     @Mock
     private MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
+    @Mock
+    private BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao;
+    @Mock
+    private MarketplaceListingDao marketplaceListingDao;
 
     private BricklinkOrderSyncProperties properties;
     private SimpleMeterRegistry meterRegistry;
@@ -67,6 +75,8 @@ class BricklinkOpenOrderProbeServiceTest {
                 marketplaceOrderDao,
                 marketplaceOrderItemDao,
                 marketplaceOrderPayloadDao,
+                bricklinkMarketplaceListingDao,
+                marketplaceListingDao,
                 new ObjectMapper().findAndRegisterModules()
         );
     }
@@ -198,6 +208,18 @@ class BricklinkOpenOrderProbeServiceTest {
                         .build()));
         when(marketplaceOrderItemDao.findByMarketplaceOrderId(20))
                 .thenReturn(Set.of(existingItem, staleItem));
+        when(bricklinkMarketplaceListingDao.findByBricklinkInventoryId(3001))
+                .thenReturn(Optional.of(BricklinkMarketplaceListing.builder()
+                        .marketplaceListingId(1001)
+                        .bricklinkInventoryId(3001)
+                        .build()));
+        when(marketplaceListingDao.findByMarketplaceListingId(1001))
+                .thenReturn(Optional.of(MarketplaceListing.builder()
+                        .marketplaceListingId(1001)
+                        .itemInventoryId(501)
+                        .build()));
+        when(bricklinkMarketplaceListingDao.findByBricklinkInventoryId(3002))
+                .thenReturn(Optional.empty());
 
         BricklinkOrderProbeResult result = probeService.runOnce();
 
@@ -227,7 +249,13 @@ class BricklinkOpenOrderProbeServiceTest {
         verify(marketplaceOrderItemDao).update(itemCaptor.capture());
         assertThat(itemCaptor.getValue().getMarketplaceOrderItemId()).isEqualTo(10);
         assertThat(itemCaptor.getValue().getExternalInventoryId()).isEqualTo("3001");
-        verify(marketplaceOrderItemDao).insert(any(io.legohunter.data.dto.MarketplaceOrderItem.class));
+        assertThat(itemCaptor.getValue().getMarketplaceListingId()).isEqualTo(1001);
+        assertThat(itemCaptor.getValue().getItemInventoryId()).isEqualTo(501);
+
+        verify(marketplaceOrderItemDao).insert(itemCaptor.capture());
+        assertThat(itemCaptor.getAllValues().getLast().getExternalInventoryId()).isEqualTo("3002");
+        assertThat(itemCaptor.getAllValues().getLast().getMarketplaceListingId()).isNull();
+        assertThat(itemCaptor.getAllValues().getLast().getItemInventoryId()).isNull();
         verify(marketplaceOrderItemDao).delete(11);
 
         ArgumentCaptor<MarketplaceOrderPayload> payloadCaptor = ArgumentCaptor.forClass(MarketplaceOrderPayload.class);
