@@ -79,6 +79,10 @@ public class FulfillmentSyncProperties {
         private String domesticServiceCode = "usps_priority_mail";
         private String internationalServiceCode = "usps_priority_mail_international";
         private String packageCode = "package";
+        private String insuranceProvider = "shipsurance";
+        private String internationalContents = "merchandise";
+        private String internationalNonDelivery = "return_to_sender";
+        private String customsCountryOfOrigin = "US";
 
         public String effectiveOrderNumberPrefix() {
             if (orderNumberPrefix == null || orderNumberPrefix.isBlank()) {
@@ -92,6 +96,34 @@ public class FulfillmentSyncProperties {
                 return "US";
             }
             return domesticCountryCode.trim().toUpperCase();
+        }
+
+        public String effectiveInsuranceProvider() {
+            if (insuranceProvider == null || insuranceProvider.isBlank()) {
+                return "shipsurance";
+            }
+            return insuranceProvider.trim();
+        }
+
+        public String effectiveInternationalContents() {
+            if (internationalContents == null || internationalContents.isBlank()) {
+                return "merchandise";
+            }
+            return internationalContents.trim();
+        }
+
+        public String effectiveInternationalNonDelivery() {
+            if (internationalNonDelivery == null || internationalNonDelivery.isBlank()) {
+                return "return_to_sender";
+            }
+            return internationalNonDelivery.trim();
+        }
+
+        public String effectiveCustomsCountryOfOrigin() {
+            if (customsCountryOfOrigin == null || customsCountryOfOrigin.isBlank()) {
+                return "US";
+            }
+            return customsCountryOfOrigin.trim().toUpperCase();
         }
     }
 }

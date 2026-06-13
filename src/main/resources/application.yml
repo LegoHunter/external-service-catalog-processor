@@ -93,6 +93,10 @@ lego:
       domestic-service-code: usps_priority_mail
       international-service-code: usps_priority_mail_international
       package-code: package
+      insurance-provider: shipsurance
+      international-contents: merchandise
+      international-non-delivery: return_to_sender
+      customs-country-of-origin: US
 
 kafka:
   bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092

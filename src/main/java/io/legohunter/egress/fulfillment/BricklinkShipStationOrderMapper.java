@@ -8,6 +8,9 @@ import com.bricklink.api.rest.model.v1.OrderItem;
 import com.bricklink.api.rest.model.v1.Payment;
 import com.bricklink.api.rest.model.v1.Shipping;
 import com.shipstation.api.rest.model.Address;
+import com.shipstation.api.rest.model.CustomsItem;
+import com.shipstation.api.rest.model.InsuranceOptions;
+import com.shipstation.api.rest.model.InternationalOptions;
 import com.shipstation.api.rest.model.OrderStatus;
 import com.shipstation.api.rest.model.ShipStationOrder;
 import com.shipstation.api.rest.model.Weight;
@@ -36,6 +39,7 @@ public class BricklinkShipStationOrderMapper {
         Cost cost = order.getCost();
         Payment payment = order.getPayment();
         Shipping shipping = order.getShipping();
+        Double shippingAmount = shippingAmount(cost);
         List<com.shipstation.api.rest.model.OrderItem> shipStationItems = orderItems.stream()
                 .filter(Objects::nonNull)
                 .map(this::mapItem)
@@ -53,7 +57,7 @@ public class BricklinkShipStationOrderMapper {
                 .shipStationOrderItems(shipStationItems)
                 .orderTotal(cost == null ? null : cost.getGrand_total())
                 .taxAmount(cost == null ? null : cost.getSalesTax_collected_by_BL())
-                .shippingAmount(shippingAmount(cost))
+                .shippingAmount(shippingAmount)
                 .customerNotes(null)
                 .internalNotes(order.getRemarks())
                 .paymentMethod(payment == null ? null : payment.getMethod())
@@ -62,6 +66,8 @@ public class BricklinkShipStationOrderMapper {
                 .serviceCode(serviceCode(shipping, properties))
                 .packageCode(properties.getPackageCode())
                 .weight(weight(order.getTotal_weight()))
+                .insuranceOptions(insuranceOptions(cost == null ? null : cost.getGrand_total(), shippingAmount, properties))
+                .internationalOptions(internationalOptions(shipping, shipStationItems, properties))
                 .build();
 
         if (isPaid(order)) {
@@ -106,13 +112,17 @@ public class BricklinkShipStationOrderMapper {
     }
 
     private String serviceCode(Shipping shipping, FulfillmentSyncProperties.Shipstation properties) {
+        if (isInternational(shipping, properties)) {
+            return properties.getInternationalServiceCode();
+        }
+        return properties.getDomesticServiceCode();
+    }
+
+    private boolean isInternational(Shipping shipping, FulfillmentSyncProperties.Shipstation properties) {
         String countryCode = shipping == null || shipping.getAddress() == null
                 ? null
                 : countryCode(shipping.getAddress().getCountry_code());
-        if (countryCode == null || countryCode.equalsIgnoreCase(properties.effectiveDomesticCountryCode())) {
-            return properties.getDomesticServiceCode();
-        }
-        return properties.getInternationalServiceCode();
+        return countryCode != null && !countryCode.equalsIgnoreCase(properties.effectiveDomesticCountryCode());
     }
 
     private String orderStatus(Order order) {
@@ -134,6 +144,51 @@ public class BricklinkShipStationOrderMapper {
         return value == null ? null : Weight.builder()
                 .value(value)
                 .units("grams")
+                .build();
+    }
+
+    private InsuranceOptions insuranceOptions(
+            Double orderTotal,
+            Double shippingAmount,
+            FulfillmentSyncProperties.Shipstation properties
+    ) {
+        return InsuranceOptions.builder()
+                .provider(properties.effectiveInsuranceProvider())
+                .insureShipment(true)
+                .insuredValue(insuredValue(orderTotal, shippingAmount))
+                .build();
+    }
+
+    private Double insuredValue(Double orderTotal, Double shippingAmount) {
+        if (orderTotal == null) {
+            return null;
+        }
+        return Math.ceil(orderTotal - Objects.requireNonNullElse(shippingAmount, 0.0));
+    }
+
+    private InternationalOptions internationalOptions(
+            Shipping shipping,
+            List<com.shipstation.api.rest.model.OrderItem> orderItems,
+            FulfillmentSyncProperties.Shipstation properties
+    ) {
+        if (!isInternational(shipping, properties)) {
+            return null;
+        }
+        CustomsItem[] customsItems = orderItems.stream()
+                .map(orderItem -> CustomsItem.builder()
+                        .customsItemId(null)
+                        .description("Lego (Toys) - " + orderItem.getName())
+                        .quantity(orderItem.getQuantity())
+                        .value(orderItem.getUnitPrice())
+                        .harmonizedTariffCode(null)
+                        .countryOfOrigin(properties.effectiveCustomsCountryOfOrigin())
+                        .build())
+                .toArray(CustomsItem[]::new);
+
+        return InternationalOptions.builder()
+                .contents(properties.effectiveInternationalContents())
+                .nonDelivery(properties.effectiveInternationalNonDelivery())
+                .customsItems(customsItems)
                 .build();
     }
 

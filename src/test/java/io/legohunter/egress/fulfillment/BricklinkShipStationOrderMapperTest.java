@@ -52,6 +52,10 @@ class BricklinkShipStationOrderMapperTest {
         assertThat(result.getOrderTotal()).isEqualTo(38.0);
         assertThat(result.getShippingAmount()).isEqualTo(8.75);
         assertThat(result.getWeight().getValue()).isEqualTo(128.5);
+        assertThat(result.getInsuranceOptions().getProvider()).isEqualTo("shipsurance");
+        assertThat(result.getInsuranceOptions().getInsureShipment()).isTrue();
+        assertThat(result.getInsuranceOptions().getInsuredValue()).isEqualTo(30.0);
+        assertThat(result.getInternationalOptions()).isNull();
 
         assertThat(result.getItems()).hasSize(1);
         assertThat(result.getItems()[0].getLineItemKey()).isEqualTo("inventory:3001");
@@ -66,12 +70,24 @@ class BricklinkShipStationOrderMapperTest {
     void mapUsesInternationalServiceForNonDomesticCountry() {
         FulfillmentSyncProperties.Shipstation properties = new FulfillmentSyncProperties.Shipstation();
         Order order = order("101", "PENDING");
+        order.setCost(cost());
         order.setShipping(shipping("CA"));
+        OrderItem orderItem = orderItem(3002L, 2);
 
-        ShipStationOrder result = mapper.map(order, List.of(), properties);
+        ShipStationOrder result = mapper.map(order, List.of(orderItem), properties);
 
         assertThat(result.getOrderStatus()).isEqualTo(OrderStatus.AWAITING_PAYMENT.label());
         assertThat(result.getServiceCode()).isEqualTo("usps_priority_mail_international");
+        assertThat(result.getInsuranceOptions().getProvider()).isEqualTo("shipsurance");
+        assertThat(result.getInsuranceOptions().getInsuredValue()).isEqualTo(30.0);
+        assertThat(result.getInternationalOptions().getContents()).isEqualTo("merchandise");
+        assertThat(result.getInternationalOptions().getNonDelivery()).isEqualTo("return_to_sender");
+        assertThat(result.getInternationalOptions().getCustomsItems()).hasSize(1);
+        assertThat(result.getInternationalOptions().getCustomsItems()[0].getDescription())
+                .isEqualTo("Lego (Toys) - (1234-1) - Test & Set");
+        assertThat(result.getInternationalOptions().getCustomsItems()[0].getQuantity()).isEqualTo(2);
+        assertThat(result.getInternationalOptions().getCustomsItems()[0].getValue()).isEqualTo(5.49);
+        assertThat(result.getInternationalOptions().getCustomsItems()[0].getCountryOfOrigin()).isEqualTo("US");
     }
 
     private static Order order(String orderId, String status) {
