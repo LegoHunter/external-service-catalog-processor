@@ -41,6 +41,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -334,7 +335,7 @@ public class BricklinkOpenOrderProbeService {
                 .externalItemType(item == null ? null : item.getType())
                 .colorId(orderItem.getColor_id())
                 .colorName(orderItem.getColor_name())
-                .quantity(orderItem.getQuantity() == null ? 0 : orderItem.getQuantity())
+                .quantity(Objects.requireNonNullElse(orderItem.getQuantity(), 0))
                 .conditionCode(orderItem.getNew_or_used())
                 .completenessCode(orderItem.getCompleteness())
                 .unitPrice(amount(orderItem.getUnit_price()))
