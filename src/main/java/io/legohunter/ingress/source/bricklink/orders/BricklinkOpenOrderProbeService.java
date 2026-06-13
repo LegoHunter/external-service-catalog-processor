@@ -9,10 +9,14 @@ import com.bricklink.api.rest.model.v1.Payment;
 import com.bricklink.api.rest.model.v1.Shipping;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.legohunter.data.dao.BricklinkMarketplaceListingDao;
+import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.MarketplaceOrderDao;
 import io.legohunter.data.dao.MarketplaceOrderItemDao;
 import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dao.MarketplaceOrderSyncRunDao;
+import io.legohunter.data.dto.BricklinkMarketplaceListing;
+import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
@@ -57,6 +61,8 @@ public class BricklinkOpenOrderProbeService {
     private final MarketplaceOrderDao marketplaceOrderDao;
     private final MarketplaceOrderItemDao marketplaceOrderItemDao;
     private final MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
+    private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao;
+    private final MarketplaceListingDao marketplaceListingDao;
     private final ObjectMapper objectMapper;
 
     public BricklinkOrderProbeResult runOnce() {
@@ -317,8 +323,11 @@ public class BricklinkOpenOrderProbeService {
     private MarketplaceOrderItem marketplaceOrderItem(Integer marketplaceOrderId, String externalOrderItemId, OrderItem orderItem) {
         com.bricklink.api.rest.model.v1.Item item = orderItem.getItem();
         String orderItemJson = payloadJson(orderItem);
+        OrderItemListingLink listingLink = listingLink(orderItem);
         return MarketplaceOrderItem.builder()
                 .marketplaceOrderId(marketplaceOrderId)
+                .marketplaceListingId(listingLink.marketplaceListingId())
+                .itemInventoryId(listingLink.itemInventoryId())
                 .externalOrderItemId(externalOrderItemId)
                 .externalInventoryId(orderItem.getInventory_id() == null ? null : orderItem.getInventory_id().toString())
                 .externalItemNo(item == null ? null : item.getNo())
@@ -336,6 +345,30 @@ public class BricklinkOpenOrderProbeService {
                 .description(orderItem.getDescription())
                 .payloadHash(payloadHash(orderItemJson))
                 .build();
+    }
+
+    private OrderItemListingLink listingLink(OrderItem orderItem) {
+        Long inventoryId = orderItem.getInventory_id();
+        if (inventoryId == null || inventoryId > Integer.MAX_VALUE) {
+            return OrderItemListingLink.unresolved();
+        }
+        return bricklinkMarketplaceListingDao.findByBricklinkInventoryId(inventoryId.intValue())
+                .map(this::listingLink)
+                .orElseGet(OrderItemListingLink::unresolved);
+    }
+
+    private OrderItemListingLink listingLink(BricklinkMarketplaceListing bricklinkListing) {
+        Integer marketplaceListingId = bricklinkListing.getMarketplaceListingId();
+        if (marketplaceListingId == null) {
+            return OrderItemListingLink.unresolved();
+        }
+        return marketplaceListingDao.findByMarketplaceListingId(marketplaceListingId)
+                .map(listing -> listingLink(marketplaceListingId, listing))
+                .orElse(new OrderItemListingLink(marketplaceListingId, null));
+    }
+
+    private OrderItemListingLink listingLink(Integer marketplaceListingId, MarketplaceListing listing) {
+        return new OrderItemListingLink(marketplaceListingId, listing.getItemInventoryId());
     }
 
     private MarketplaceOrderPayload marketplaceOrderPayload(
@@ -528,5 +561,11 @@ public class BricklinkOpenOrderProbeService {
     }
 
     private record BricklinkOrderWriteResult(int ordersWritten, int orderItemsWritten, int payloadsWritten) {
+    }
+
+    private record OrderItemListingLink(Integer marketplaceListingId, Integer itemInventoryId) {
+        static OrderItemListingLink unresolved() {
+            return new OrderItemListingLink(null, null);
+        }
     }
 }
