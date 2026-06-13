@@ -34,6 +34,7 @@ public class FulfillmentSyncService {
     private final MarketplaceOrderDao marketplaceOrderDao;
     private final MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
     private final BricklinkShipStationOrderMapper shipStationOrderMapper;
+    private final FulfillmentOrderItemImageResolver orderItemImageResolver;
     private final FulfillmentSyncProperties properties;
     private final ObjectMapper objectMapper;
 
@@ -89,7 +90,8 @@ public class FulfillmentSyncService {
                 ShipStationOrder shipStationOrder = shipStationOrderMapper.map(
                         loadedOrder.get().order(),
                         loadedOrder.get().orderItems(),
-                        properties.getShipstation()
+                        properties.getShipstation(),
+                        orderItemImageResolver.resolveImageUrls(candidate)
                 );
                 ordersMapped++;
                 mappedOrderNumbers.add(shipStationOrder.getOrderNumber());

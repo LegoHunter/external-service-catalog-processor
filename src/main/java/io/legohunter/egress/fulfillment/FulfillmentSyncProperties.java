@@ -83,6 +83,7 @@ public class FulfillmentSyncProperties {
         private String internationalContents = "merchandise";
         private String internationalNonDelivery = "return_to_sender";
         private String customsCountryOfOrigin = "US";
+        private Integer orderItemImageExternalServiceId = 10;
 
         public String effectiveOrderNumberPrefix() {
             if (orderNumberPrefix == null || orderNumberPrefix.isBlank()) {
@@ -124,6 +125,10 @@ public class FulfillmentSyncProperties {
                 return "US";
             }
             return customsCountryOfOrigin.trim().toUpperCase();
+        }
+
+        public Integer effectiveOrderItemImageExternalServiceId() {
+            return orderItemImageExternalServiceId == null ? 10 : orderItemImageExternalServiceId;
         }
     }
 }

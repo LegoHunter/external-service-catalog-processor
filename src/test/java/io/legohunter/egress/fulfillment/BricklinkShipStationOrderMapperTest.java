@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -64,6 +65,7 @@ class BricklinkShipStationOrderMapperTest {
         assertThat(result.getItems()[0].getQuantity()).isZero();
         assertThat(result.getItems()[0].getUnitPrice()).isEqualTo(5.49);
         assertThat(result.getItems()[0].getWeight().getValue()).isEqualTo(10.25);
+        assertThat(result.getItems()[0].getImageUrl()).isNull();
     }
 
     @Test
@@ -88,6 +90,24 @@ class BricklinkShipStationOrderMapperTest {
         assertThat(result.getInternationalOptions().getCustomsItems()[0].getQuantity()).isEqualTo(2);
         assertThat(result.getInternationalOptions().getCustomsItems()[0].getValue()).isEqualTo(5.49);
         assertThat(result.getInternationalOptions().getCustomsItems()[0].getCountryOfOrigin()).isEqualTo("US");
+    }
+
+    @Test
+    void mapUsesResolvedHostedImageUrlForOrderItem() {
+        FulfillmentSyncProperties.Shipstation properties = new FulfillmentSyncProperties.Shipstation();
+        Order order = order("100", "PENDING");
+        order.setCost(cost());
+        OrderItem orderItem = orderItem(3001L, 1);
+
+        ShipStationOrder result = mapper.map(
+                order,
+                List.of(orderItem),
+                properties,
+                Map.of("100:inventory:3001", "https://photos.example/primary.jpg")
+        );
+
+        assertThat(result.getItems()).hasSize(1);
+        assertThat(result.getItems()[0].getImageUrl()).isEqualTo("https://photos.example/primary.jpg");
     }
 
     private static Order order(String orderId, String status) {
