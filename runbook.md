@@ -65,17 +65,17 @@ If no profile is supplied, Spring loads `application.yml`, `application-local.ym
 
 `application-sandbox.yml` imports these external files from `${import-path}`:
 
-| File | Required for | Typical contents |
-| --- | --- | --- |
-| `database-configuration.yml` | DB access | `lego.data`, `lego.databases`, datasource-related settings. |
-| `kafka-configuration.yml` | Kafka auth | `lego.kafka.consumer.username/password`, `lego.kafka.producer.username/password`. |
-| `minio-configuration.yml` | S3/MinIO access | `lego.minio.access-key`, `lego.minio.secret-key`. |
-| `flickr-configuration.yml` | Flickr image hosting | `flickr.user-id`, `flickr.secrets.*`, optional debug flags. |
-| `bitly-configuration.yml` | Short URLs for image-hosting apply | `bitly.base-url`, `bitly.access-token`, `bitly.group-guid`. |
+| File                            | Required for | Typical contents |
+|---------------------------------| --- | --- |
+| `database-configuration.yml`    | DB access | `lego.data`, `lego.databases`, datasource-related settings. |
+| `kafka-configuration.yml`       | Kafka auth | `lego.kafka.consumer.username/password`, `lego.kafka.producer.username/password`. |
+| `minio-configuration.yml`       | S3/MinIO access | `lego.minio.access-key`, `lego.minio.secret-key`. |
+| `flickr-configuration.yml`      | Flickr image hosting | `flickr.user-id`, `flickr.secrets.*`, optional debug flags. |
+| `bitly-configuration.yml`       | Short URLs for image-hosting apply | `bitly.base-url`, `bitly.access-token`, `bitly.group-guid`. |
 | `bricklink-client-api-keys.yml` | BrickLink REST order sync | `bricklink.rest.consumer.*`, `bricklink.rest.token.*`. |
-| `shipstation-client-api-keys.yml` | ShipStation fulfillment sync | `shipstation.rest.api-key`, `shipstation.rest.api-secret`, optional `shipstation.rest.*` logging settings. Optional import; required when fulfillment scheduled sync is enabled. |
+| `shipstation-configuration.yml` | ShipStation fulfillment sync | `shipstation.rest.api-key`, `shipstation.rest.api-secret`, optional `shipstation.rest.*` logging settings. Optional import; required when fulfillment scheduled sync is enabled. |
 
-Most imports are plain `file:` imports, so missing files fail startup unless the runtime supplies them. The ShipStation file is imported with `optional:file:` so environments can run without ShipStation credentials while fulfillment sync is disabled.
+All imports are plain `file:` imports, so missing files fail startup unless the runtime supplies them.
 
 ### Kubernetes Profile
 

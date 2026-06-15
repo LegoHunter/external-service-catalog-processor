@@ -1,6 +1,5 @@
 package io.legohunter.ingress;
 
-import com.shipstation.api.rest.autoconfigure.ShipStationRestAutoConfiguration;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
@@ -13,8 +12,7 @@ import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
                 "io.legohunter.imaging.scaling"
         },
         exclude = {
-                DataSourceAutoConfiguration.class,
-                ShipStationRestAutoConfiguration.class
+                DataSourceAutoConfiguration.class
         }
 )
 public class LegoDataIngress {
