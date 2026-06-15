@@ -31,6 +31,7 @@ The service defaults to the `local,sandbox` profiles unless overridden by `sprin
 | Image-hosting sync | REST and scheduled job | Reconcile item inventory photos and albums to Flickr through `lego-imaging`. |
 | Image-hosting repair | REST | Repair DB links from current remote image-hosting state. |
 | BrickLink order sync | Scheduled job | Poll BrickLink open orders and, when apply mode is enabled, sync marketplace order staging tables. |
+| Fulfillment sync | Scheduled job | Map staged BrickLink marketplace orders to ShipStation orders, then reconcile shipped ShipStation orders back to BrickLink when apply mode is enabled. |
 
 ## Profiles And External Config
 
@@ -277,6 +278,80 @@ Important logs:
 | `image_hosting.sync_job.inventory_failed` | One inventory item failed; job continues. |
 | `image_hosting.sync_job.completed` | Run-level result. |
 
+### `FulfillmentScheduledSyncJob`
+
+Class: `io.legohunter.egress.fulfillment.FulfillmentScheduledSyncJob`
+
+Condition:
+
+```yaml
+lego.fulfillment.sync.scheduled.enabled: true
+```
+
+Schedule and selection settings:
+
+| Setting | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.fulfillment.sync.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between job runs. |
+| `lego.fulfillment.sync.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Delay after startup before first run. |
+| `lego.fulfillment.sync.scheduled.lock-at-most-for` | `10m` | ShedLock duration | Maximum distributed lock duration. |
+| `lego.fulfillment.sync.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
+| `lego.fulfillment.sync.scheduled.batch-size` | `25` | Integer; effective value is at least `1` | Maximum marketplace orders selected per run. |
+| `lego.fulfillment.sync.scheduled.apply` | `false` | `true`, `false` | If `false`, maps staged orders only. If `true`, performs ShipStation and BrickLink mutations. |
+
+Candidate requirements:
+
+| Requirement | Detail |
+| --- | --- |
+| Marketplace order status | `marketplace_order.external_status_code` must match `lego.fulfillment.statuses`. |
+| Raw payloads | Latest `ORDER_RESPONSE` and `ORDER_ITEMS_RESPONSE` payloads must exist in `marketplace_order_payload`. |
+| Order item image URLs | Uses the configured image-hosting external service id. Primary photo wins; otherwise any available photo is used; if no photo exists, no image URL is assigned. |
+
+Operational modes:
+
+| `apply` | Behavior |
+| --- | --- |
+| `false` | Dry run. Loads staged marketplace orders, maps ShipStation order payloads, logs counters, emits metrics, and makes no ShipStation or BrickLink client calls. |
+| `true` | Live fulfillment sync. Finds an existing ShipStation order by order number, creates or updates unshipped ShipStation orders, or reconciles shipped ShipStation orders back to BrickLink. |
+
+Live fulfillment behavior when `apply=true`:
+
+| ShipStation state | Behavior |
+| --- | --- |
+| No existing order for `BL-{orderId}` | Creates the ShipStation order from the staged BrickLink order/items payloads. |
+| Exactly one existing unshipped order | Updates that ShipStation order by setting the existing ShipStation `orderId` on the mapped order. |
+| Exactly one existing shipped order | Fetches ShipStation shipments, chooses the first non-voided shipment with tracking, writes tracking/date shipped to BrickLink, marks the BrickLink order `SHIPPED`, sends Drive Thru when needed, and marks the local marketplace order as shipped. |
+| More than one existing order | Fails that candidate and leaves other candidates running. |
+| Shipped order without tracking | Fails that candidate because BrickLink cannot be safely reconciled. |
+
+Important boundaries:
+
+| Boundary | Detail |
+| --- | --- |
+| ShipStation linkage | Linkage is currently idempotent by `orderNumber`/`orderKey`, using the configured prefix plus BrickLink order id. No ShipStation id is persisted in `lego-data` yet. |
+| Source of order details | Fulfillment maps from staged `marketplace_order_payload` JSON captured by the BrickLink order sync. |
+| Phase 6 work | Local transaction finalization, payment/cost/shipping rows, and item inventory sold-state transitions are intentionally not performed by this job yet. |
+
+Outcomes:
+
+| Outcome | Meaning |
+| --- | --- |
+| `NO_WORK` | No marketplace order candidates selected. |
+| `SUCCESS` | Candidates were processed and none failed. |
+| `PAYLOADS_MISSING` | Candidates were selected, but none could be mapped because required raw payloads were absent. |
+| `PARTIAL_FAILURE` | At least one mapped candidate succeeded and at least one failed. |
+| `FAILED` | All mapped candidates failed. |
+
+Important logs:
+
+| Event | Meaning |
+| --- | --- |
+| `fulfillment.sync_job.started` | Job started with provider, marketplace code, statuses, batch size, and apply mode. |
+| `fulfillment.sync_job.payload_missing` | A candidate lacks one or both required raw payloads. |
+| `fulfillment.sync_job.order_mapped` | One candidate mapped successfully and reports action, ShipStation order id when available, and tracking presence. |
+| `fulfillment.sync_job.order_failed` | One candidate failed; job continues. |
+| `fulfillment.sync_job.completed` | Run-level result with discovered, loaded, mapped, created, updated, shipped-reconciled, skipped, and failed counters. |
+
 ### `TestCronJob`
 
 Class: `io.legohunter.ingress.scheduling.job.TestCronJob`
@@ -434,6 +509,63 @@ Operational notes:
 | HTTP `302` to `/v2/error_404.page` | Wrong base URI such as `https://api.bricklink.com/v2` | Set `bricklink.rest.uri` to `https://api.bricklink.com/api/store/v1`. |
 | `401`/OAuth errors | Missing or invalid consumer/token secrets | Check `${import-path}/bricklink-client-api-keys.yml`. |
 | Very large logs | `include-body=true` and `max-body-length=-1` | Set a finite max body length or disable body logging. |
+
+### `lego.fulfillment.*`
+
+Backed by `FulfillmentSyncProperties`.
+
+| Property | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.fulfillment.marketplace-code` | `BRICKLINK` | Non-blank string; normalized to uppercase | Marketplace code used to select staged orders. |
+| `lego.fulfillment.metrics-tag` | `fulfillment` | Non-blank string | Low-cardinality provider tag for metrics. |
+| `lego.fulfillment.statuses` | `PENDING`, `UPDATED`, `READY`, `PROCESSING`, `PAID`, `PACKED` | Marketplace external status strings; code trims, uppercases, and de-duplicates | Candidate marketplace order statuses. |
+| `lego.fulfillment.sync.scheduled.enabled` | `false` | `true`, `false` | Creates scheduled fulfillment job/service beans when true. |
+| `lego.fulfillment.sync.scheduled.apply` | `false` | `true`, `false` | Enables ShipStation and BrickLink writes when true. Keep false for dry-run mapping validation. |
+| `lego.fulfillment.sync.scheduled.batch-size` | `25` | Integer; effective value at least `1` | Candidate marketplace order limit per run. |
+| `lego.fulfillment.sync.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between runs. |
+| `lego.fulfillment.sync.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | First-run startup delay. |
+| `lego.fulfillment.sync.scheduled.lock-at-most-for` | `10m` | ShedLock duration string | Maximum distributed lock time. |
+| `lego.fulfillment.sync.scheduled.lock-at-least-for` | `0s` | ShedLock duration string | Minimum distributed lock time. |
+| `lego.fulfillment.shipstation.order-number-prefix` | `BL-` | Non-blank string | Prefix used for ShipStation `orderNumber` and `orderKey`. |
+| `lego.fulfillment.shipstation.domestic-country-code` | `US` | ISO country code string | Used to choose domestic vs international shipping/tracking behavior. |
+| `lego.fulfillment.shipstation.carrier-code` | `stamps_com` | ShipStation carrier code | Carrier assigned to mapped ShipStation orders. |
+| `lego.fulfillment.shipstation.domestic-service-code` | `usps_priority_mail` | ShipStation service code | Service code for domestic orders. |
+| `lego.fulfillment.shipstation.international-service-code` | `usps_priority_mail_international` | ShipStation service code | Service code for international orders. |
+| `lego.fulfillment.shipstation.package-code` | `package` | ShipStation package code | Package type assigned to mapped orders. |
+| `lego.fulfillment.shipstation.insurance-provider` | `shipsurance` | ShipStation insurance provider | Provider used when insurance options are created. |
+| `lego.fulfillment.shipstation.international-contents` | `merchandise` | ShipStation customs contents value | Customs content type for international options. |
+| `lego.fulfillment.shipstation.international-non-delivery` | `return_to_sender` | ShipStation customs non-delivery value | Customs non-delivery action for international options. |
+| `lego.fulfillment.shipstation.customs-country-of-origin` | `US` | ISO country code string | Customs origin country for international items. |
+| `lego.fulfillment.shipstation.order-item-image-external-service-id` | `10` | Integer external service id | External image provider id used when resolving order item image URLs. |
+
+Recommended safe defaults:
+
+```yaml
+lego:
+  fulfillment:
+    marketplace-code: BRICKLINK
+    metrics-tag: fulfillment
+    statuses: [PENDING, UPDATED, READY, PROCESSING, PAID, PACKED]
+    sync:
+      scheduled:
+        enabled: true
+        apply: false
+        batch-size: 25
+```
+
+### `shipstation.rest.*`
+
+Backed by the `shipstation-rest` dependency `ShipStationRestProperties`.
+
+| Property | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `shipstation.rest.uri` | `https://ssapi.shipstation.com` | Absolute URI | ShipStation API base URI. |
+| `shipstation.rest.api-key` | None | ShipStation API key | Basic-auth username. Secret, externalized. |
+| `shipstation.rest.api-secret` | None | ShipStation API secret | Basic-auth password. Secret, externalized. |
+| `shipstation.rest.http-logging.enabled` | `false` | `true`, `false` | Adds request/response logging interceptor when true. |
+| `shipstation.rest.http-logging.include-headers` | `false` | `true`, `false` | Includes headers in debug logs. Authorization is redacted by the interceptor. |
+| `shipstation.rest.http-logging.include-body` | `true` | `true`, `false` | Includes request/response body in debug logs. |
+| `shipstation.rest.http-logging.max-body-length` | `-1` | `-1` for unlimited, or non-negative max characters | Truncates logged bodies when non-negative. |
 
 ### `lego.image-hosting.*`
 
@@ -636,6 +768,14 @@ Prometheus uses Micrometer naming conventions. For example, counter `image_hosti
 | `bricklink_order_sync_duration` | Timer | `provider`, `outcome` | Run duration. |
 | `bricklink_order_sync_order` | Counter | `provider`, `result` | Order counts by `discovered`, `fetched`, `failed`, `written`. |
 
+### Fulfillment Sync Metrics
+
+| Meter | Type | Tags | Description |
+| --- | --- | --- | --- |
+| `fulfillment_sync` | Counter | `provider`, `outcome`, `apply` | One count per fulfillment sync run. |
+| `fulfillment_sync_duration` | Timer | `provider`, `outcome`, `apply` | Run duration. |
+| `fulfillment_sync_order` | Counter | `provider`, `result` | Order counts by `discovered`, `loaded`, `payload_missing`, `mapped`, `created`, `updated`, `shipped_reconciled`, `skipped`, `failed`. |
+
 ### Photo Processing Metrics
 
 | Meter | Type | Tags | Description |
@@ -672,6 +812,21 @@ Primary events:
 | `bricklink.order_sync.probe.item_coverage` | Item-level field coverage counts. |
 | `bricklink.order_sync.probe.completed` | Final outcome and counters. |
 | `bricklink.order_sync.probe.failed` | Run-level failure. |
+
+### Fulfillment Sync Logs
+
+Primary events:
+
+| Event | Purpose |
+| --- | --- |
+| `fulfillment.sync_job.started` | Run start with provider, marketplace code, statuses, batch size, and apply mode. |
+| `fulfillment.sync_job.no_work` | No marketplace order candidates selected. |
+| `fulfillment.sync_job.payload_missing` | A candidate lacks the staged order or order-items payload needed for mapping. |
+| `fulfillment.sync_job.order_mapped` | One candidate mapped and reports the fulfillment action. |
+| `fulfillment.sync_job.order_failed` | One candidate failed; the job continues with later candidates. |
+| `fulfillment.sync_job.completed` | Final outcome and counters. |
+
+When `apply=true`, ShipStation and BrickLink client HTTP logging can also be enabled for targeted diagnosis. Keep body logging off or bounded in long-running deployments because order payloads can contain customer addresses.
 
 ### Image Hosting Logs
 
@@ -745,6 +900,31 @@ lego:
 ```
 
 Set `enabled=false` if the job should stop entirely.
+
+### Safe Fulfillment Sync Rollout
+
+1. Confirm BrickLink order sync has already run with `apply=true` so `marketplace_order`, `marketplace_order_item`, and `marketplace_order_payload` contain current staged orders.
+2. Confirm BrickLink credentials and ShipStation credentials are present in runtime config.
+3. Set `lego.fulfillment.sync.scheduled.enabled=true`.
+4. Keep `lego.fulfillment.sync.scheduled.apply=false` for initial validation.
+5. Watch `fulfillment.sync_job.order_mapped` and confirm `orderNumber=BL-{bricklinkOrderId}`, item counts, image URLs, insurance options, international options, and shipping service choices are correct.
+6. Confirm `/actuator/prometheus` exposes `fulfillment_sync`, `fulfillment_sync_duration`, and `fulfillment_sync_order`.
+7. Set a small `lego.fulfillment.sync.scheduled.batch-size` before first live apply validation.
+8. Set `lego.fulfillment.sync.scheduled.apply=true` only after dry-run mapping and credentials are verified.
+9. Watch `fulfillment.sync_job.completed` for `ordersCreated`, `ordersUpdated`, `ordersShippedReconciled`, `ordersSkipped`, and `ordersFailed`.
+10. Confirm ShipStation contains one order per BrickLink order number and BrickLink is updated only after ShipStation reports the order shipped with tracking.
+
+Rollback:
+
+```yaml
+lego:
+  fulfillment:
+    sync:
+      scheduled:
+        apply: false
+```
+
+Set `enabled=false` if the job should stop entirely. Existing ShipStation orders created before rollback remain in ShipStation and will be found again by `BL-{orderId}` if apply mode is re-enabled.
 
 ### Safe Image-Hosting Scheduled Sync Rollout
 
@@ -832,6 +1012,40 @@ order by marketplace_order_payload_id desc
 limit 25;
 ```
 
+### Fulfillment SQL Checks
+
+Before enabling fulfillment apply mode, confirm candidates have staged raw payloads:
+
+```sql
+select o.marketplace_order_id,
+       o.external_order_id,
+       o.external_status_code,
+       count(p.marketplace_order_payload_id) as payload_count
+from marketplace_order o
+left join marketplace_order_payload p
+  on p.marketplace_order_id = o.marketplace_order_id
+ and p.payload_type in ('ORDER_RESPONSE', 'ORDER_ITEMS_RESPONSE')
+where o.marketplace_code = 'BRICKLINK'
+  and o.external_status_code in ('PENDING', 'UPDATED', 'READY', 'PROCESSING', 'PAID', 'PACKED')
+group by o.marketplace_order_id, o.external_order_id, o.external_status_code
+order by o.last_seen_at desc;
+```
+
+After shipped reconciliation, local staged status is updated so the same order is not repeatedly reconciled before the next BrickLink probe:
+
+```sql
+select marketplace_order_id,
+       external_order_id,
+       external_status_code,
+       tracking_present,
+       status_changed_at,
+       last_seen_at
+from marketplace_order
+where marketplace_code = 'BRICKLINK'
+order by last_seen_at desc
+limit 25;
+```
+
 ### Image-Hosting SQL Checks
 
 ```sql
@@ -865,6 +1079,11 @@ order by ai.sort_order;
 | Application fails because config import is missing | Required external file absent under `import-path` | Create/project the expected YAML file or adjust active profiles. |
 | BrickLink responses are `302` to error page | Wrong BrickLink base URI | Use `https://api.bricklink.com/api/store/v1`. |
 | BrickLink sync discovers orders but writes nothing | `lego.bricklink.orders.sync.scheduled.apply=false` | This is probe mode. Set apply true only after DB tables exist and probe output is reviewed. |
+| Fulfillment sync maps orders but creates no ShipStation orders | `lego.fulfillment.sync.scheduled.apply=false` | This is dry-run mapping mode. Set apply true only after staged payloads and credentials are verified. |
+| Fulfillment sync reports `PAYLOADS_MISSING` | BrickLink order sync has not stored latest `ORDER_RESPONSE` and `ORDER_ITEMS_RESPONSE` payloads for candidates | Run BrickLink order sync with `apply=true` first and confirm `marketplace_order_payload` rows exist. |
+| Fulfillment candidate fails with duplicate ShipStation orders | More than one ShipStation order exists for the same `BL-{orderId}` order number | Resolve the duplicate in ShipStation before re-running live fulfillment apply. |
+| Shipped ShipStation order does not update BrickLink | ShipStation shipment has no non-voided tracking number | Add/verify tracking in ShipStation, then let the next fulfillment run reconcile it. |
+| ShipStation client fails authentication | Missing or wrong `shipstation.rest.api-key` or `shipstation.rest.api-secret` | Check the projected secret or environment variables supplying ShipStation REST config. |
 | Image-hosting scheduled job logs planned actions but no writes | `lego.image-hosting.sync.scheduled.apply=false` | This is dry-run scheduled mode. |
 | Kubernetes readiness DOWN for image hosting | Missing required DB/S3/Flickr/Bitly config or invalid scheduled settings | Inspect `/actuator/health/readiness` details and startup readiness logs. |
 | Kafka listener not consuming | Topic id missing consumer config or wrong group/topic | Check `kafka.topic-configuration.<id>.*` and dynamic bean registration logs. |
@@ -879,3 +1098,5 @@ order by ai.sort_order;
 - Treat all `/internal/*` endpoints as administrative operations. They should remain behind trusted network/access controls.
 - Prefer sync-plan and repair-plan endpoints over the legacy direct sync endpoint for manual image-hosting operations.
 - Before enabling write-side marketplace sync, confirm the marketplace sync tables and constraints exist in the target database.
+- Before enabling fulfillment apply mode, confirm BrickLink order sync has written current staged payloads and start with a small fulfillment batch size.
+- Do not use fulfillment sync as the source of local accounting truth yet; transaction finalization and item inventory sold-state updates are Phase 6 work.
