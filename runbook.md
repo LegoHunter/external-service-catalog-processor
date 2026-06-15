@@ -73,8 +73,9 @@ If no profile is supplied, Spring loads `application.yml`, `application-local.ym
 | `flickr-configuration.yml` | Flickr image hosting | `flickr.user-id`, `flickr.secrets.*`, optional debug flags. |
 | `bitly-configuration.yml` | Short URLs for image-hosting apply | `bitly.base-url`, `bitly.access-token`, `bitly.group-guid`. |
 | `bricklink-client-api-keys.yml` | BrickLink REST order sync | `bricklink.rest.consumer.*`, `bricklink.rest.token.*`. |
+| `shipstation-client-api-keys.yml` | ShipStation fulfillment sync | `shipstation.rest.api-key`, `shipstation.rest.api-secret`, optional `shipstation.rest.*` logging settings. Optional import; required when fulfillment scheduled sync is enabled. |
 
-All imports are currently plain `file:` imports, so missing files fail startup unless the runtime supplies them.
+Most imports are plain `file:` imports, so missing files fail startup unless the runtime supplies them. The ShipStation file is imported with `optional:file:` so environments can run without ShipStation credentials while fulfillment sync is disabled.
 
 ### Kubernetes Profile
 
@@ -904,7 +905,7 @@ Set `enabled=false` if the job should stop entirely.
 ### Safe Fulfillment Sync Rollout
 
 1. Confirm BrickLink order sync has already run with `apply=true` so `marketplace_order`, `marketplace_order_item`, and `marketplace_order_payload` contain current staged orders.
-2. Confirm BrickLink credentials and ShipStation credentials are present in runtime config.
+2. Confirm BrickLink credentials and ShipStation credentials are present in runtime config. For sandbox/local profile runs, ShipStation credentials normally come from `${import-path}/shipstation-client-api-keys.yml`.
 3. Set `lego.fulfillment.sync.scheduled.enabled=true`.
 4. Keep `lego.fulfillment.sync.scheduled.apply=false` for initial validation.
 5. Watch `fulfillment.sync_job.order_mapped` and confirm `orderNumber=BL-{bricklinkOrderId}`, item counts, image URLs, insurance options, international options, and shipping service choices are correct.

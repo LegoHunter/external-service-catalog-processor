@@ -112,7 +112,7 @@
 
         <dependency>
             <groupId>com.shipstation.api</groupId>
-            <artifactId>shipstation-rest-client</artifactId>
+            <artifactId>shipstation-spring-boot-starter</artifactId>
             <version>${shipstation-rest.version}</version>
         </dependency>
 
