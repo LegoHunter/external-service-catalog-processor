@@ -106,7 +106,7 @@
 
         <dependency>
             <groupId>com.bricklink.api</groupId>
-            <artifactId>bricklink-rest</artifactId>
+            <artifactId>bricklink-spring-boot-starter</artifactId>
             <version>${bricklink-rest.version}</version>
         </dependency>
 

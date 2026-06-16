@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.OffsetDateTime;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -243,6 +244,66 @@ class FulfillmentSyncServiceTest {
     }
 
     @Test
+    void runOnceSendsDriveThruWhenBricklinkExplicitlyReportsNotSent() throws Exception {
+        properties.getSync().getScheduled().setApply(true);
+        MarketplaceOrder marketplaceOrder = marketplaceOrder(20, "100");
+        setupLoadedOrder(marketplaceOrder, order("100", "PAID"), List.of(orderItem(3001L)));
+        setupShippedShipStationOrder(OffsetDateTime.now(ZoneOffset.UTC).minusDays(30));
+        when(bricklinkRestClient.getOrder("100"))
+                .thenReturn(resource(orderWithDriveThruStatus("100", "SHIPPED", false)));
+
+        FulfillmentSyncResult result = service.runOnce();
+
+        assertThat(result.ordersShippedReconciled()).isEqualTo(1);
+        verify(bricklinkRestClient).sendDriveThru("100", true);
+    }
+
+    @Test
+    void runOnceSendsDriveThruWhenBricklinkDriveThruStatusIsUnknownAndShipmentIsRecent() throws Exception {
+        properties.getSync().getScheduled().setApply(true);
+        MarketplaceOrder marketplaceOrder = marketplaceOrder(20, "100");
+        setupLoadedOrder(marketplaceOrder, order("100", "PAID"), List.of(orderItem(3001L)));
+        setupShippedShipStationOrder(OffsetDateTime.now(ZoneOffset.UTC).minusDays(2));
+        when(bricklinkRestClient.getOrder("100"))
+                .thenReturn(resource(orderWithDriveThruStatus("100", "SHIPPED", null)));
+
+        FulfillmentSyncResult result = service.runOnce();
+
+        assertThat(result.ordersShippedReconciled()).isEqualTo(1);
+        verify(bricklinkRestClient).sendDriveThru("100", true);
+    }
+
+    @Test
+    void runOnceSkipsDriveThruWhenBricklinkDriveThruStatusIsUnknownAndShipmentIsOld() throws Exception {
+        properties.getSync().getScheduled().setApply(true);
+        MarketplaceOrder marketplaceOrder = marketplaceOrder(20, "100");
+        setupLoadedOrder(marketplaceOrder, order("100", "PAID"), List.of(orderItem(3001L)));
+        setupShippedShipStationOrder(OffsetDateTime.now(ZoneOffset.UTC).minusDays(30));
+        when(bricklinkRestClient.getOrder("100"))
+                .thenReturn(resource(orderWithDriveThruStatus("100", "SHIPPED", null)));
+
+        FulfillmentSyncResult result = service.runOnce();
+
+        assertThat(result.ordersShippedReconciled()).isEqualTo(1);
+        verify(bricklinkRestClient, never()).sendDriveThru(any(), eq(true));
+    }
+
+    @Test
+    void runOnceSkipsDriveThruWhenBricklinkDriveThruStatusIsUnknownAndOrderIsNotShipped() throws Exception {
+        properties.getSync().getScheduled().setApply(true);
+        MarketplaceOrder marketplaceOrder = marketplaceOrder(20, "100");
+        setupLoadedOrder(marketplaceOrder, order("100", "PAID"), List.of(orderItem(3001L)));
+        setupShippedShipStationOrder(OffsetDateTime.now(ZoneOffset.UTC).minusDays(2));
+        when(bricklinkRestClient.getOrder("100"))
+                .thenReturn(resource(orderWithDriveThruStatus("100", "PAID", null)));
+
+        FulfillmentSyncResult result = service.runOnce();
+
+        assertThat(result.ordersShippedReconciled()).isEqualTo(1);
+        verify(bricklinkRestClient, never()).sendDriveThru(any(), eq(true));
+    }
+
+    @Test
     void runOnceFailsCandidateWhenShippedShipStationOrderHasNoTracking() throws Exception {
         properties.getSync().getScheduled().setApply(true);
         MarketplaceOrder marketplaceOrder = marketplaceOrder(20, "100");
@@ -335,9 +396,33 @@ class FulfillmentSyncServiceTest {
         when(orderItemImageResolver.resolveImageUrls(marketplaceOrder)).thenReturn(Map.of());
     }
 
+    private void setupShippedShipStationOrder(OffsetDateTime shipDate) {
+        ShipStationOrder existingOrder = ShipStationOrder.builder()
+                .orderId(42L)
+                .orderNumber("BL-100")
+                .orderStatus("shipped")
+                .shipTo(com.shipstation.api.rest.model.Address.builder().country("US").build())
+                .build();
+        when(shipStationRestClient.getOrders(Map.of("orderNumber", "BL-100")))
+                .thenReturn(OrdersList.builder().orders(List.of(existingOrder)).build());
+        when(shipStationRestClient.getShipments(Map.of("orderId", 42L)))
+                .thenReturn(ShipmentsList.builder()
+                        .shipments(List.of(Shipment.builder()
+                                .orderId(42L)
+                                .trackingNumber("940011120621")
+                                .voided(false)
+                                .shipDate(shipDate)
+                                .build()))
+                        .build());
+    }
+
     private static Order orderWithDriveThruSent(String orderId) {
-        Order order = order(orderId, "SHIPPED");
-        order.setSent_drive_thru(true);
+        return orderWithDriveThruStatus(orderId, "SHIPPED", true);
+    }
+
+    private static Order orderWithDriveThruStatus(String orderId, String status, Boolean sentDriveThru) {
+        Order order = order(orderId, status);
+        order.setSent_drive_thru(sentDriveThru);
         return order;
     }
 

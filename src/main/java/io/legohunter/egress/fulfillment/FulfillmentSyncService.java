@@ -41,6 +41,7 @@ public class FulfillmentSyncService {
     private static final String DOMESTIC_TRACKING_URL = "https://tools.usps.com/go/TrackConfirmAction.action?tLabels=%s";
     private static final String INTERNATIONAL_TRACKING_URL = "http://parcelsapp.com/en/tracking/%s";
     private static final boolean SEND_DRIVE_THRU_COPY_TO_ME = true;
+    private static final int UNKNOWN_DRIVE_THRU_RECENCY_DAYS = 10;
 
     private static final TypeReference<List<OrderItem>> ORDER_ITEMS_TYPE = new TypeReference<>() {
     };
@@ -265,10 +266,38 @@ public class FulfillmentSyncService {
         bricklinkRestClient.updateOrder(order.getOrder_id(), orderUpdate);
         bricklinkRestClient.updateOrderStatus(order.getOrder_id(), com.bricklink.api.rest.model.v1.OrderStatus.SHIPPED);
         Order updatedOrder = data(bricklinkRestClient.getOrder(order.getOrder_id()));
-        if (updatedOrder == null || !Boolean.TRUE.equals(updatedOrder.getSent_drive_thru())) {
+        if (shouldSendDriveThru(updatedOrder, tracking)) {
             bricklinkRestClient.sendDriveThru(order.getOrder_id(), SEND_DRIVE_THRU_COPY_TO_ME);
         }
         markMarketplaceOrderShipped(marketplaceOrder);
+    }
+
+    private boolean shouldSendDriveThru(Order updatedOrder, TrackingDetails tracking) {
+        if (updatedOrder == null) {
+            log.info("fulfillment.sync_job.drive_thru_skipped reason=order_unknown");
+            return false;
+        }
+        Boolean sentDriveThru = updatedOrder.getSent_drive_thru();
+        if (Boolean.TRUE.equals(sentDriveThru)) {
+            return false;
+        }
+        if (Boolean.FALSE.equals(sentDriveThru)) {
+            return true;
+        }
+
+        boolean recentShipment = tracking.dateShipped() != null
+                && ZonedDateTime.now(ZoneOffset.UTC).isBefore(tracking.dateShipped().plusDays(UNKNOWN_DRIVE_THRU_RECENCY_DAYS));
+        if (isShipped(updatedOrder) && recentShipment) {
+            return true;
+        }
+        log.info(
+                "fulfillment.sync_job.drive_thru_skipped reason=sent_drive_thru_unknown orderId={} shipped={} dateShipped={} recencyDays={}",
+                updatedOrder.getOrder_id(),
+                isShipped(updatedOrder),
+                tracking.dateShipped(),
+                UNKNOWN_DRIVE_THRU_RECENCY_DAYS
+        );
+        return false;
     }
 
     private void markMarketplaceOrderShipped(MarketplaceOrder marketplaceOrder) {

@@ -39,7 +39,11 @@ lego:
           apply: true
           fixed-delay-ms: 43200000
           initial-delay-ms: 30000
-
+  fulfillment:
+    sync:
+      scheduled:
+        enabled: true
+        apply: true
   image-hosting:
     sync:
       scheduled:
