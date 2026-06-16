@@ -24,8 +24,13 @@ lego:
     orders:
       sync:
         scheduled:
-          enabled: false
-          apply: false
+          enabled: true
+          apply: true
+  fulfillment:
+    sync:
+      scheduled:
+        enabled: true
+        apply: true
 
 kafka:
   bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092

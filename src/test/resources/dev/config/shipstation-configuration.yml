@@ -1,0 +1,5 @@
+shipstation:
+  rest:
+    uri: https://ssapi.shipstation.com
+    api-key: 111111111111111111111
+    api-secret: 111111111111111111111

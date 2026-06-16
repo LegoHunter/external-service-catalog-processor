@@ -7,6 +7,7 @@ spring:
       - file:${import-path}/flickr-configuration.yml
       - file:${import-path}/bitly-configuration.yml
       - file:${import-path}/bricklink-client-api-keys.yml
+      - file:${import-path}/shipstation-configuration.yml
   datasource:
     database-key-name: rasppi5-01-lego-sandbox
     hikari:

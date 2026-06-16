@@ -106,13 +106,13 @@
 
         <dependency>
             <groupId>com.bricklink.api</groupId>
-            <artifactId>bricklink-rest</artifactId>
+            <artifactId>bricklink-spring-boot-starter</artifactId>
             <version>${bricklink-rest.version}</version>
         </dependency>
 
         <dependency>
             <groupId>com.shipstation.api</groupId>
-            <artifactId>shipstation-rest-client</artifactId>
+            <artifactId>shipstation-spring-boot-starter</artifactId>
             <version>${shipstation-rest.version}</version>
         </dependency>
 
