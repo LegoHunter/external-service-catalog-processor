@@ -14,9 +14,12 @@ import com.shipstation.api.rest.model.OrdersList;
 import com.shipstation.api.rest.model.Shipment;
 import com.shipstation.api.rest.model.ShipmentsList;
 import com.shipstation.api.rest.model.ShipStationOrder;
+import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.MarketplaceOrderDao;
+import io.legohunter.data.dao.MarketplaceOrderItemDao;
 import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dto.MarketplaceOrder;
+import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +32,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -43,7 +47,9 @@ class FulfillmentSyncServiceTest {
     private ShipStationRestClient shipStationRestClient;
     private BricklinkRestClient bricklinkRestClient;
     private MarketplaceOrderDao marketplaceOrderDao;
+    private MarketplaceOrderItemDao marketplaceOrderItemDao;
     private MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
+    private ItemInventoryDao itemInventoryDao;
     private FulfillmentOrderItemImageResolver orderItemImageResolver;
     private FulfillmentSyncProperties properties;
     private ObjectMapper objectMapper;
@@ -54,7 +60,9 @@ class FulfillmentSyncServiceTest {
         shipStationRestClient = mock(ShipStationRestClient.class);
         bricklinkRestClient = mock(BricklinkRestClient.class);
         marketplaceOrderDao = mock(MarketplaceOrderDao.class);
+        marketplaceOrderItemDao = mock(MarketplaceOrderItemDao.class);
         marketplaceOrderPayloadDao = mock(MarketplaceOrderPayloadDao.class);
+        itemInventoryDao = mock(ItemInventoryDao.class);
         orderItemImageResolver = mock(FulfillmentOrderItemImageResolver.class);
         properties = new FulfillmentSyncProperties();
         objectMapper = new ObjectMapper().findAndRegisterModules();
@@ -62,7 +70,9 @@ class FulfillmentSyncServiceTest {
                 shipStationRestClient,
                 bricklinkRestClient,
                 marketplaceOrderDao,
+                marketplaceOrderItemDao,
                 marketplaceOrderPayloadDao,
+                itemInventoryDao,
                 new BricklinkShipStationOrderMapper(),
                 orderItemImageResolver,
                 new FulfillmentSyncMetricsService(new SimpleMeterRegistry()),
@@ -119,6 +129,7 @@ class FulfillmentSyncServiceTest {
         assertThat(result.applied()).isFalse();
         verify(orderItemImageResolver).resolveImageUrls(marketplaceOrder);
         verifyNoInteractions(shipStationRestClient, bricklinkRestClient);
+        verifyNoInteractions(itemInventoryDao);
     }
 
     @Test
@@ -238,6 +249,30 @@ class FulfillmentSyncServiceTest {
         verify(bricklinkRestClient).updateOrderStatus("100", com.bricklink.api.rest.model.v1.OrderStatus.SHIPPED);
         verify(bricklinkRestClient, never()).sendDriveThru(any(), eq(true));
         verify(marketplaceOrderDao).update(marketplaceOrder);
+        verify(itemInventoryDao).updateInventoryState(eq(501), eq("SOLD"), any());
+        verify(shipStationRestClient, never()).createOrUpdateOrder(any());
+        assertThat(marketplaceOrder.getExternalStatusCode()).isEqualTo("SHIPPED");
+        assertThat(marketplaceOrder.getTrackingPresent()).isTrue();
+    }
+
+    @Test
+    void runOnceMarksInventorySoldWhenBricklinkOrderAlreadyHasMatchingTracking() throws Exception {
+        properties.getSync().getScheduled().setApply(true);
+        MarketplaceOrder marketplaceOrder = marketplaceOrder(20, "100");
+        Order order = order("100", "SHIPPED");
+        order.getShipping().setTracking_no("940011120621");
+        setupLoadedOrder(marketplaceOrder, order, List.of(orderItem(3001L)));
+        setupShippedShipStationOrder(OffsetDateTime.parse("2026-06-10T12:00:00Z"));
+
+        FulfillmentSyncResult result = service.runOnce();
+
+        assertThat(result.ordersShippedReconciled()).isEqualTo(1);
+        verify(bricklinkRestClient, never()).updateOrder(any(), any(Order.class));
+        verify(bricklinkRestClient, never()).updateOrderStatus(any(), any());
+        verify(bricklinkRestClient, never()).getOrder(any());
+        verify(bricklinkRestClient, never()).sendDriveThru(any(), eq(true));
+        verify(marketplaceOrderDao).update(marketplaceOrder);
+        verify(itemInventoryDao).updateInventoryState(eq(501), eq("SOLD"), any());
         verify(shipStationRestClient, never()).createOrUpdateOrder(any());
         assertThat(marketplaceOrder.getExternalStatusCode()).isEqualTo("SHIPPED");
         assertThat(marketplaceOrder.getTrackingPresent()).isTrue();
@@ -394,6 +429,8 @@ class FulfillmentSyncServiceTest {
                 FulfillmentSyncService.ORDER_ITEMS_RESPONSE_PAYLOAD
         )).thenReturn(Optional.of(payload(502, marketplaceOrder.getMarketplaceOrderId(), FulfillmentSyncService.ORDER_ITEMS_RESPONSE_PAYLOAD, objectMapper.writeValueAsString(orderItems))));
         when(orderItemImageResolver.resolveImageUrls(marketplaceOrder)).thenReturn(Map.of());
+        when(marketplaceOrderItemDao.findByMarketplaceOrderId(marketplaceOrder.getMarketplaceOrderId()))
+                .thenReturn(Set.of(marketplaceOrderItem(501)));
     }
 
     private void setupShippedShipStationOrder(OffsetDateTime shipDate) {
@@ -454,5 +491,13 @@ class FulfillmentSyncServiceTest {
         orderItem.setQuantity(1);
         orderItem.setUnit_price_final(5.49);
         return orderItem;
+    }
+
+    private static MarketplaceOrderItem marketplaceOrderItem(Integer itemInventoryId) {
+        return MarketplaceOrderItem.builder()
+                .marketplaceOrderItemId(601)
+                .marketplaceOrderId(20)
+                .itemInventoryId(itemInventoryId)
+                .build();
     }
 }
