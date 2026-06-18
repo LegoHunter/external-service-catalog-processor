@@ -58,8 +58,3 @@ lego:
         lock-at-least-for: 0s
     readiness:
       require-scheduled-sync-enabled: true
-  fulfillment:
-    sync:
-      scheduled:
-        enabled: true
-        apply: true

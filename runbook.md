@@ -331,7 +331,8 @@ Important boundaries:
 | --- | --- |
 | ShipStation linkage | Linkage is currently idempotent by `orderNumber`/`orderKey`, using the configured prefix plus BrickLink order id. No ShipStation id is persisted in `lego-data` yet. |
 | Source of order details | Fulfillment maps from staged `marketplace_order_payload` JSON captured by the BrickLink order sync. |
-| Phase 6 work | Local transaction finalization, payment/cost/shipping rows, and item inventory sold-state transitions are intentionally not performed by this job yet. |
+| Inventory state | BrickLink order sync marks linked active order items as `RESERVED_FOR_ORDER`. Fulfillment shipped reconciliation marks linked item inventory rows as `SOLD`. |
+| Deferred accounting work | Local transaction finalization, payment/cost/shipping rows, and marketplace order transaction links are intentionally not performed by this job yet. |
 
 Outcomes:
 
@@ -1152,4 +1153,4 @@ order by ai.sort_order;
 - Prefer sync-plan and repair-plan endpoints over the legacy direct sync endpoint for manual image-hosting operations.
 - Before enabling write-side marketplace sync, confirm the marketplace sync tables and constraints exist in the target database.
 - Before enabling fulfillment apply mode, confirm BrickLink order sync has written current staged payloads and start with a small fulfillment batch size.
-- Do not use fulfillment sync as the source of local accounting truth yet; transaction finalization and item inventory sold-state updates are Phase 6 work.
+- Do not use fulfillment sync as the source of local accounting truth yet; transaction finalization, payment/cost/shipping rows, and marketplace order transaction links remain deferred.

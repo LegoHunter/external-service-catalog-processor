@@ -16,7 +16,9 @@ import com.shipstation.api.rest.model.ShipStationOrder;
 import com.shipstation.api.rest.model.Shipment;
 import com.shipstation.api.rest.model.ShipmentsList;
 import io.legohunter.data.dao.MarketplaceOrderDao;
+import io.legohunter.data.dao.MarketplaceOrderItemDao;
 import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
+import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -40,7 +42,9 @@ import static org.mockito.Mockito.when;
 
 class FulfillmentSyncServiceApplyTest {
     private MarketplaceOrderDao marketplaceOrderDao;
+    private MarketplaceOrderItemDao marketplaceOrderItemDao;
     private MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
+    private ItemInventoryDao itemInventoryDao;
     private FulfillmentOrderItemImageResolver orderItemImageResolver;
     private ShipStationRestClient shipStationRestClient;
     private BricklinkRestClient bricklinkRestClient;
@@ -51,7 +55,9 @@ class FulfillmentSyncServiceApplyTest {
     @BeforeEach
     void setUp() {
         marketplaceOrderDao = mock(MarketplaceOrderDao.class);
+        marketplaceOrderItemDao = mock(MarketplaceOrderItemDao.class);
         marketplaceOrderPayloadDao = mock(MarketplaceOrderPayloadDao.class);
+        itemInventoryDao = mock(ItemInventoryDao.class);
         orderItemImageResolver = mock(FulfillmentOrderItemImageResolver.class);
         shipStationRestClient = mock(ShipStationRestClient.class);
         bricklinkRestClient = mock(BricklinkRestClient.class);
@@ -59,13 +65,15 @@ class FulfillmentSyncServiceApplyTest {
         properties.getSync().getScheduled().setApply(true);
         objectMapper = new ObjectMapper().findAndRegisterModules();
         service = new FulfillmentSyncService(
+                shipStationRestClient,
+                bricklinkRestClient,
                 marketplaceOrderDao,
+                marketplaceOrderItemDao,
                 marketplaceOrderPayloadDao,
+                itemInventoryDao,
                 new BricklinkShipStationOrderMapper(),
                 orderItemImageResolver,
                 new FulfillmentSyncMetricsService(new SimpleMeterRegistry()),
-                Optional.of(shipStationRestClient),
-                Optional.of(bricklinkRestClient),
                 properties,
                 objectMapper
         );
