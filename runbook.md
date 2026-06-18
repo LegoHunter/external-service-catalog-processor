@@ -1006,11 +1006,63 @@ join marketplace_order o on o.marketplace_order_id = oi.marketplace_order_id
 where o.marketplace_code = 'BRICKLINK'
 order by oi.marketplace_order_id desc, oi.marketplace_order_item_id;
 
-select marketplace_code, payload_type, http_status_code, payload_hash, fetched_at
-from marketplace_order_payload
-where marketplace_code = 'BRICKLINK'
-order by marketplace_order_payload_id desc
+select o.marketplace_code, o.external_order_id, p.payload_type_code, p.payload_hash, p.captured_at
+from marketplace_order_payload p
+join marketplace_order o
+  on o.marketplace_order_id = p.marketplace_order_id
+where o.marketplace_code = 'BRICKLINK'
+order by p.marketplace_order_payload_id desc
 limit 25;
+```
+
+### Fulfillment Sync SQL Checks
+
+Fulfillment does not currently write new local fulfillment tables. It reads staged marketplace order data and writes to ShipStation and, for shipped reconciliation, BrickLink. These checks validate whether local staged data is ready for fulfillment:
+
+```sql
+select marketplace_order_id, marketplace_code, external_order_id, external_status_code, last_seen_at
+from marketplace_order
+where marketplace_code = 'BRICKLINK'
+  and external_status_code in ('PENDING', 'UPDATED', 'READY', 'PROCESSING', 'PAID', 'PACKED')
+order by last_seen_at desc
+limit 25;
+
+select o.external_order_id,
+       count(*) as item_count,
+       sum(case when oi.marketplace_listing_id is null then 1 else 0 end) as missing_listing_link_count,
+       sum(case when oi.item_inventory_id is null then 1 else 0 end) as missing_inventory_link_count
+from marketplace_order o
+join marketplace_order_item oi
+  on oi.marketplace_order_id = o.marketplace_order_id
+where o.marketplace_code = 'BRICKLINK'
+group by o.external_order_id
+order by o.external_order_id desc;
+
+select o.external_order_id,
+       p.payload_type_code,
+       p.payload_hash,
+       p.captured_at
+from marketplace_order o
+join marketplace_order_payload p
+  on p.marketplace_order_id = o.marketplace_order_id
+where o.marketplace_code = 'BRICKLINK'
+  and p.payload_type_code in ('ORDER_RESPONSE', 'ORDER_ITEMS_RESPONSE')
+order by p.marketplace_order_payload_id desc
+limit 50;
+
+select oi.external_order_item_id,
+       oi.item_inventory_id,
+       iip.item_inventory_photo_id,
+       iip.primary,
+       ei.image_url
+from marketplace_order_item oi
+left join item_inventory_photo iip
+  on iip.item_inventory_id = oi.item_inventory_id
+left join external_image ei
+  on ei.item_inventory_photo_id = iip.item_inventory_photo_id
+ and ei.external_service_id = 10
+where oi.marketplace_order_id = 100
+order by oi.marketplace_order_item_id, iip.primary desc, iip.item_inventory_photo_id;
 ```
 
 ### Fulfillment SQL Checks
