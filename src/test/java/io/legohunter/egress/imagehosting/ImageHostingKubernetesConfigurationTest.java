@@ -11,12 +11,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ImageHostingKubernetesConfigurationTest {
 
     @Test
-    void kubernetesProfileEnablesScheduledSyncInDryRunMode() {
+    void kubernetesProfileEnablesScheduledSyncInApplyMode() {
         Properties properties = load("application-kubernetes.yml");
 
         assertThat(properties)
                 .containsEntry("lego.image-hosting.sync.scheduled.enabled", true)
-                .containsEntry("lego.image-hosting.sync.scheduled.apply", false)
+                .containsEntry("lego.image-hosting.sync.scheduled.apply", true)
                 .containsEntry("lego.image-hosting.sync.scheduled.batch-size", 25)
                 .containsEntry("lego.image-hosting.sync.scheduled.concurrency", 2)
                 .containsEntry("lego.image-hosting.sync.scheduled.retry-failed", true)

@@ -10,6 +10,7 @@ import com.bricklink.api.rest.model.v1.Shipping;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.legohunter.data.dao.BricklinkMarketplaceListingDao;
+import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.MarketplaceOrderDao;
 import io.legohunter.data.dao.MarketplaceOrderItemDao;
@@ -54,6 +55,7 @@ public class BricklinkOpenOrderProbeService {
     private static final String CANCELLED = "CANCELLED";
     private static final String ORDER_RESPONSE_PAYLOAD = "ORDER_RESPONSE";
     private static final String ORDER_ITEMS_RESPONSE_PAYLOAD = "ORDER_ITEMS_RESPONSE";
+    private static final String RESERVED_FOR_ORDER = "RESERVED_FOR_ORDER";
 
     private final BricklinkRestClient bricklinkRestClient;
     private final BricklinkOrderSyncProperties properties;
@@ -64,6 +66,7 @@ public class BricklinkOpenOrderProbeService {
     private final MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao;
     private final MarketplaceListingDao marketplaceListingDao;
+    private final ItemInventoryDao itemInventoryDao;
     private final ObjectMapper objectMapper;
 
     public BricklinkOrderProbeResult runOnce() {
@@ -245,11 +248,11 @@ public class BricklinkOpenOrderProbeService {
                 orderItemsJson
         ));
 
-        int orderItemsWritten = syncOrderItems(persistedOrder.getMarketplaceOrderId(), order.getOrder_id(), orderItems);
+        int orderItemsWritten = syncOrderItems(persistedOrder.getMarketplaceOrderId(), order.getOrder_id(), order.getStatus(), orderItems);
         return new BricklinkOrderWriteResult(1, orderItemsWritten, 2);
     }
 
-    private int syncOrderItems(Integer marketplaceOrderId, String externalOrderId, List<OrderItem> orderItems) {
+    private int syncOrderItems(Integer marketplaceOrderId, String externalOrderId, String orderStatus, List<OrderItem> orderItems) {
         Map<String, MarketplaceOrderItem> existingItemsByLineKey = marketplaceOrderItemDao.findByMarketplaceOrderId(marketplaceOrderId).stream()
                 .filter(existingItem -> present(existingItem.getExternalOrderItemId()))
                 .collect(Collectors.toMap(
@@ -259,6 +262,7 @@ public class BricklinkOpenOrderProbeService {
                         LinkedHashMap::new
                 ));
         Set<String> seenLineKeys = new HashSet<>();
+        Set<Integer> reservedInventoryIds = new HashSet<>();
         int written = 0;
         for (int index = 0; index < orderItems.size(); index++) {
             OrderItem orderItem = orderItems.get(index);
@@ -272,13 +276,31 @@ public class BricklinkOpenOrderProbeService {
                 marketplaceOrderItem.setMarketplaceOrderItemId(existingItem.getMarketplaceOrderItemId());
                 marketplaceOrderItemDao.update(marketplaceOrderItem);
             }
+            if (!CANCELLED.equalsIgnoreCase(orderStatus) && marketplaceOrderItem.getItemInventoryId() != null) {
+                reservedInventoryIds.add(marketplaceOrderItem.getItemInventoryId());
+            }
             written++;
         }
 
         existingItemsByLineKey.values().stream()
                 .filter(existingItem -> !seenLineKeys.contains(existingItem.getExternalOrderItemId()))
                 .forEach(existingItem -> marketplaceOrderItemDao.delete(existingItem.getMarketplaceOrderItemId()));
+        reserveInventory(marketplaceOrderId, externalOrderId, reservedInventoryIds);
         return written;
+    }
+
+    private void reserveInventory(Integer marketplaceOrderId, String externalOrderId, Set<Integer> itemInventoryIds) {
+        ZonedDateTime reservedAt = ZonedDateTime.now(ZoneOffset.UTC);
+        itemInventoryIds.forEach(itemInventoryId -> {
+            itemInventoryDao.updateInventoryState(itemInventoryId, RESERVED_FOR_ORDER, reservedAt);
+            log.info(
+                    "bricklink.order_sync.probe.inventory_reserved marketplaceOrderId={} externalOrderId={} itemInventoryId={} stateChangedAt={}",
+                    marketplaceOrderId,
+                    externalOrderId,
+                    itemInventoryId,
+                    reservedAt
+            );
+        });
     }
 
     private MarketplaceOrder marketplaceOrder(Integer syncRunId, Order order, String payloadHash) {

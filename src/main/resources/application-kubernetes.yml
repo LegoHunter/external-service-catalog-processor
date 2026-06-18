@@ -48,7 +48,7 @@ lego:
     sync:
       scheduled:
         enabled: true
-        apply: false
+        apply: true
         batch-size: 25
         concurrency: 2
         retry-failed: true

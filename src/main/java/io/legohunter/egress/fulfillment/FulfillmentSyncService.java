@@ -12,9 +12,12 @@ import com.shipstation.api.rest.model.OrdersList;
 import com.shipstation.api.rest.model.Shipment;
 import com.shipstation.api.rest.model.ShipmentsList;
 import com.shipstation.api.rest.model.ShipStationOrder;
+import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.MarketplaceOrderDao;
+import io.legohunter.data.dao.MarketplaceOrderItemDao;
 import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dto.MarketplaceOrder;
+import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +31,7 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -42,6 +46,7 @@ public class FulfillmentSyncService {
     private static final String INTERNATIONAL_TRACKING_URL = "http://parcelsapp.com/en/tracking/%s";
     private static final boolean SEND_DRIVE_THRU_COPY_TO_ME = true;
     private static final int UNKNOWN_DRIVE_THRU_RECENCY_DAYS = 10;
+    private static final String SOLD = "SOLD";
 
     private static final TypeReference<List<OrderItem>> ORDER_ITEMS_TYPE = new TypeReference<>() {
     };
@@ -49,7 +54,9 @@ public class FulfillmentSyncService {
     private final ShipStationRestClient shipStationRestClient;
     private final BricklinkRestClient bricklinkRestClient;
     private final MarketplaceOrderDao marketplaceOrderDao;
+    private final MarketplaceOrderItemDao marketplaceOrderItemDao;
     private final MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
+    private final ItemInventoryDao itemInventoryDao;
     private final BricklinkShipStationOrderMapper shipStationOrderMapper;
     private final FulfillmentOrderItemImageResolver orderItemImageResolver;
     private final FulfillmentSyncMetricsService metricsService;
@@ -249,6 +256,7 @@ public class FulfillmentSyncService {
     private void reconcileShippedOrder(MarketplaceOrder marketplaceOrder, Order order, TrackingDetails tracking) {
         if (trackingMatches(order, tracking) && isShipped(order)) {
             markMarketplaceOrderShipped(marketplaceOrder);
+            markLinkedInventorySold(marketplaceOrder, tracking.dateShipped());
             return;
         }
 
@@ -270,6 +278,7 @@ public class FulfillmentSyncService {
             bricklinkRestClient.sendDriveThru(order.getOrder_id(), SEND_DRIVE_THRU_COPY_TO_ME);
         }
         markMarketplaceOrderShipped(marketplaceOrder);
+        markLinkedInventorySold(marketplaceOrder, tracking.dateShipped());
     }
 
     private boolean shouldSendDriveThru(Order updatedOrder, TrackingDetails tracking) {
@@ -306,6 +315,25 @@ public class FulfillmentSyncService {
         marketplaceOrder.setStatusChangedAt(ZonedDateTime.now(ZoneOffset.UTC));
         marketplaceOrder.setLastSeenAt(ZonedDateTime.now(ZoneOffset.UTC));
         marketplaceOrderDao.update(marketplaceOrder);
+    }
+
+    private void markLinkedInventorySold(MarketplaceOrder marketplaceOrder, ZonedDateTime soldAt) {
+        ZonedDateTime stateChangedAt = soldAt == null ? ZonedDateTime.now(ZoneOffset.UTC) : soldAt;
+        marketplaceOrderItemDao.findByMarketplaceOrderId(marketplaceOrder.getMarketplaceOrderId()).stream()
+                .map(MarketplaceOrderItem::getItemInventoryId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .forEach(itemInventoryId -> {
+                    itemInventoryDao.updateInventoryState(itemInventoryId, SOLD, stateChangedAt);
+                    log.info(
+                            "fulfillment.sync_job.inventory_sold provider={} marketplaceOrderId={} externalOrderId={} itemInventoryId={} stateChangedAt={}",
+                            properties.effectiveMetricsTag(),
+                            marketplaceOrder.getMarketplaceOrderId(),
+                            marketplaceOrder.getExternalOrderId(),
+                            itemInventoryId,
+                            stateChangedAt
+                    );
+                });
     }
 
     private boolean trackingMatches(Order order, TrackingDetails tracking) {
