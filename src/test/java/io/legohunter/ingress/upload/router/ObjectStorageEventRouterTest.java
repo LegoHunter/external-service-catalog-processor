@@ -2,6 +2,7 @@ package io.legohunter.ingress.upload.router;
 
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
 import io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent;
+import io.legohunter.ingress.config.storage.ObjectStorageProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -26,7 +27,7 @@ class ObjectStorageEventRouterTest {
 
     @BeforeEach
     void setUp() {
-        router = new ObjectStorageEventRouter(kafkaTemplate);
+        router = new ObjectStorageEventRouter(kafkaTemplate, objectStorageProperties("lego-photos-sandbox"));
 
         ReflectionTestUtils.setField(router, "photoUploadTopic", "sandbox-upload-photo");
         ReflectionTestUtils.setField(router, "photoDeleteTopic", "sandbox-delete-photo");
@@ -136,5 +137,13 @@ class ObjectStorageEventRouterTest {
                 .eventName("s3:ObjectRemoved:Delete")
                 .currentTimeStamp(1L)
                 .build();
+    }
+
+    private static ObjectStorageProperties objectStorageProperties(String finalPhotoBucket) {
+        ObjectStorageProperties properties = new ObjectStorageProperties();
+        ObjectStorageProperties.Buckets buckets = new ObjectStorageProperties.Buckets();
+        buckets.setFinalPhoto(finalPhotoBucket);
+        properties.setBuckets(buckets);
+        return properties;
     }
 }

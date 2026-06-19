@@ -7,6 +7,7 @@ import io.legohunter.imaging.metadata.model.ConditionEnum;
 import io.legohunter.imaging.metadata.model.ImageMetadata;
 import io.legohunter.imaging.scaling.ImageScalingService;
 import io.legohunter.ingress.common.logging.LoggingContext;
+import io.legohunter.ingress.config.storage.ObjectStorageProperties;
 import io.legohunter.ingress.s3.api.MinioService;
 import io.legohunter.ingress.s3.exception.S3ObjectNotFoundException;
 import io.legohunter.ingress.source.photo.metrics.PhotoMetricsService;
@@ -41,7 +42,6 @@ import static io.legohunter.data.enums.PhotoStatus.PROCESSED;
 @RequiredArgsConstructor
 public class PhotoProcessingService {
 
-    private static final String FINAL_BUCKET = "lego-photos-sandbox";
     private static final String PHOTO_UPLOAD_PREFIX = "photos/";
     private static final String REJECTED_PHOTO_PREFIX = "photos/rejected/";
     private static final String DUPLICATE_PHOTO_PREFIX = "photos/duplicate/";
@@ -52,6 +52,7 @@ public class PhotoProcessingService {
     private final MetadataExtractorService metadataExtractorService;
     private final MetadataFingerprintService metadataFingerprintService;
     private final PhotoMetricsService photoMetricsService;
+    private final ObjectStorageProperties objectStorageProperties;
 
     private final ItemInventoryDao itemInventoryDao;
     private final ItemInventoryPhotoDao itemInventoryPhotoDao;
@@ -488,6 +489,9 @@ public class PhotoProcessingService {
         // UPLOAD TO FINAL BUCKET WHEN CONTENT IS NEW
         // =========================================================
 
+        String finalBucket =
+                objectStorageProperties.finalPhotoBucket();
+
         boolean uploadFinalObject =
                 !replaceExistingPhoto || contentChanged;
 
@@ -496,7 +500,7 @@ public class PhotoProcessingService {
             if (uploadFinalObject) {
 
                 minioService.putObject(
-                        FINAL_BUCKET,
+                        finalBucket,
                         destinationKey,
                         new ByteArrayInputStream(scaledBytes),
                         scaledBytes.length,
@@ -505,7 +509,7 @@ public class PhotoProcessingService {
 
                 log.info(
                         "photo.upload.success bucket={} key={}",
-                        FINAL_BUCKET,
+                        finalBucket,
                         destinationKey
                 );
 
@@ -555,6 +559,7 @@ public class PhotoProcessingService {
                         md5,
                         metadataHash,
                         normalizedFileName,
+                        finalBucket,
                         destinationKey,
                         scaledBytes.length,
                         primaryPhoto,
@@ -569,7 +574,7 @@ public class PhotoProcessingService {
                         md5,
                         metadataHash,
                         normalizedFileName,
-                        FINAL_BUCKET,
+                        finalBucket,
                         destinationKey,
                         scaledBytes.length,
                         primaryPhoto,
@@ -596,13 +601,13 @@ public class PhotoProcessingService {
                 try {
 
                     minioService.deleteObject(
-                            FINAL_BUCKET,
+                            finalBucket,
                             destinationKey
                     );
 
                     log.warn(
                             "photo.upload.rollback.deleted bucket={} key={}",
-                            FINAL_BUCKET,
+                            finalBucket,
                             destinationKey
                     );
 
@@ -816,6 +821,7 @@ public class PhotoProcessingService {
             String md5,
             String metadataHash,
             String normalizedFileName,
+            String finalBucket,
             String destinationKey,
             long fileSize,
             boolean primaryPhoto,
@@ -833,7 +839,7 @@ public class PhotoProcessingService {
                             normalizedFileName,
                             md5,
                             metadataHash,
-                            FINAL_BUCKET,
+                            finalBucket,
                             destinationKey,
                             fileSize,
                             primaryPhoto,

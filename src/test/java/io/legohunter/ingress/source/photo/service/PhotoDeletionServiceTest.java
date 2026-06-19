@@ -1,6 +1,7 @@
 package io.legohunter.ingress.source.photo.service;
 
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
+import io.legohunter.ingress.config.storage.ObjectStorageProperties;
 import io.legohunter.data.dao.ItemInventoryPhotoDao;
 import io.legohunter.data.dto.ItemInventoryPhoto;
 import io.legohunter.data.enums.PhotoStatus;
@@ -33,7 +34,7 @@ class PhotoDeletionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PhotoDeletionService(itemInventoryPhotoDao);
+        service = new PhotoDeletionService(itemInventoryPhotoDao, objectStorageProperties(BUCKET));
     }
 
     @Test
@@ -125,5 +126,13 @@ class PhotoDeletionServiceTest {
                 .primary(true)
                 .status(PhotoStatus.PROCESSED)
                 .build();
+    }
+
+    private static ObjectStorageProperties objectStorageProperties(String finalPhotoBucket) {
+        ObjectStorageProperties properties = new ObjectStorageProperties();
+        ObjectStorageProperties.Buckets buckets = new ObjectStorageProperties.Buckets();
+        buckets.setFinalPhoto(finalPhotoBucket);
+        properties.setBuckets(buckets);
+        return properties;
     }
 }
