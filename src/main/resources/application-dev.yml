@@ -1,24 +1,34 @@
 spring:
   config:
     import:
-      - classpath:/dev/config/bitly-configuration.yml
-      - classpath:/dev/config/database-configuration.yml
-      - classpath:/dev/config/flickr-configuration.yml
-      - classpath:/dev/config/kafka-configuration.yml
-      - classpath:/dev/config/minio-configuration.yml
-      - classpath:/dev/config/shipstation-configuration.yml
+      - file:${import-path}/database-configuration.yml
+      - file:${import-path}/kafka-configuration.yml
+      - file:${import-path}/minio-configuration.yml
+      - file:${import-path}/flickr-configuration.yml
+      - file:${import-path}/bitly-configuration.yml
+      - file:${import-path}/bricklink-client-api-keys.yml
+      - file:${import-path}/shipstation-configuration.yml
   datasource:
-    database-key-name: test
+    database-key-name: rasppi5-01-lego-sandbox
+    hikari:
+      connection-timeout: 10000
+      idle-timeout: 30000
+      connection-test-query: SELECT 1
+      initialization-fail-timeout: 10000
+      auto-commit: false
+      login-timeout: 10000
+      minimum-idle: 10
+      maximum-pool-size: 40
+      validation-timeout: 10000
+      pool-name: rasppi5-01-mysql-jdbc-pool
 
 lego:
   object-storage:
     buckets:
-      final-photo: lego-photos-sandbox
-  minio:
-    url: http://localhost
+      final-photo: lego-photos-dev
 
 kafka:
-  bootstrap-servers: localhost:31092
+  bootstrap-servers: redpanda-dev-0.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-1.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-2.redpanda-dev.redpanda-dev.svc.cluster.local:9092
   properties:
     security.protocol: SASL_SSL
     sasl.mechanism: SCRAM-SHA-512
@@ -52,91 +62,94 @@ kafka:
       metadata.max.age.ms: 300000
   topic-configuration:
     minio-s3:
-      topics: sandbox-minio-s3-events
+      topics: dev-minio-s3-events
       consumer:
-        group-id: sandbox-minio-s3-events-group
+        group-id: dev-minio-s3-events-group
         properties:
           value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       producer:
         retries: 3
     upload-minio-s3:
-      topics: sandbox-upload-photo, sandbox-delete-photo, sandbox-upload-bricklink-catalog, sandbox-upload-bricklink-category, sandbox-upload-rebrickable-catalog, sandbox-upload-rebrickable-theme
+      topics: dev-upload-photo, dev-delete-photo, dev-upload-bricklink-catalog, dev-upload-bricklink-category, dev-upload-rebrickable-catalog, dev-upload-rebrickable-theme
       producer:
         retries: 3
         value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     upload-photo:
-      topic: sandbox-upload-photo
+      topic: dev-upload-photo
       consumer:
-        group-id: sandbox-upload-photo-group
+        group-id: dev-upload-photo-group
+        concurrency: 1
         properties:
+          max-poll-records: 1
+          max-poll-interval-ms: 1800000
           spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
     delete-photo:
-      topic: sandbox-delete-photo
+      topic: dev-delete-photo
       consumer:
-        group-id: sandbox-delete-photo-group
+        group-id: dev-delete-photo-group
         properties:
           spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent
       producer:
         retries: 3
     upload-bricklink-catalog:
-      topic: sandbox-upload-bricklink-catalog
+      topic: dev-upload-bricklink-catalog
       consumer:
-        group-id: sandbox-upload-bricklink-catalog-group
+        group-id: dev-upload-bricklink-catalog-group
         properties:
           spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
     upload-bricklink-category:
-      topic: sandbox-upload-bricklink-category
+      topic: dev-upload-bricklink-category
       consumer:
-        group-id: sandbox-upload-bricklink-category-group
+        group-id: dev-upload-bricklink-category-group
         properties:
           spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
     upload-rebrickable-catalog:
-      topic: sandbox-upload-rebrickable-catalog
+      topic: dev-upload-rebrickable-catalog
       consumer:
-        group-id: sandbox-upload-rebrickable-catalog-group
+        group-id: dev-upload-rebrickable-catalog-group
         properties:
           spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
     upload-rebrickable-theme:
-      topic: sandbox-upload-rebrickable-theme
+      topic: dev-upload-rebrickable-theme
       consumer:
-        group-id: sandbox-upload-rebrickable-theme-group
+        group-id: dev-upload-rebrickable-theme-group
         properties:
           spring-json-value-default-type: io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent
       producer:
         retries: 3
     photo-upload-entry:
-      topic: sandbox-photo-upload-entry
+      topic: dev-photo-upload-entry
       consumer:
-        group-id: sandbox-photo-upload-entry-group
+        group-id: dev-photo-upload-entry-group
     bricklink-catalog-entry:
-      topic: sandbox-bricklink-catalog-entry
+      topic: dev-bricklink-catalog-entry
       consumer:
-        group-id: sandbox-bricklink-catalog-entry-group
+        group-id: dev-bricklink-catalog-entry-group
       producer:
         retries: 3
     bricklink-category-entry:
-      topic: sandbox-bricklink-category-entry
+      topic: dev-bricklink-category-entry
       consumer:
-        group-id: sandbox-bricklink-category-entry-group
+        group-id: dev-bricklink-category-entry-group
       producer:
         retries: 3
     rebrickable-catalog-entry:
-      topic: sandbox-rebrickable-catalog-entry
+      topic: dev-rebrickable-catalog-entry
       consumer:
-        group-id: sandbox-rebrickable-catalog-entry-group
+        group-id: dev-rebrickable-catalog-entry-group
       producer:
         retries: 3
     rebrickable-theme-entry:
-      topic: sandbox-rebrickable-theme-entry
+      topic: dev-rebrickable-theme-entry
       consumer:
-        group-id: sandbox-rebrickable-theme-entry-group
+        group-id: dev-rebrickable-theme-entry-group
       producer:
         retries: 3

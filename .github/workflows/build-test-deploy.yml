@@ -7,7 +7,6 @@ on:
   pull_request:
     branches:
       - develop
-      - main
     types:
       - closed
 
@@ -17,6 +16,7 @@ jobs:
   # 1️⃣ Maven Build & Deploy
   # -----------------------------------------
   maven-build:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -110,10 +110,6 @@ jobs:
             if [[ "${{ github.event.pull_request.base.ref }}" == "develop" ]]; then
               OVERLAY="dev"
               NAMESPACE="services-dev"
-
-            elif [[ "${{ github.event.pull_request.base.ref }}" == "main" ]]; then
-              OVERLAY="prod"
-              NAMESPACE="services-prod"
             fi
 
           else

@@ -2,6 +2,7 @@ package io.legohunter.ingress.upload.router;
 
 import io.legohunter.ingress.common.kafka.event.ObjectDeletedEvent;
 import io.legohunter.ingress.common.kafka.event.ObjectUploadedEvent;
+import io.legohunter.ingress.config.storage.ObjectStorageProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,7 +15,6 @@ import java.util.regex.Pattern;
 @Component
 public class ObjectStorageEventRouter {
 
-    private static final String FINAL_PHOTO_BUCKET = "lego-photos-sandbox";
     private static final String PHOTO_UPLOAD_PREFIX = "photos/";
     private static final String REJECTED_PHOTO_PREFIX = "photos/rejected/";
     private static final String DUPLICATE_PHOTO_PREFIX = "photos/duplicate/";
@@ -22,11 +22,14 @@ public class ObjectStorageEventRouter {
     private static final Pattern MD5_PATTERN = Pattern.compile("^[a-fA-F0-9]{32}$");
 
     private final KafkaTemplate<String, Object> uploadMinioS3KafkaTemplate;
+    private final ObjectStorageProperties objectStorageProperties;
 
     public ObjectStorageEventRouter(
             @Qualifier("uploadMinioS3KafkaTemplate")
-            KafkaTemplate<String, Object> uploadMinioS3KafkaTemplate) {
+            KafkaTemplate<String, Object> uploadMinioS3KafkaTemplate,
+            ObjectStorageProperties objectStorageProperties) {
         this.uploadMinioS3KafkaTemplate = uploadMinioS3KafkaTemplate;
+        this.objectStorageProperties = objectStorageProperties;
     }
 
     @Value("${kafka.topic-configuration.upload-photo.topic}")
@@ -71,7 +74,7 @@ public class ObjectStorageEventRouter {
         String bucket = event.getBucket();
         String key = event.getKey();
 
-        if (FINAL_PHOTO_BUCKET.equals(bucket) && isFinalPhotoKey(key)) {
+        if (objectStorageProperties.finalPhotoBucket().equals(bucket) && isFinalPhotoKey(key)) {
             log.info("Routing delete event {} with key {} to {}", event, key, photoDeleteTopic);
             uploadMinioS3KafkaTemplate.send(photoDeleteTopic, key, event);
             return;

@@ -6,6 +6,7 @@ import io.legohunter.imaging.metadata.impl.MetadataExtractorService;
 import io.legohunter.imaging.metadata.model.ConditionEnum;
 import io.legohunter.imaging.metadata.model.ImageMetadata;
 import io.legohunter.imaging.scaling.ImageScalingService;
+import io.legohunter.ingress.config.storage.ObjectStorageProperties;
 import io.legohunter.ingress.s3.api.MinioService;
 import io.legohunter.ingress.source.photo.metrics.PhotoMetricsService;
 import io.legohunter.ingress.source.photo.model.PhotoUploadEvent;
@@ -66,6 +67,9 @@ class PhotoProcessingServiceTest {
     private PhotoMetricsService photoMetricsService;
 
     @Mock
+    private ObjectStorageProperties objectStorageProperties;
+
+    @Mock
     private ItemInventoryDao itemInventoryDao;
 
     @Mock
@@ -87,6 +91,7 @@ class PhotoProcessingServiceTest {
     void setUp() {
         originalBytes = "original-image".getBytes();
         scaledBytes = "scaled-image".getBytes();
+        lenient().when(objectStorageProperties.finalPhotoBucket()).thenReturn("lego-photos-sandbox");
         lenient().when(metadataFingerprintService.calculateHash(any())).thenReturn("metadata-hash");
         lenient().doAnswer(invocation -> invocation.getArgument(0))
                 .when(itemInventoryDao)

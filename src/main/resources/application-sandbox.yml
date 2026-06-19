@@ -22,6 +22,11 @@ spring:
       validation-timeout: 10000
       pool-name: rasppi5-01-mysql-jdbc-pool
 
+lego:
+  object-storage:
+    buckets:
+      final-photo: lego-photos-sandbox
+
 kafka:
   bootstrap-servers: redpanda-dev-0.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-1.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-2.redpanda-dev.redpanda-dev.svc.cluster.local:9092
   properties:
