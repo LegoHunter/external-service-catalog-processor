@@ -95,7 +95,7 @@ class ImageHostingReconciliationPlannerTest {
     }
 
     @Test
-    void planRequiresReviewWhenDbPhotoIdIsMissingFromRemoteAlbum() {
+    void planUpdatesAlbumMembershipWhenDbPhotoIdIsMissingFromRemoteAlbum() {
         ImageHostingDesiredStateSnapshot desiredState = desiredState(
                 album("album-100"),
                 List.of(desiredPhoto(11, true, "photo-11", "metadata-11", "metadata-11"))
@@ -109,9 +109,11 @@ class ImageHostingReconciliationPlannerTest {
 
         assertThat(plan.getActions())
                 .extracting(SyncAction::getType)
-                .containsExactly(SyncActionType.REPAIR_PHOTO_ID, SyncActionType.UPDATE_ALBUM_MEMBERSHIP);
-        assertThat(plan.getActions().getFirst().getSafety()).isEqualTo(SyncActionSafety.REQUIRES_REVIEW);
-        assertThat(plan.getActions().get(1).getSafety()).isEqualTo(SyncActionSafety.SAFE_AUTOMATIC);
+                .containsExactly(SyncActionType.UPDATE_ALBUM_MEMBERSHIP);
+        assertThat(plan.getActions().getFirst().getSafety()).isEqualTo(SyncActionSafety.SAFE_AUTOMATIC);
+        assertThat(plan.getActions().getFirst().getAttributes())
+                .containsEntry("desiredOnlyPhotoIds", "photo-11")
+                .containsEntry("remoteOnlyPhotoIds", "");
     }
 
     @Test

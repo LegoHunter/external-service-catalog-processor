@@ -8,6 +8,7 @@ import java.util.List;
 public record ImageHostingScheduledSyncCandidateCounts(
         int missingAlbumLink,
         int missingPhotoLink,
+        int missingAlbumMembership,
         int failedSync,
         int pendingSync,
         int metadataChanged
@@ -16,6 +17,7 @@ public record ImageHostingScheduledSyncCandidateCounts(
         return new ImageHostingScheduledSyncCandidateCounts(
                 count(candidates, ImageHostingSyncCandidateReason.MISSING_ALBUM_LINK),
                 count(candidates, ImageHostingSyncCandidateReason.MISSING_PHOTO_LINK),
+                count(candidates, ImageHostingSyncCandidateReason.MISSING_ALBUM_MEMBERSHIP),
                 count(candidates, ImageHostingSyncCandidateReason.FAILED_SYNC),
                 count(candidates, ImageHostingSyncCandidateReason.PENDING_SYNC),
                 count(candidates, ImageHostingSyncCandidateReason.METADATA_CHANGED)
