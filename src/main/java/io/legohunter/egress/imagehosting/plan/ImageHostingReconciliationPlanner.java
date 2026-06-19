@@ -29,8 +29,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -126,7 +124,6 @@ public class ImageHostingReconciliationPlanner {
             ImageHostingRemoteSnapshot remote,
             PlanActionBuilder actions
     ) {
-        Map<String, HostedPhoto> remotePhotosById = remotePhotosById(remote);
         for (DesiredImageHostingPhoto desiredPhoto : desiredState.getPhotos()) {
             String photoId = desiredPhoto.getExternalServiceImageId();
             if (!hasText(photoId)) {
@@ -139,17 +136,6 @@ public class ImageHostingReconciliationPlanner {
                                 "desiredTitle", photoTitle(desiredPhoto),
                                 "desiredDescription", photoDescription(desiredPhoto)
                         )
-                );
-                continue;
-            }
-
-            if (remote.isAlbumFound() && !remotePhotosById.containsKey(photoId)) {
-                actions.addPhotoAction(
-                        SyncActionType.REPAIR_PHOTO_ID,
-                        SyncActionSafety.REQUIRES_REVIEW,
-                        desiredPhoto,
-                        "DB photo id is not present in the Flickr album snapshot",
-                        Map.of("externalServiceImageId", photoId)
                 );
                 continue;
             }
@@ -241,17 +227,6 @@ public class ImageHostingReconciliationPlanner {
                 .provider(desiredState.getProvider())
                 .externalServiceId(desiredState.getExternalServiceId())
                 .build();
-    }
-
-    private Map<String, HostedPhoto> remotePhotosById(ImageHostingRemoteSnapshot remote) {
-        return remote.getPhotos().stream()
-                .filter(photo -> hasText(photo.getId()))
-                .collect(Collectors.toMap(
-                        HostedPhoto::getId,
-                        Function.identity(),
-                        (first, ignored) -> first,
-                        LinkedHashMap::new
-                ));
     }
 
     private List<String> desiredPhotoIds(List<DesiredImageHostingPhoto> photos) {

@@ -78,12 +78,13 @@ public class ImageHostingScheduledSyncJob {
                 ImageHostingScheduledSyncCandidateCounts.from(candidates);
 
         log.info(
-                "image_hosting.sync_job.candidates_selected provider={} externalServiceId={} itemInventoriesDiscovered={} missingAlbumLink={} missingPhotoLink={} failedSync={} pendingSync={} metadataChanged={}",
+                "image_hosting.sync_job.candidates_selected provider={} externalServiceId={} itemInventoriesDiscovered={} missingAlbumLink={} missingPhotoLink={} missingAlbumMembership={} failedSync={} pendingSync={} metadataChanged={}",
                 provider.provider(),
                 provider.externalServiceId(),
                 itemInventoryIds.size(),
                 candidateCounts.missingAlbumLink(),
                 candidateCounts.missingPhotoLink(),
+                candidateCounts.missingAlbumMembership(),
                 candidateCounts.failedSync(),
                 candidateCounts.pendingSync(),
                 candidateCounts.metadataChanged()

@@ -87,6 +87,7 @@ class ImageHostingScheduledSyncJobTest {
         assertThat(result.itemInventoryIds()).isEmpty();
         assertThat(result.apply()).isFalse();
         assertThat(result.candidateCounts().missingAlbumLink()).isZero();
+        assertThat(result.candidateCounts().missingAlbumMembership()).isZero();
         verifyNoInteractions(syncPlanService, syncPlanExecutor);
         assertThat(meterRegistry.counter(
                 "image_hosting_scheduled_sync",
@@ -101,7 +102,13 @@ class ImageHostingScheduledSyncJobTest {
                 .thenReturn(List.of(
                         candidate(101, ImageHostingSyncCandidateReason.MISSING_ALBUM_LINK),
                         candidate(102, ImageHostingSyncCandidateReason.MISSING_PHOTO_LINK),
-                        candidate(103, ImageHostingSyncCandidateReason.METADATA_CHANGED)
+                        new ImageHostingSyncCandidate(
+                                103,
+                                Set.of(
+                                        ImageHostingSyncCandidateReason.MISSING_ALBUM_MEMBERSHIP,
+                                        ImageHostingSyncCandidateReason.METADATA_CHANGED
+                                )
+                        )
                 ));
         when(syncPlanService.plan(any())).thenAnswer(invocation -> {
             ImageHostingSyncPlanRequest request = invocation.getArgument(0);
@@ -118,9 +125,10 @@ class ImageHostingScheduledSyncJobTest {
                 .extracting(
                         ImageHostingScheduledSyncCandidateCounts::missingAlbumLink,
                         ImageHostingScheduledSyncCandidateCounts::missingPhotoLink,
+                        ImageHostingScheduledSyncCandidateCounts::missingAlbumMembership,
                         ImageHostingScheduledSyncCandidateCounts::metadataChanged
                 )
-                .containsExactly(1, 1, 1);
+                .containsExactly(1, 1, 1, 1);
         verify(syncPlanService, times(3)).plan(any());
         verifyNoInteractions(syncPlanExecutor);
     }
