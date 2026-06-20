@@ -17,6 +17,7 @@ import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.PricingCrawlWorkItem;
 import io.legohunter.data.dto.PricingSnapshot;
 import io.legohunter.data.dto.PricingSnapshotListing;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -103,6 +104,10 @@ class BricklinkPricingCrawlServiceTest {
         assertThat(result.snapshotsWritten()).isOne();
         assertThat(result.snapshotListingsWritten()).isOne();
         assertThat(catalogItem.getExternalUniqueKey()).isEqualTo("4997");
+        ArgumentCaptor<PricingCrawlWorkItem> workItemCaptor = ArgumentCaptor.forClass(PricingCrawlWorkItem.class);
+        verify(pricingCrawlWorkItemDao).insert(workItemCaptor.capture());
+        assertThat(workItemCaptor.getValue().getNextAttemptAt()).isNotNull();
+        assertThat(workItemCaptor.getValue().getClaimedAt()).isNotNull();
         verify(externalCatalogItemDao).update(catalogItem);
         verify(bricklinkAjaxClient).catalogItemsForSaleByInternalItemId(4997, "U", 500);
         verify(pricingSnapshotDao).insert(any(PricingSnapshot.class));

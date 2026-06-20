@@ -236,6 +236,7 @@ public class BricklinkPricingCrawlService {
     }
 
     private PricingCrawlWorkItem startWorkItem(MarketplaceListing listing, ExternalCatalogItem catalogItem) {
+        ZonedDateTime startedAt = now();
         return pricingCrawlWorkItemDao.insert(PricingCrawlWorkItem.builder()
                 .marketplaceListingId(listing.getMarketplaceListingId())
                 .externalCatalogItemId(catalogItem.getExternalCatalogItemId())
@@ -243,7 +244,8 @@ public class BricklinkPricingCrawlService {
                 .workStatusCode(WORK_STATUS_STARTED)
                 .attemptCount(1)
                 .maxAttempts(properties.effectiveMaxAttempts())
-                .claimedAt(now())
+                .nextAttemptAt(startedAt)
+                .claimedAt(startedAt)
                 .build());
     }
 
