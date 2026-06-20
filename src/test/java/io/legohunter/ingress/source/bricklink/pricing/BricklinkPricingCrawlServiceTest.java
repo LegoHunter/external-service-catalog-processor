@@ -133,6 +133,36 @@ class BricklinkPricingCrawlServiceTest {
     }
 
     @Test
+    void runOncePersistsAllReturnedRowsWhenCompletenessIsMixed() {
+        ExternalCatalogItem catalogItem = catalogItem("6418");
+        MarketplaceListing listing = listing(catalogItem);
+        when(marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
+                .thenReturn(Set.of(listing));
+        when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("N", "S")));
+        when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(6418, "N", 500))
+                .thenReturn(catalogResult(
+                        itemForSale(3001, "sealed-seller", "US $30.00", "N", "S"),
+                        itemForSale(3002, "complete-seller", "US $20.00", "N", "C")
+                ));
+
+        BricklinkPricingCrawlResult result = service.runOnce();
+
+        assertThat(result.snapshotsWritten()).isOne();
+        assertThat(result.snapshotListingsWritten()).isEqualTo(2);
+        ArgumentCaptor<PricingSnapshot> snapshotCaptor = ArgumentCaptor.forClass(PricingSnapshot.class);
+        verify(pricingSnapshotDao).insert(snapshotCaptor.capture());
+        assertThat(snapshotCaptor.getValue().getItemConditionCode()).isEqualTo("N");
+        assertThat(snapshotCaptor.getValue().getCompletenessCode()).isEqualTo("S");
+        assertThat(snapshotCaptor.getValue().getComparableCount()).isEqualTo(2);
+
+        ArgumentCaptor<PricingSnapshotListing> listingCaptor = ArgumentCaptor.forClass(PricingSnapshotListing.class);
+        verify(pricingSnapshotListingDao, org.mockito.Mockito.times(2)).insert(listingCaptor.capture());
+        assertThat(listingCaptor.getAllValues())
+                .extracting(PricingSnapshotListing::getCompletenessCode)
+                .containsExactlyInAnyOrder("S", "C");
+    }
+
+    @Test
     void runOnceRecordsNoMatchLookupFailureWithoutCallingPricingEndpoint() {
         ExternalCatalogItem catalogItem = catalogItem(null);
         MarketplaceListing listing = listing(catalogItem);
@@ -217,12 +247,16 @@ class BricklinkPricingCrawlServiceTest {
     }
 
     private ItemForSale itemForSale(Integer idInv, String sellerName, String displayPrice) {
+        return itemForSale(idInv, sellerName, displayPrice, "U", "C");
+    }
+
+    private ItemForSale itemForSale(Integer idInv, String sellerName, String displayPrice, String condition, String completeness) {
         ItemForSale itemForSale = new ItemForSale();
         itemForSale.setIdInv(idInv);
         itemForSale.setStrSellerUsername(sellerName);
         itemForSale.setStrSellerCountryCode("US");
-        itemForSale.setCodeNew("U");
-        itemForSale.setCodeComplete("C");
+        itemForSale.setCodeNew(condition);
+        itemForSale.setCodeComplete(completeness);
         itemForSale.setN4Qty(1);
         itemForSale.setMDisplaySalePrice(displayPrice);
         itemForSale.setStrDesc("Complete used set");
