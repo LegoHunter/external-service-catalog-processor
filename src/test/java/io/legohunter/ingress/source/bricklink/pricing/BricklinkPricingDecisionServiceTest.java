@@ -72,7 +72,7 @@ class BricklinkPricingDecisionServiceTest {
     @Test
     void runOnceWritesFixedPriceOverrideDecisionWithoutReadingSnapshot() {
         MarketplaceListing listing = listing(true, "250.00");
-        when(marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
+        when(marketplaceListingDao.findPricingDecisionCandidatesByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
                 .thenReturn(Set.of(listing));
 
         BricklinkPricingDecisionResult result = service.runOnce();
@@ -235,7 +235,7 @@ class BricklinkPricingDecisionServiceTest {
     @Test
     void runOnceWritesFailedDecisionWhenSnapshotIsMissing() {
         MarketplaceListing listing = listing(false, "150.00");
-        when(marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
+        when(marketplaceListingDao.findPricingDecisionCandidatesByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
                 .thenReturn(Set.of(listing));
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
         when(pricingSnapshotDao.findLatestByMarketplaceListingIdAndConditionAndCompleteness(10, "U", "C"))
@@ -267,7 +267,7 @@ class BricklinkPricingDecisionServiceTest {
     }
 
     private void arrangeListingWithSnapshot(MarketplaceListing listing, ItemInventory inventory, PricingSnapshot snapshot) {
-        when(marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
+        when(marketplaceListingDao.findPricingDecisionCandidatesByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
                 .thenReturn(Set.of(listing));
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory));
         when(pricingSnapshotDao.findLatestByMarketplaceListingIdAndConditionAndCompleteness(

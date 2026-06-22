@@ -88,7 +88,7 @@ public class BricklinkPricingDecisionService {
 
     public BricklinkPricingDecisionResult runOnce() {
         long start = System.currentTimeMillis();
-        Set<MarketplaceListing> listings = marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(
+        Set<MarketplaceListing> listings = marketplaceListingDao.findPricingDecisionCandidatesByListingExternalServiceIdAndListingStatusCode(
                 properties.getBricklinkExternalServiceId(),
                 properties.effectiveActiveListingStatusCode(),
                 properties.effectiveBatchSize()
