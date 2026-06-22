@@ -194,7 +194,7 @@ public class BricklinkPricingCrawlService {
                     .sourceItemKey(catalogItem.getExternalItemKey())
                     .sourceUniqueKey(String.valueOf(itemId))
                     .itemConditionCode(requestedCondition)
-                    .completenessCode(inventory == null ? null : inventory.getCompleteness())
+                    .completenessCode(inventory == null ? null : BricklinkPricingCodeNormalizer.completeness(inventory.getCompleteness()))
                     .sourceRequestUrl(CATALOG_ITEMS_FOR_SALE_PATH)
                     .sourceRequestParameters(writeJson(requestParameters))
                     .rawPayloadHash(sha256(rawPayload))
@@ -260,11 +260,7 @@ public class BricklinkPricingCrawlService {
         if (inventory == null || inventory.getNewOrUsed() == null) {
             return null;
         }
-        return switch (inventory.getNewOrUsed().trim().toUpperCase()) {
-            case "NEW", "N" -> "N";
-            case "USED", "U" -> "U";
-            default -> null;
-        };
+        return BricklinkPricingCodeNormalizer.condition(inventory.getNewOrUsed());
     }
 
     private Optional<Integer> parseInternalItemId(String externalUniqueKey) {
