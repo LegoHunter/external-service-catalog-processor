@@ -31,6 +31,7 @@ The service defaults to the `local,sandbox` profiles unless overridden by `sprin
 | Image-hosting sync | REST and scheduled job | Reconcile item inventory photos and albums to Flickr through `lego-imaging`. |
 | Image-hosting repair | REST | Repair DB links from current remote image-hosting state. |
 | BrickLink pricing crawl | Scheduled job | Crawl active BrickLink marketplace listings, hydrate missing BrickLink internal catalog ids, and persist immutable pricing snapshots/listings for later pricing decisions. |
+| BrickLink pricing decision | Scheduled job | Read latest BrickLink pricing snapshots, compute competitive prices with the legacy algorithm, and persist auditable non-applied pricing decisions. |
 | BrickLink order sync | Scheduled job | Poll BrickLink open orders and, when apply mode is enabled, sync marketplace order staging tables. |
 | Fulfillment sync | Scheduled job | Map staged BrickLink marketplace orders to ShipStation orders, then reconcile shipped ShipStation orders back to BrickLink when apply mode is enabled. |
 
@@ -334,11 +335,108 @@ Operational boundaries:
 
 | Boundary | Detail |
 | --- | --- |
-| No price decisions yet | Phase 2 only crawls and persists pricing history. It does not compute competitive prices, update listing prices, or trigger marketplace sync. |
+| Crawl only captures source data | The crawl job only persists pricing history. Competitive price calculation is handled by `BricklinkPricingDecisionJob`; neither job updates listing prices or triggers marketplace sync in Phase 3. |
 | Immutable history | `pricing_snapshot` and `pricing_snapshot_listing` are append-only observations for each crawl. The same BrickLink listing can appear in many snapshots over time. |
 | No latest competitor table yet | Current market views should query the latest relevant snapshot and its listings. A mutable latest competitor table is intentionally deferred. |
 | No crawl windowing yet | The current scheduled job selects active listings every run. Keep the job disabled or use conservative scheduling until due-time spreading, blackout windows, and randomized delays are added. |
 | AJAX rate limit protection | Outbound AJAX calls are protected by `bricklink-ajax` rate limiting. Keep it enabled for live runs. |
+
+### `BricklinkPricingDecisionJob`
+
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingDecisionJob`
+
+Condition:
+
+```yaml
+lego.bricklink.pricing.decision.enabled: true
+lego.bricklink.pricing.decision.scheduled.enabled: true
+```
+
+`lego.bricklink.pricing.decision.enabled=true` creates the decision service. The scheduled job bean is created only when both `enabled` and `scheduled.enabled` are true.
+
+Schedule and selection settings:
+
+| Setting | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.bricklink.pricing.decision.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between decision calculation runs. |
+| `lego.bricklink.pricing.decision.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Delay after startup before first run. |
+| `lego.bricklink.pricing.decision.scheduled.lock-at-most-for` | `10m` | ShedLock duration | Maximum distributed lock duration. |
+| `lego.bricklink.pricing.decision.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
+| `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value is at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
+| `lego.bricklink.pricing.decision.algorithm-version` | `bricklink-competitive-v1` | Non-blank string | Stored on each `pricing_decision` row for algorithm traceability. |
+| `lego.bricklink.pricing.decision.strategy-code` | `LEGACY_COMPETITIVE` | Non-blank string; code trims and uppercases | Stored on each `pricing_decision` row. |
+| `lego.bricklink.pricing.decision.minimum-price` | null | Decimal money amount or null | Optional lower bound. If computed price is below this value, final price is clamped and reason is `BELOW_MIN_PRICE_CLAMPED`. |
+| `lego.bricklink.pricing.decision.maximum-price` | null | Decimal money amount or null | Optional upper bound. If computed price is above this value, final price is clamped and reason is `ABOVE_MAX_PRICE_CLAMPED`. |
+
+Candidate selection:
+
+| Requirement | Detail |
+| --- | --- |
+| Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.decision.bricklink-external-service-id`. |
+| Marketplace listing status | `marketplace_listing.listing_status_code` must equal `lego.bricklink.pricing.decision.active-listing-status-code` after trimming/uppercasing. |
+| Catalog mapping | `marketplace_listing.external_catalog_item_id` must be populated. |
+| Fixed-price eligibility | `marketplace_listing.fixed_price=true` listings are candidates even when condition/completeness are missing because fixed price is authoritative. |
+| Non-fixed eligibility | Non-fixed listings must have non-blank `item_inventory.new_or_used` and non-blank `item_inventory.completeness`. |
+| Batch limit | The selection query filters to eligible candidates, orders by `marketplace_listing_id`, and applies `lego.bricklink.pricing.decision.batch-size`. |
+
+Decision behavior:
+
+| Step | Description |
+| --- | --- |
+| Fixed price override | If `marketplace_listing.fixed_price=true`, writes a `SKIPPED` decision with reason `FIXED_PRICE_OVERRIDE`, preserves current listing price as `final_price`, and does not read snapshots. |
+| Load inventory | Loads `item_inventory` for condition, completeness, box condition, and instructions condition. |
+| Normalize codes | Maps `N`/`NEW` to `N`, `U`/`USED` to `U`, `SEALED`/`S` to `S`, `COMPLETE`/`C` to `C`, and `INCOMPLETE`/`I`/`X` to `X`. |
+| Select latest snapshot | Reads the latest `pricing_snapshot` for the marketplace listing, normalized condition, and normalized completeness. |
+| Select exact comparables | Reads `pricing_snapshot_listing` rows whose condition and completeness match the target snapshot. |
+| Exclude own listing | Removes the owned marketplace listing by matching `pricing_snapshot_listing.external_listing_id` to `marketplace_listing.external_listing_id`. |
+| Compute price | Runs the ported legacy algorithm and writes a `PROPOSED` decision when successful. |
+| Persist metadata | Stores algorithm version, strategy, reason code, computed price, final price, previous price, currency, exact comparable count, confidence, source summary JSON, and notes. |
+| No apply | Phase 3 writes decisions only. It does not update `marketplace_listing.unit_price` and does not trigger marketplace sync. |
+
+Legacy algorithm behavior:
+
+| Exact comparable count / case | Price behavior |
+| --- | --- |
+| `0` | Writes a `FAILED` decision with reason `NO_EXACT_COMPARABLES`. |
+| `1` | Prices below the only comparable: `min(price - min(price * 0.03, 10), max(price - 1, 1))`. |
+| `2` | Prices 75% from low to high: `low + (high - low) * 0.75`. |
+| `>2`, Used | If highest/second-highest is greater than `3`, writes `FAILED` with `OUTLIER_SPREAD_TOO_HIGH`; otherwise uses `mean + sampleStandardDeviation`. |
+| `>2`, New, US comparables exist | Uses the lowest US comparable, then applies the one-comparable discount. |
+| `>2`, New, no US comparables | Uses `mean + sampleStandardDeviation`. |
+| Box/instructions adjustment | Multiplies by the average of the legacy box-condition and instructions-condition adjustment tables. Missing condition ids or unknown codes default to `1.0`. |
+| Rounding | `computed_price` and `final_price` are rounded to two decimals. |
+
+Decision statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `PROPOSED` | Competitive price was computed and persisted, but not applied. |
+| `SKIPPED` | Decision intentionally did not compute a replacement price, currently only fixed-price override. |
+| `FAILED` | Required data was missing or the algorithm could not safely compute a price. |
+
+Reason codes:
+
+| Reason | Meaning |
+| --- | --- |
+| `FIXED_PRICE_OVERRIDE` | Listing has fixed price enabled; current price remains authoritative. |
+| `MATCHED_LOWEST_COMPETITOR` | New item used the lowest US comparable and one-comparable discount path. |
+| `SINGLE_COMPARABLE_DISCOUNTED` | One exact comparable was available after own-listing exclusion. |
+| `TWO_COMPARABLES_WEIGHTED` | Two exact comparables were available. |
+| `MEAN_PLUS_STDDEV` | More than two comparables used mean plus sample standard deviation. |
+| `NO_CURRENT_SNAPSHOT` | No latest pricing snapshot exists for the listing condition/completeness. Run the crawl first. |
+| `NO_EXACT_COMPARABLES` | Snapshot exists, but no exact comparable remains after filtering and own-listing exclusion. |
+| `MISSING_INVENTORY` | Marketplace listing points to missing `item_inventory`. |
+| `MISSING_CONDITION` | Inventory condition is missing or not recognized. |
+| `MISSING_COMPLETENESS` | Inventory completeness is missing. |
+| `OUTLIER_SPREAD_TOO_HIGH` | Highest comparable is more than 3x the second-highest comparable. |
+| `BELOW_MIN_PRICE_CLAMPED` | Computed price was below configured `minimum-price`; final price was clamped. |
+| `ABOVE_MAX_PRICE_CLAMPED` | Computed price was above configured `maximum-price`; final price was clamped. |
+
+Important logs:
+
+| Event | Meaning |
+| --- | --- |
+| `bricklink.pricing.decision.job.completed` | Scheduled run completed and logs `BricklinkPricingDecisionResult` with selected, written, proposed, skipped, failed, and elapsed counters. |
 
 ### `ImageHostingScheduledSyncJob`
 
@@ -642,6 +740,45 @@ lego:
 ```
 
 Enable `scheduled.enabled` only for a controlled local/sandbox run until crawl windowing and due-time selection are implemented.
+
+### `lego.bricklink.pricing.decision.*`
+
+Backed by `BricklinkPricingDecisionProperties`.
+
+| Property | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.bricklink.pricing.decision.enabled` | `false` | `true`, `false` | Creates the BrickLink pricing decision service bean when true. |
+| `lego.bricklink.pricing.decision.bricklink-external-service-id` | `2` | Integer external service id | External service id for BrickLink marketplace listings selected for pricing decisions. |
+| `lego.bricklink.pricing.decision.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Marketplace listing status selected for pricing decisions. |
+| `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
+| `lego.bricklink.pricing.decision.algorithm-version` | `bricklink-competitive-v1` | Non-blank string | Stored on `pricing_decision.algorithm_version`. |
+| `lego.bricklink.pricing.decision.strategy-code` | `LEGACY_COMPETITIVE` | Non-blank string; code trims and uppercases | Stored on `pricing_decision.strategy_code`. |
+| `lego.bricklink.pricing.decision.minimum-price` | null | Decimal money amount or null | Optional lower bound for computed decisions. Produces `BELOW_MIN_PRICE_CLAMPED` when applied. |
+| `lego.bricklink.pricing.decision.maximum-price` | null | Decimal money amount or null | Optional upper bound for computed decisions. Produces `ABOVE_MAX_PRICE_CLAMPED` when applied. |
+| `lego.bricklink.pricing.decision.scheduled.enabled` | `false` | `true`, `false` | Creates the scheduled job bean only when `lego.bricklink.pricing.decision.enabled=true` is also set. |
+| `lego.bricklink.pricing.decision.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between scheduled decision runs. |
+| `lego.bricklink.pricing.decision.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | First-run startup delay. |
+| `lego.bricklink.pricing.decision.scheduled.lock-at-most-for` | `10m` | ShedLock duration string | Maximum distributed lock time. |
+| `lego.bricklink.pricing.decision.scheduled.lock-at-least-for` | `0s` | ShedLock duration string | Minimum distributed lock time. |
+
+Recommended safe defaults:
+
+```yaml
+lego:
+  bricklink:
+    pricing:
+      decision:
+        enabled: true
+        bricklink-external-service-id: 2
+        active-listing-status-code: ACTIVE
+        batch-size: 25
+        algorithm-version: bricklink-competitive-v1
+        strategy-code: LEGACY_COMPETITIVE
+        scheduled:
+          enabled: false
+```
+
+Run pricing decisions after a successful crawl has populated `pricing_snapshot` and `pricing_snapshot_listing`. The decision job selects fixed-price overrides and non-fixed listings with populated condition/completeness data; legacy listings missing those fields do not consume the configured decision batch. Phase 3 decisions are non-applying; review `pricing_decision` rows before any future apply/sync phase.
 
 ### `bricklink.rest.*`
 
@@ -948,6 +1085,10 @@ Prometheus uses Micrometer naming conventions. For example, counter `image_hosti
 
 No dedicated Micrometer meters are emitted for the pricing crawl yet. Use `bricklink.pricing.crawl.job.completed` logs and SQL checks against `pricing_crawl_work_item`, `pricing_snapshot`, and `pricing_snapshot_listing` for Phase 2 validation.
 
+### BrickLink Pricing Decision Metrics
+
+No dedicated Micrometer meters are emitted for the pricing decision job yet. Use `bricklink.pricing.decision.job.completed` logs and SQL checks against `pricing_decision` for Phase 3 validation.
+
 ### Fulfillment Sync Metrics
 
 | Meter | Type | Tags | Description |
@@ -1013,6 +1154,26 @@ Primary events:
 | `hydratedCatalogItems` | Number of missing BrickLink internal `idItem` values populated into `external_catalog_item.external_unique_key`. |
 | `skippedListings` | Number of listings skipped for missing/unusable local data. |
 | `failedListings` | Number of listings that failed due to lookup, HTTP/client, or parsing errors. |
+| `elapsedMillis` | Run duration in milliseconds. |
+
+### BrickLink Pricing Decision Logs
+
+Primary events:
+
+| Event | Purpose |
+| --- | --- |
+| `bricklink.pricing.decision.job.completed` | Scheduled run completed and logs `BricklinkPricingDecisionResult`. |
+
+`BricklinkPricingDecisionResult` fields:
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `NO_WORK`, `SUCCESS`, or `PARTIAL_SUCCESS`. |
+| `listingsSelected` | Number of eligible BrickLink pricing decision candidates selected for the run. |
+| `decisionsWritten` | Number of `pricing_decision` rows inserted. |
+| `proposedDecisions` | Number of computed non-applied `PROPOSED` decisions. |
+| `skippedDecisions` | Number of intentional skips, currently fixed-price overrides. |
+| `failedDecisions` | Number of listings where no price could be safely computed. |
 | `elapsedMillis` | Run duration in milliseconds. |
 
 ### Fulfillment Sync Logs
@@ -1104,6 +1265,33 @@ lego:
 ```
 
 Set `lego.bricklink.pricing.crawl.enabled=false` if the service bean should be disabled entirely. If BrickLink starts failing or throttling AJAX requests, stop the job first; do not repeatedly retry at a high cadence.
+
+### Safe BrickLink Pricing Decision Rollout
+
+1. Confirm the Pricing Plane tables exist in the target database: `pricing_crawl_work_item`, `pricing_snapshot`, `pricing_snapshot_listing`, and `pricing_decision`.
+2. Run the BrickLink pricing crawl first and verify recent `pricing_snapshot` and `pricing_snapshot_listing` rows exist.
+3. Confirm active BrickLink marketplace listings have `marketplace_listing.unit_price`, `currency_code`, `fixed_price`, `external_listing_id`, and a linked `item_inventory`.
+4. Confirm `item_inventory.new_or_used` and `item_inventory.completeness` are populated. Supported values normalize to `N`/`U` and `S`/`C`/`X`.
+5. Start with `lego.bricklink.pricing.decision.enabled=true` and `lego.bricklink.pricing.decision.scheduled.enabled=false`.
+6. Use a small `lego.bricklink.pricing.decision.batch-size` for first validation, for example `1` to `5`.
+7. Leave `minimum-price` and `maximum-price` unset unless you explicitly want global clamping during validation.
+8. Enable `lego.bricklink.pricing.decision.scheduled.enabled=true` only during a controlled local/sandbox run.
+9. Watch `bricklink.pricing.decision.job.completed` for proposed, skipped, and failed counters.
+10. Review `pricing_decision` rows before any later apply/sync phase.
+11. Disable scheduling again after validation unless the run cadence is intentionally safe.
+
+Rollback:
+
+```yaml
+lego:
+  bricklink:
+    pricing:
+      decision:
+        scheduled:
+          enabled: false
+```
+
+Set `lego.bricklink.pricing.decision.enabled=false` if the service bean should be disabled entirely. Phase 3 does not update marketplace listing prices, so rollback is stopping future decision rows rather than undoing applied price changes.
 
 ### Safe BrickLink Order Sync Rollout
 
@@ -1355,6 +1543,166 @@ where eci.external_service_id = 2
 order by eci.external_item_key;
 ```
 
+### BrickLink Pricing Decision SQL Checks
+
+Review recent pricing decision outcomes:
+
+```sql
+select decision_status_code,
+       reason_code,
+       count(*) as row_count,
+       min(created_at) as first_created,
+       max(created_at) as last_created
+from pricing_decision
+group by decision_status_code, reason_code
+order by row_count desc, decision_status_code, reason_code;
+```
+
+Inspect latest decisions:
+
+```sql
+select pd.pricing_decision_id,
+       pd.marketplace_listing_id,
+       ml.external_listing_id,
+       ii.uuid,
+       eci.external_item_key,
+       ii.new_or_used,
+       ii.completeness,
+       pd.algorithm_version,
+       pd.decision_status_code,
+       pd.reason_code,
+       pd.strategy_code,
+       pd.previous_price,
+       pd.computed_price,
+       pd.final_price,
+       pd.currency_code,
+       pd.comparable_count,
+       pd.confidence,
+       pd.created_at
+from pricing_decision pd
+join marketplace_listing ml
+  on ml.marketplace_listing_id = pd.marketplace_listing_id
+join item_inventory ii
+  on ii.item_inventory_id = ml.item_inventory_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+order by pd.pricing_decision_id desc
+limit 50;
+```
+
+Find active BrickLink pricing decision candidates with no pricing decision yet:
+
+```sql
+select ml.marketplace_listing_id,
+       ml.external_listing_id,
+       ii.uuid,
+       eci.external_item_key,
+       ii.new_or_used,
+       ii.completeness,
+       ml.unit_price,
+       ml.fixed_price
+from marketplace_listing ml
+join item_inventory ii
+  on ii.item_inventory_id = ml.item_inventory_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where ml.listing_external_service_id = 2
+  and ml.listing_status_code = 'ACTIVE'
+  and ml.external_catalog_item_id is not null
+  and (
+      coalesce(ml.fixed_price, 0) = 1
+      or (
+          ii.new_or_used is not null
+          and trim(ii.new_or_used) <> ''
+          and ii.completeness is not null
+          and trim(ii.completeness) <> ''
+      )
+  )
+  and not exists (
+      select 1
+      from pricing_decision pd
+      where pd.marketplace_listing_id = ml.marketplace_listing_id
+  )
+order by ml.marketplace_listing_id;
+```
+
+Find active BrickLink listings currently excluded from pricing decision candidate selection:
+
+```sql
+select ml.marketplace_listing_id,
+       ml.external_listing_id,
+       ii.uuid,
+       eci.external_item_key,
+       ii.new_or_used,
+       ii.completeness,
+       ml.unit_price,
+       ml.fixed_price
+from marketplace_listing ml
+join item_inventory ii
+  on ii.item_inventory_id = ml.item_inventory_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where ml.listing_external_service_id = 2
+  and ml.listing_status_code = 'ACTIVE'
+  and coalesce(ml.fixed_price, 0) <> 1
+  and (
+      ml.external_catalog_item_id is null
+      or ii.new_or_used is null
+      or trim(ii.new_or_used) = ''
+      or ii.completeness is null
+      or trim(ii.completeness) = ''
+  )
+order by ml.marketplace_listing_id;
+```
+
+Review proposed decisions before any future apply phase:
+
+```sql
+select pd.pricing_decision_id,
+       ml.marketplace_listing_id,
+       ml.external_listing_id,
+       eci.external_item_key,
+       pd.previous_price,
+       pd.computed_price,
+       pd.final_price,
+       pd.final_price - pd.previous_price as price_delta,
+       pd.reason_code,
+       pd.comparable_count,
+       pd.confidence,
+       pd.source_summary_json,
+       pd.created_at
+from pricing_decision pd
+join marketplace_listing ml
+  on ml.marketplace_listing_id = pd.marketplace_listing_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where pd.decision_status_code = 'PROPOSED'
+order by abs(pd.final_price - pd.previous_price) desc,
+         pd.pricing_decision_id desc
+limit 50;
+```
+
+Review failed or skipped decisions:
+
+```sql
+select pd.pricing_decision_id,
+       pd.marketplace_listing_id,
+       ml.external_listing_id,
+       eci.external_item_key,
+       pd.decision_status_code,
+       pd.reason_code,
+       pd.notes,
+       pd.created_at
+from pricing_decision pd
+join marketplace_listing ml
+  on ml.marketplace_listing_id = pd.marketplace_listing_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where pd.decision_status_code in ('FAILED', 'SKIPPED')
+order by pd.pricing_decision_id desc
+limit 50;
+```
+
 ### BrickLink Order Sync SQL Checks
 
 After `apply=true`, useful checks:
@@ -1509,6 +1857,13 @@ order by ai.sort_order;
 | Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the configured `catalog-item-type` | Verify item number and use `catalog-item-type=S` for sets. |
 | Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition or parsing returned an empty list | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. |
 | Pricing crawl returns New/Complete rows for a New/Sealed inventory item | BrickLink pricing AJAX filters by condition only, not completeness | This is expected. Phase 3 pricing should query exact comparables by matching snapshot/listing condition and completeness. |
+| Pricing decision job does not start | `lego.bricklink.pricing.decision.enabled=false` or `lego.bricklink.pricing.decision.scheduled.enabled=false` | Set both properties true for scheduled runs. |
+| Pricing decision job reports `NO_WORK` even though active BrickLink listings exist | No active listings currently meet decision-candidate eligibility | Check for missing `external_catalog_item_id`, missing inventory condition/completeness, or non-fixed legacy listings excluded by the candidate query. |
+| Pricing decisions are `FAILED` with `NO_CURRENT_SNAPSHOT` | No crawl snapshot exists for that listing and exact condition/completeness | Run the pricing crawl first and confirm normalized `pricing_snapshot.item_condition_code` and `completeness_code`. |
+| Pricing decisions are `FAILED` with `NO_EXACT_COMPARABLES` | Snapshot exists, but no returned rows match condition/completeness after excluding your own listing | Check latest exact comparable SQL; this can be valid sparse-market behavior. |
+| Pricing decisions are `SKIPPED` with `FIXED_PRICE_OVERRIDE` | `marketplace_listing.fixed_price=true` | Expected when the listing price is intentionally fixed. |
+| Pricing decisions are clamped | `minimum-price` or `maximum-price` is configured | Review global clamp properties and `source_summary_json` for the original algorithm branch. |
+| Pricing decision final price differs greatly from current price | Competitive algorithm found a large market delta or stale listing price | Review exact comparable rows, comparable count, confidence, and reason code before any future apply phase. |
 | BrickLink AJAX calls start failing after a fast test run | BrickLink may be throttling or temporarily banning the external IP | Stop the scheduled job, keep `bricklink.ajax.rate-limit.enabled=true`, keep `minimum-delay-ms >= 2000`, and wait before retrying. |
 | Fulfillment sync maps orders but creates no ShipStation orders | `lego.fulfillment.sync.scheduled.apply=false` | This is dry-run mapping mode. Set apply true only after staged payloads and credentials are verified. |
 | Fulfillment sync reports `PAYLOADS_MISSING` | BrickLink order sync has not stored latest `ORDER_RESPONSE` and `ORDER_ITEMS_RESPONSE` payloads for candidates | Run BrickLink order sync with `apply=true` first and confirm `marketplace_order_payload` rows exist. |

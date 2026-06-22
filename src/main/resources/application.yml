@@ -22,6 +22,21 @@ lego:
           initial-delay-ms: 30000
           lock-at-most-for: 30m
           lock-at-least-for: 0s
+      decision:
+        enabled: false
+        bricklink-external-service-id: 2
+        active-listing-status-code: ACTIVE
+        batch-size: 25
+        algorithm-version: bricklink-competitive-v1
+        strategy-code: LEGACY_COMPETITIVE
+        minimum-price:
+        maximum-price:
+        scheduled:
+          enabled: false
+          fixed-delay-ms: 300000
+          initial-delay-ms: 30000
+          lock-at-most-for: 10m
+          lock-at-least-for: 0s
     orders:
       sync:
         marketplace-code: BRICKLINK
