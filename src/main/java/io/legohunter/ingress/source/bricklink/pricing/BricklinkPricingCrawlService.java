@@ -86,7 +86,7 @@ public class BricklinkPricingCrawlService {
 
         scheduleWork(runAt, counters);
 
-        List<PricingCrawlWorkItem> claimedWorkItems = pricingCrawlWorkItemDao.claimDueWorkItems(
+        Set<PricingCrawlWorkItem> claimedWorkItems = pricingCrawlWorkItemDao.claimDueWorkItems(
                 STATUS_PENDING,
                 STATUS_CLAIMED,
                 runAt,

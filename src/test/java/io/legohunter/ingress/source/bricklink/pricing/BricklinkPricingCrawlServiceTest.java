@@ -228,7 +228,7 @@ class BricklinkPricingCrawlServiceTest {
                 any(), any(), any(), any(), any(), any(Integer.class)
         )).thenReturn(Set.of(listing));
         when(pricingCrawlWorkItemDao.claimDueWorkItems(any(), any(), any(), any(), any(Integer.class)))
-                .thenReturn(List.of());
+                .thenReturn(Set.of());
 
         BricklinkPricingCrawlResult result = service.runOnce();
 
@@ -259,7 +259,7 @@ class BricklinkPricingCrawlServiceTest {
                 any(), any(), any(), any(), any(), any(Integer.class)
         )).thenReturn(Set.of(listing));
         when(pricingCrawlWorkItemDao.claimDueWorkItems(any(), any(), any(), any(), any(Integer.class)))
-                .thenReturn(List.of(claimedWorkItem(listing)));
+                .thenReturn(Set.of(claimedWorkItem(listing)));
         when(marketplaceListingDao.findByMarketplaceListingId(listing.getMarketplaceListingId()))
                 .thenReturn(Optional.of(listing));
     }
