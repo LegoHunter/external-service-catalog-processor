@@ -362,7 +362,7 @@ Schedule and selection settings:
 | `lego.bricklink.pricing.decision.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Delay after startup before first run. |
 | `lego.bricklink.pricing.decision.scheduled.lock-at-most-for` | `10m` | ShedLock duration | Maximum distributed lock duration. |
 | `lego.bricklink.pricing.decision.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
-| `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value is at least `1` | Maximum active marketplace listings selected per run. |
+| `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value is at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
 | `lego.bricklink.pricing.decision.algorithm-version` | `bricklink-competitive-v1` | Non-blank string | Stored on each `pricing_decision` row for algorithm traceability. |
 | `lego.bricklink.pricing.decision.strategy-code` | `LEGACY_COMPETITIVE` | Non-blank string; code trims and uppercases | Stored on each `pricing_decision` row. |
 | `lego.bricklink.pricing.decision.minimum-price` | null | Decimal money amount or null | Optional lower bound. If computed price is below this value, final price is clamped and reason is `BELOW_MIN_PRICE_CLAMPED`. |
@@ -374,7 +374,10 @@ Candidate selection:
 | --- | --- |
 | Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.decision.bricklink-external-service-id`. |
 | Marketplace listing status | `marketplace_listing.listing_status_code` must equal `lego.bricklink.pricing.decision.active-listing-status-code` after trimming/uppercasing. |
-| Batch limit | The selection query orders by `marketplace_listing_id` and applies `lego.bricklink.pricing.decision.batch-size`. |
+| Catalog mapping | `marketplace_listing.external_catalog_item_id` must be populated. |
+| Fixed-price eligibility | `marketplace_listing.fixed_price=true` listings are candidates even when condition/completeness are missing because fixed price is authoritative. |
+| Non-fixed eligibility | Non-fixed listings must have non-blank `item_inventory.new_or_used` and non-blank `item_inventory.completeness`. |
+| Batch limit | The selection query filters to eligible candidates, orders by `marketplace_listing_id`, and applies `lego.bricklink.pricing.decision.batch-size`. |
 
 Decision behavior:
 
@@ -747,7 +750,7 @@ Backed by `BricklinkPricingDecisionProperties`.
 | `lego.bricklink.pricing.decision.enabled` | `false` | `true`, `false` | Creates the BrickLink pricing decision service bean when true. |
 | `lego.bricklink.pricing.decision.bricklink-external-service-id` | `2` | Integer external service id | External service id for BrickLink marketplace listings selected for pricing decisions. |
 | `lego.bricklink.pricing.decision.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Marketplace listing status selected for pricing decisions. |
-| `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value at least `1` | Maximum active BrickLink marketplace listings selected per run. |
+| `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
 | `lego.bricklink.pricing.decision.algorithm-version` | `bricklink-competitive-v1` | Non-blank string | Stored on `pricing_decision.algorithm_version`. |
 | `lego.bricklink.pricing.decision.strategy-code` | `LEGACY_COMPETITIVE` | Non-blank string; code trims and uppercases | Stored on `pricing_decision.strategy_code`. |
 | `lego.bricklink.pricing.decision.minimum-price` | null | Decimal money amount or null | Optional lower bound for computed decisions. Produces `BELOW_MIN_PRICE_CLAMPED` when applied. |
@@ -775,7 +778,7 @@ lego:
           enabled: false
 ```
 
-Run pricing decisions after a successful crawl has populated `pricing_snapshot` and `pricing_snapshot_listing`. Phase 3 decisions are non-applying; review `pricing_decision` rows before any future apply/sync phase.
+Run pricing decisions after a successful crawl has populated `pricing_snapshot` and `pricing_snapshot_listing`. The decision job selects fixed-price overrides and non-fixed listings with populated condition/completeness data; legacy listings missing those fields do not consume the configured decision batch. Phase 3 decisions are non-applying; review `pricing_decision` rows before any future apply/sync phase.
 
 ### `bricklink.rest.*`
 
@@ -1166,7 +1169,7 @@ Primary events:
 | Field | Meaning |
 | --- | --- |
 | `outcome` | `NO_WORK`, `SUCCESS`, or `PARTIAL_SUCCESS`. |
-| `listingsSelected` | Number of active BrickLink marketplace listings selected for the run. |
+| `listingsSelected` | Number of eligible BrickLink pricing decision candidates selected for the run. |
 | `decisionsWritten` | Number of `pricing_decision` rows inserted. |
 | `proposedDecisions` | Number of computed non-applied `PROPOSED` decisions. |
 | `skippedDecisions` | Number of intentional skips, currently fixed-price overrides. |
@@ -1587,7 +1590,7 @@ order by pd.pricing_decision_id desc
 limit 50;
 ```
 
-Find active BrickLink listings with no pricing decision yet:
+Find active BrickLink pricing decision candidates with no pricing decision yet:
 
 ```sql
 select ml.marketplace_listing_id,
@@ -1605,10 +1608,49 @@ left join external_catalog_item eci
   on eci.external_catalog_item_id = ml.external_catalog_item_id
 where ml.listing_external_service_id = 2
   and ml.listing_status_code = 'ACTIVE'
+  and ml.external_catalog_item_id is not null
+  and (
+      coalesce(ml.fixed_price, 0) = 1
+      or (
+          ii.new_or_used is not null
+          and trim(ii.new_or_used) <> ''
+          and ii.completeness is not null
+          and trim(ii.completeness) <> ''
+      )
+  )
   and not exists (
       select 1
       from pricing_decision pd
       where pd.marketplace_listing_id = ml.marketplace_listing_id
+  )
+order by ml.marketplace_listing_id;
+```
+
+Find active BrickLink listings currently excluded from pricing decision candidate selection:
+
+```sql
+select ml.marketplace_listing_id,
+       ml.external_listing_id,
+       ii.uuid,
+       eci.external_item_key,
+       ii.new_or_used,
+       ii.completeness,
+       ml.unit_price,
+       ml.fixed_price
+from marketplace_listing ml
+join item_inventory ii
+  on ii.item_inventory_id = ml.item_inventory_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where ml.listing_external_service_id = 2
+  and ml.listing_status_code = 'ACTIVE'
+  and coalesce(ml.fixed_price, 0) <> 1
+  and (
+      ml.external_catalog_item_id is null
+      or ii.new_or_used is null
+      or trim(ii.new_or_used) = ''
+      or ii.completeness is null
+      or trim(ii.completeness) = ''
   )
 order by ml.marketplace_listing_id;
 ```
@@ -1816,6 +1858,7 @@ order by ai.sort_order;
 | Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition or parsing returned an empty list | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. |
 | Pricing crawl returns New/Complete rows for a New/Sealed inventory item | BrickLink pricing AJAX filters by condition only, not completeness | This is expected. Phase 3 pricing should query exact comparables by matching snapshot/listing condition and completeness. |
 | Pricing decision job does not start | `lego.bricklink.pricing.decision.enabled=false` or `lego.bricklink.pricing.decision.scheduled.enabled=false` | Set both properties true for scheduled runs. |
+| Pricing decision job reports `NO_WORK` even though active BrickLink listings exist | No active listings currently meet decision-candidate eligibility | Check for missing `external_catalog_item_id`, missing inventory condition/completeness, or non-fixed legacy listings excluded by the candidate query. |
 | Pricing decisions are `FAILED` with `NO_CURRENT_SNAPSHOT` | No crawl snapshot exists for that listing and exact condition/completeness | Run the pricing crawl first and confirm normalized `pricing_snapshot.item_condition_code` and `completeness_code`. |
 | Pricing decisions are `FAILED` with `NO_EXACT_COMPARABLES` | Snapshot exists, but no returned rows match condition/completeness after excluding your own listing | Check latest exact comparable SQL; this can be valid sparse-market behavior. |
 | Pricing decisions are `SKIPPED` with `FIXED_PRICE_OVERRIDE` | `marketplace_listing.fixed_price=true` | Expected when the listing price is intentionally fixed. |
