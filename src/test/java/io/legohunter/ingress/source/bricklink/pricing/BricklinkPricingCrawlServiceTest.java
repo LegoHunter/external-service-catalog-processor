@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -30,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -41,6 +43,7 @@ class BricklinkPricingCrawlServiceTest {
     private PricingCrawlWorkItemDao pricingCrawlWorkItemDao;
     private PricingSnapshotDao pricingSnapshotDao;
     private PricingSnapshotListingDao pricingSnapshotListingDao;
+    private BricklinkPricingCrawlProperties properties;
     private BricklinkPricingCrawlService service;
 
     @BeforeEach
@@ -53,9 +56,11 @@ class BricklinkPricingCrawlServiceTest {
         pricingSnapshotDao = mock(PricingSnapshotDao.class);
         pricingSnapshotListingDao = mock(PricingSnapshotListingDao.class);
 
-        BricklinkPricingCrawlProperties properties = new BricklinkPricingCrawlProperties();
+        properties = new BricklinkPricingCrawlProperties();
         properties.setEnabled(true);
         properties.setBatchSize(10);
+        properties.setWorkerBatchSize(1);
+        properties.setScheduleSpreadWindow(Duration.ZERO);
         properties.setResultsPerPage(500);
 
         when(pricingCrawlWorkItemDao.insert(any())).thenAnswer(invocation -> {
@@ -89,8 +94,7 @@ class BricklinkPricingCrawlServiceTest {
     void runOnceHydratesMissingInternalItemIdAndPersistsSnapshotListings() {
         ExternalCatalogItem catalogItem = catalogItem(null);
         MarketplaceListing listing = listing(catalogItem);
-        when(marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
-                .thenReturn(Set.of(listing));
+        givenScheduledAndClaimed(listing);
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
         when(bricklinkAjaxClient.findCatalogItem("6390-1", "S")).thenReturn(Optional.of(searchItem(4997)));
         when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(4997, "U", 500))
@@ -100,6 +104,8 @@ class BricklinkPricingCrawlServiceTest {
 
         assertThat(result.outcome()).isEqualTo("SUCCESS");
         assertThat(result.listingsSelected()).isOne();
+        assertThat(result.workItemsScheduled()).isOne();
+        assertThat(result.workItemsClaimed()).isOne();
         assertThat(result.hydratedCatalogItems()).isOne();
         assertThat(result.snapshotsWritten()).isOne();
         assertThat(result.snapshotListingsWritten()).isOne();
@@ -107,7 +113,8 @@ class BricklinkPricingCrawlServiceTest {
         ArgumentCaptor<PricingCrawlWorkItem> workItemCaptor = ArgumentCaptor.forClass(PricingCrawlWorkItem.class);
         verify(pricingCrawlWorkItemDao).insert(workItemCaptor.capture());
         assertThat(workItemCaptor.getValue().getNextAttemptAt()).isNotNull();
-        assertThat(workItemCaptor.getValue().getClaimedAt()).isNotNull();
+        assertThat(workItemCaptor.getValue().getClaimedAt()).isNull();
+        assertThat(workItemCaptor.getValue().getWorkStatusCode()).isEqualTo(BricklinkPricingCrawlService.STATUS_PENDING);
         verify(externalCatalogItemDao).update(catalogItem);
         verify(bricklinkAjaxClient).catalogItemsForSaleByInternalItemId(4997, "U", 500);
         verify(pricingSnapshotDao).insert(any(PricingSnapshot.class));
@@ -118,8 +125,7 @@ class BricklinkPricingCrawlServiceTest {
     void runOnceSkipsCatalogSearchWhenInternalItemIdAlreadyExists() {
         ExternalCatalogItem catalogItem = catalogItem("4997");
         MarketplaceListing listing = listing(catalogItem);
-        when(marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
-                .thenReturn(Set.of(listing));
+        givenScheduledAndClaimed(listing);
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
         when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(4997, "U", 500))
                 .thenReturn(catalogResult(itemForSale(3001, "seller1", "US $220.00")));
@@ -136,8 +142,7 @@ class BricklinkPricingCrawlServiceTest {
     void runOncePersistsAllReturnedRowsWhenCompletenessIsMixed() {
         ExternalCatalogItem catalogItem = catalogItem("6418");
         MarketplaceListing listing = listing(catalogItem);
-        when(marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
-                .thenReturn(Set.of(listing));
+        givenScheduledAndClaimed(listing);
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("N", "S")));
         when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(6418, "N", 500))
                 .thenReturn(catalogResult(
@@ -166,8 +171,7 @@ class BricklinkPricingCrawlServiceTest {
     void runOnceRecordsNoMatchLookupFailureWithoutCallingPricingEndpoint() {
         ExternalCatalogItem catalogItem = catalogItem(null);
         MarketplaceListing listing = listing(catalogItem);
-        when(marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
-                .thenReturn(Set.of(listing));
+        givenScheduledAndClaimed(listing);
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
         when(bricklinkAjaxClient.findCatalogItem("6390-1", "S")).thenReturn(Optional.empty());
 
@@ -184,8 +188,7 @@ class BricklinkPricingCrawlServiceTest {
     void runOnceSkipsMissingInventoryConditionBeforeAjaxCalls() {
         ExternalCatalogItem catalogItem = catalogItem(null);
         MarketplaceListing listing = listing(catalogItem);
-        when(marketplaceListingDao.findByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10))
-                .thenReturn(Set.of(listing));
+        givenScheduledAndClaimed(listing);
         when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory(null, "COMPLETE")));
 
         BricklinkPricingCrawlResult result = service.runOnce();
@@ -193,6 +196,84 @@ class BricklinkPricingCrawlServiceTest {
         assertThat(result.skippedListings()).isOne();
         verify(bricklinkAjaxClient, never()).findCatalogItem(any(), any());
         verify(bricklinkAjaxClient, never()).catalogItemsForSaleByInternalItemId(any(), any(), any());
+    }
+
+    @Test
+    void runOnceRequeuesRetryablePricingFailureWhenAttemptsRemain() {
+        ExternalCatalogItem catalogItem = catalogItem("4997");
+        MarketplaceListing listing = listing(catalogItem);
+        givenScheduledAndClaimed(listing);
+        when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
+        when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(4997, "U", 500))
+                .thenThrow(new RuntimeException("BrickLink temporarily unavailable"));
+
+        BricklinkPricingCrawlResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("PARTIAL_SUCCESS");
+        ArgumentCaptor<PricingCrawlWorkItem> workItemCaptor = ArgumentCaptor.forClass(PricingCrawlWorkItem.class);
+        verify(pricingCrawlWorkItemDao, atLeastOnce()).update(workItemCaptor.capture());
+        PricingCrawlWorkItem finalUpdate = workItemCaptor.getAllValues().getLast();
+        assertThat(finalUpdate.getWorkStatusCode()).isEqualTo(BricklinkPricingCrawlService.STATUS_PENDING);
+        assertThat(finalUpdate.getClaimedAt()).isNull();
+        assertThat(finalUpdate.getCompletedAt()).isNull();
+        assertThat(finalUpdate.getNextAttemptAt()).isNotNull();
+        assertThat(finalUpdate.getLastErrorMessage()).isEqualTo("BrickLink temporarily unavailable");
+    }
+
+    @Test
+    void runOnceSchedulesButDoesNotProcessWhenNoWorkIsDue() {
+        ExternalCatalogItem catalogItem = catalogItem("4997");
+        MarketplaceListing listing = listing(catalogItem);
+        when(marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCode(
+                any(), any(), any(), any(), any(), any(Integer.class)
+        )).thenReturn(Set.of(listing));
+        when(pricingCrawlWorkItemDao.claimDueWorkItems(any(), any(), any(), any(), any(Integer.class)))
+                .thenReturn(List.of());
+
+        BricklinkPricingCrawlResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("SCHEDULED");
+        assertThat(result.workItemsScheduled()).isOne();
+        assertThat(result.workItemsClaimed()).isZero();
+        verify(bricklinkAjaxClient, never()).catalogItemsForSaleByInternalItemId(any(), any(), any());
+    }
+
+    @Test
+    void runOnceDoesNotScheduleListingsOutsideAllowlist() {
+        properties.setMarketplaceListingAllowlist(Set.of(999));
+        ExternalCatalogItem catalogItem = catalogItem("4997");
+        MarketplaceListing listing = listing(catalogItem);
+        when(marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCode(
+                any(), any(), any(), any(), any(), any(Integer.class)
+        )).thenReturn(Set.of(listing));
+
+        BricklinkPricingCrawlResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("NO_WORK");
+        verify(pricingCrawlWorkItemDao, never()).insert(any());
+        verify(bricklinkAjaxClient, never()).catalogItemsForSaleByInternalItemId(any(), any(), any());
+    }
+
+    private void givenScheduledAndClaimed(MarketplaceListing listing) {
+        when(marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCode(
+                any(), any(), any(), any(), any(), any(Integer.class)
+        )).thenReturn(Set.of(listing));
+        when(pricingCrawlWorkItemDao.claimDueWorkItems(any(), any(), any(), any(), any(Integer.class)))
+                .thenReturn(List.of(claimedWorkItem(listing)));
+        when(marketplaceListingDao.findByMarketplaceListingId(listing.getMarketplaceListingId()))
+                .thenReturn(Optional.of(listing));
+    }
+
+    private PricingCrawlWorkItem claimedWorkItem(MarketplaceListing listing) {
+        return PricingCrawlWorkItem.builder()
+                .pricingCrawlWorkItemId(100L)
+                .marketplaceListingId(listing.getMarketplaceListingId())
+                .externalCatalogItemId(listing.getExternalCatalogItemId())
+                .sourceExternalServiceId(2)
+                .workStatusCode(BricklinkPricingCrawlService.STATUS_CLAIMED)
+                .attemptCount(1)
+                .maxAttempts(3)
+                .build();
     }
 
     private MarketplaceListing listing(ExternalCatalogItem catalogItem) {

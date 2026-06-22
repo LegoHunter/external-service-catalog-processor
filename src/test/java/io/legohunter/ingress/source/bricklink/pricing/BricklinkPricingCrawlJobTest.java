@@ -15,8 +15,11 @@ class BricklinkPricingCrawlJobTest {
                 "SUCCESS",
                 1,
                 1,
+                1,
+                0,
                 2,
                 1,
+                0,
                 0,
                 0,
                 50L
