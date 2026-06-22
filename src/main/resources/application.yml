@@ -7,6 +7,21 @@ spring:
 
 lego:
   bricklink:
+    pricing:
+      crawl:
+        enabled: false
+        bricklink-external-service-id: 2
+        active-listing-status-code: ACTIVE
+        catalog-item-type: S
+        batch-size: 25
+        results-per-page: 500
+        max-attempts: 3
+        scheduled:
+          enabled: false
+          fixed-delay-ms: 300000
+          initial-delay-ms: 30000
+          lock-at-most-for: 30m
+          lock-at-least-for: 0s
     orders:
       sync:
         marketplace-code: BRICKLINK
@@ -106,6 +121,13 @@ kafka:
     sasl.mechanism: SCRAM-SHA-512
 
 bricklink:
+  ajax:
+    uri: https://www.bricklink.com
+    rate-limit:
+      enabled: true
+      minimum-delay-ms: 2000
+    http-logging:
+      enabled: false
   rest:
     uri: https://api.bricklink.com/api/store/v1
     http-logging:

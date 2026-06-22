@@ -30,6 +30,7 @@ The service defaults to the `local,sandbox` profiles unless overridden by `sprin
 | Rebrickable catalog ingestion | Kafka/S3 event driven | Parse Rebrickable gzipped CSV catalog/theme files and upsert external catalog/category tables. |
 | Image-hosting sync | REST and scheduled job | Reconcile item inventory photos and albums to Flickr through `lego-imaging`. |
 | Image-hosting repair | REST | Repair DB links from current remote image-hosting state. |
+| BrickLink pricing crawl | Scheduled job | Crawl active BrickLink marketplace listings, hydrate missing BrickLink internal catalog ids, and persist immutable pricing snapshots/listings for later pricing decisions. |
 | BrickLink order sync | Scheduled job | Poll BrickLink open orders and, when apply mode is enabled, sync marketplace order staging tables. |
 | Fulfillment sync | Scheduled job | Map staged BrickLink marketplace orders to ShipStation orders, then reconcile shipped ShipStation orders back to BrickLink when apply mode is enabled. |
 
@@ -223,6 +224,121 @@ Important logs:
 | `bricklink.order_sync.probe.item_coverage` | Field coverage across fetched order items. |
 | `bricklink.order_sync.probe.completed` | Job completed with counts and elapsed time. |
 | `bricklink.order_sync.probe.failed` | Job-level failure. |
+
+### `BricklinkPricingCrawlJob`
+
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingCrawlJob`
+
+Condition:
+
+```yaml
+lego.bricklink.pricing.crawl.enabled: true
+lego.bricklink.pricing.crawl.scheduled.enabled: true
+```
+
+`lego.bricklink.pricing.crawl.enabled=true` creates the crawl service. The scheduled job bean is created only when both `enabled` and `scheduled.enabled` are true.
+
+Schedule and selection settings:
+
+| Setting | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.bricklink.pricing.crawl.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between pricing crawl runs. Keep conservative until crawl windowing/due-time selection is added. |
+| `lego.bricklink.pricing.crawl.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Delay after startup before first run. |
+| `lego.bricklink.pricing.crawl.scheduled.lock-at-most-for` | `30m` | ShedLock duration | Maximum distributed lock duration. |
+| `lego.bricklink.pricing.crawl.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
+| `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value is at least `1` | Maximum active marketplace listings selected per run. |
+| `lego.bricklink.pricing.crawl.results-per-page` | `500` | Integer; effective value is at least `1` | BrickLink `catalogifs.ajax` `rpp` parameter. Current default asks for up to 500 comparables per item/condition. |
+| `lego.bricklink.pricing.crawl.max-attempts` | `3` | Integer; effective value is at least `1` | Stored on each work item for future retry/due-time orchestration. Phase 2 does not yet reselect due work items. |
+
+Candidate selection:
+
+| Requirement | Detail |
+| --- | --- |
+| Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.crawl.bricklink-external-service-id`. |
+| Marketplace listing status | `marketplace_listing.listing_status_code` must equal `lego.bricklink.pricing.crawl.active-listing-status-code` after trimming/uppercasing. |
+| Catalog link | `marketplace_listing.external_catalog_item_id` must be populated. |
+| Batch limit | The selection query orders by `marketplace_listing_id` and applies `lego.bricklink.pricing.crawl.batch-size`. |
+
+Crawler behavior:
+
+| Step | Description |
+| --- | --- |
+| Start work item | Inserts `pricing_crawl_work_item` with `STARTED`, `attempt_count=1`, `next_attempt_at=now`, and `claimed_at=now`. |
+| Load inventory | Loads `item_inventory` for the listing so condition and completeness can be captured. |
+| Resolve condition | Maps `item_inventory.new_or_used` values `N`/`NEW` to BrickLink `N`, and `U`/`USED` to BrickLink `U`. |
+| Resolve item number | Uses `external_catalog_item.external_item_key`, for example `6390-1`. |
+| Hydrate `idItem` | If `external_catalog_item.external_unique_key` is missing or not parseable as an integer, calls `searchproduct.ajax` through `BricklinkAjaxClient.findCatalogItem(itemNumber, catalogItemType)`. |
+| Persist `idItem` | Stores the returned BrickLink internal catalog id in `external_catalog_item.external_unique_key` so future runs skip search hydration. |
+| Crawl comparables | Calls `catalogifs.ajax` through `BricklinkAjaxClient.catalogItemsForSaleByInternalItemId(itemId, condition, resultsPerPage)`. |
+| Persist snapshot | Inserts one immutable `pricing_snapshot` per successful listing crawl. |
+| Persist snapshot listings | Inserts one immutable `pricing_snapshot_listing` per comparable listing returned by BrickLink. |
+| Complete work item | Updates the work item to `SUCCESS` or a failure/skip status. |
+
+BrickLink AJAX endpoints used:
+
+| Endpoint | Purpose | Parameters |
+| --- | --- | --- |
+| `/ajax/clone/search/searchproduct.ajax` | Find BrickLink internal `idItem` for a public item number when `external_unique_key` is missing. | `q=<item number>`, `type=<catalog item type>` |
+| `/ajax/clone/catalogifs.ajax` | Fetch active BrickLink listings for one internal item id and condition. | `itemid=<idItem>`, `cond=N|U`, `rpp=<resultsPerPage>`, `iconly=0` |
+
+Condition and completeness semantics:
+
+| Field | Meaning |
+| --- | --- |
+| `pricing_snapshot.item_condition_code` | Target condition requested for the crawl, derived from the owned `item_inventory.new_or_used`. |
+| `pricing_snapshot.completeness_code` | Target completeness from the owned `item_inventory.completeness`. |
+| `pricing_snapshot_listing.item_condition_code` | Comparable listing condition returned by BrickLink AJAX. |
+| `pricing_snapshot_listing.completeness_code` | Comparable listing completeness/sub-condition returned by BrickLink AJAX. |
+
+The BrickLink pricing AJAX request currently filters by condition only. The crawler intentionally persists all returned rows for that condition. Later pricing logic must select exact comparables where comparable condition and comparable completeness match the target snapshot condition and completeness.
+
+Data written:
+
+| Table | Write behavior |
+| --- | --- |
+| `pricing_crawl_work_item` | Inserted for each selected listing that has a linked catalog item; updated with request metadata, completion time, status, and last error. |
+| `external_catalog_item` | Updated only when missing BrickLink internal `idItem` is successfully hydrated into `external_unique_key`. |
+| `pricing_snapshot` | Inserted once for each successful pricing crawl. Captures source item number, internal `idItem`, requested condition, inventory completeness, request metadata, payload hash, comparable count, and capture time. |
+| `pricing_snapshot_listing` | Inserted once per comparable listing returned by BrickLink. Captures external listing id, seller, country, condition, completeness, quantity, unit price, currency, description, and raw comparable payload. |
+
+Work item statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `STARTED` | Work item was inserted and crawl processing began. |
+| `SUCCESS` | Pricing snapshot and returned comparable rows were persisted. |
+| `SKIPPED_MISSING_CONDITION` | `item_inventory.new_or_used` was absent or not recognized as New/Used. No AJAX calls are made. |
+| `SKIPPED_MISSING_ITEM_NUMBER` | `external_catalog_item.external_item_key` was absent. No pricing AJAX call is made. |
+| `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | `searchproduct.ajax` found no exact catalog item match. |
+| `FAILED_ITEM_ID_LOOKUP_AMBIGUOUS` | `searchproduct.ajax` found multiple possible catalog items. |
+| `FAILED_ITEM_ID_LOOKUP_HTTP_ERROR` | Item id lookup failed due to client/runtime error. |
+| `FAILED_PRICING_HTTP_ERROR` | Pricing AJAX call failed due to client/runtime error. |
+| `FAILED_PRICING_PARSE_ERROR` | Pricing payload serialization/parsing failed during persistence. |
+
+Outcomes:
+
+| Outcome | Meaning |
+| --- | --- |
+| `NO_WORK` | No active BrickLink marketplace listings selected. |
+| `SUCCESS` | Selected listings were processed and no listing failed. Skipped listings do not currently make the run outcome partial. |
+| `PARTIAL_SUCCESS` | At least one selected listing failed. |
+
+Important logs:
+
+| Event | Meaning |
+| --- | --- |
+| `bricklink.pricing.crawl.skipped_missing_catalog` | Selected listing had no attached `ExternalCatalogItem`; no work item is created for that listing. |
+| `bricklink.pricing.crawl.job.completed` | Scheduled run completed and logs `BricklinkPricingCrawlResult` with selected, snapshot, listing, hydration, skip, failure, and elapsed counters. |
+
+Operational boundaries:
+
+| Boundary | Detail |
+| --- | --- |
+| No price decisions yet | Phase 2 only crawls and persists pricing history. It does not compute competitive prices, update listing prices, or trigger marketplace sync. |
+| Immutable history | `pricing_snapshot` and `pricing_snapshot_listing` are append-only observations for each crawl. The same BrickLink listing can appear in many snapshots over time. |
+| No latest competitor table yet | Current market views should query the latest relevant snapshot and its listings. A mutable latest competitor table is intentionally deferred. |
+| No crawl windowing yet | The current scheduled job selects active listings every run. Keep the job disabled or use conservative scheduling until due-time spreading, blackout windows, and randomized delays are added. |
+| AJAX rate limit protection | Outbound AJAX calls are protected by `bricklink-ajax` rate limiting. Keep it enabled for live runs. |
 
 ### `ImageHostingScheduledSyncJob`
 
@@ -488,6 +604,45 @@ lego:
           apply: false
 ```
 
+### `lego.bricklink.pricing.crawl.*`
+
+Backed by `BricklinkPricingCrawlProperties`.
+
+| Property | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.bricklink.pricing.crawl.enabled` | `false` | `true`, `false` | Creates the BrickLink pricing crawl service bean when true. |
+| `lego.bricklink.pricing.crawl.bricklink-external-service-id` | `2` | Integer external service id | External service id for BrickLink rows in `external_service`, `marketplace_listing`, and `external_catalog_item`. |
+| `lego.bricklink.pricing.crawl.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Marketplace listing status selected for pricing crawl. |
+| `lego.bricklink.pricing.crawl.catalog-item-type` | `S` | BrickLink catalog item type; code trims and uppercases | Type sent to `searchproduct.ajax`. `S` means LEGO set and is the current supported pricing crawl target. |
+| `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value at least `1` | Maximum active BrickLink marketplace listings selected per run. |
+| `lego.bricklink.pricing.crawl.results-per-page` | `500` | Integer; effective value at least `1` | `rpp` sent to `catalogifs.ajax`. |
+| `lego.bricklink.pricing.crawl.max-attempts` | `3` | Integer; effective value at least `1` | Stored on `pricing_crawl_work_item.max_attempts` for future retry orchestration. |
+| `lego.bricklink.pricing.crawl.scheduled.enabled` | `false` | `true`, `false` | Creates the scheduled job bean only when `lego.bricklink.pricing.crawl.enabled=true` is also set. |
+| `lego.bricklink.pricing.crawl.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between scheduled crawl runs. |
+| `lego.bricklink.pricing.crawl.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | First-run startup delay. |
+| `lego.bricklink.pricing.crawl.scheduled.lock-at-most-for` | `30m` | ShedLock duration string | Maximum distributed lock time. |
+| `lego.bricklink.pricing.crawl.scheduled.lock-at-least-for` | `0s` | ShedLock duration string | Minimum distributed lock time. |
+
+Recommended safe defaults:
+
+```yaml
+lego:
+  bricklink:
+    pricing:
+      crawl:
+        enabled: true
+        bricklink-external-service-id: 2
+        active-listing-status-code: ACTIVE
+        catalog-item-type: S
+        batch-size: 5
+        results-per-page: 500
+        max-attempts: 3
+        scheduled:
+          enabled: false
+```
+
+Enable `scheduled.enabled` only for a controlled local/sandbox run until crawl windowing and due-time selection are implemented.
+
 ### `bricklink.rest.*`
 
 Backed by `bricklink-rest` dependency `BricklinkRestProperties`.
@@ -511,6 +666,25 @@ Operational notes:
 | HTTP `302` to `/v2/error_404.page` | Wrong base URI such as `https://api.bricklink.com/v2` | Set `bricklink.rest.uri` to `https://api.bricklink.com/api/store/v1`. |
 | `401`/OAuth errors | Missing or invalid consumer/token secrets | Check `${import-path}/bricklink-client-api-keys.yml`. |
 | Very large logs | `include-body=true` and `max-body-length=-1` | Set a finite max body length or disable body logging. |
+
+### `bricklink.ajax.*`
+
+Backed by the `bricklink-ajax` dependency.
+
+| Property | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `bricklink.ajax.uri` | `https://www.bricklink.com` in base YAML | Absolute URI | BrickLink website base URI used for internal AJAX endpoints. |
+| `bricklink.ajax.rate-limit.enabled` | `true` in base YAML | `true`, `false` | Enables the client-side limiter around outbound AJAX requests. Keep true for live BrickLink calls. |
+| `bricklink.ajax.rate-limit.minimum-delay-ms` | `2000` in base YAML | Long milliseconds, >= 0 | Minimum delay between outbound BrickLink AJAX requests. The user observed BrickLink bans external IPs when calls are more frequent than roughly one request every 1.5 seconds. |
+| `bricklink.ajax.http-logging.enabled` | `false` in base YAML | `true`, `false` | Enables AJAX HTTP logging when supported by the dependency. Keep disabled for long-running crawls unless debugging. |
+
+Operational notes:
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| Repeated BrickLink AJAX failures after recent high-frequency tests | External IP may be rate-limited or banned by BrickLink | Stop the job, keep `rate-limit.enabled=true`, use at least `minimum-delay-ms=2000`, and wait for the ban window to expire. |
+| `searchproduct.ajax` finds no item | Public item number does not match the configured catalog item type or BrickLink search result | Confirm `external_catalog_item.external_item_key` and `catalog-item-type`. |
+| Pricing rows are written but not exact for completeness | BrickLink pricing AJAX filters by condition only | Use exact condition/completeness DAO queries in pricing calculation; do not infer price from all returned rows blindly. |
 
 ### `lego.fulfillment.*`
 
@@ -770,6 +944,10 @@ Prometheus uses Micrometer naming conventions. For example, counter `image_hosti
 | `bricklink_order_sync_duration` | Timer | `provider`, `outcome` | Run duration. |
 | `bricklink_order_sync_order` | Counter | `provider`, `result` | Order counts by `discovered`, `fetched`, `failed`, `written`. |
 
+### BrickLink Pricing Crawl Metrics
+
+No dedicated Micrometer meters are emitted for the pricing crawl yet. Use `bricklink.pricing.crawl.job.completed` logs and SQL checks against `pricing_crawl_work_item`, `pricing_snapshot`, and `pricing_snapshot_listing` for Phase 2 validation.
+
 ### Fulfillment Sync Metrics
 
 | Meter | Type | Tags | Description |
@@ -814,6 +992,28 @@ Primary events:
 | `bricklink.order_sync.probe.item_coverage` | Item-level field coverage counts. |
 | `bricklink.order_sync.probe.completed` | Final outcome and counters. |
 | `bricklink.order_sync.probe.failed` | Run-level failure. |
+
+### BrickLink Pricing Crawl Logs
+
+Primary events:
+
+| Event | Purpose |
+| --- | --- |
+| `bricklink.pricing.crawl.skipped_missing_catalog` | One selected listing had no linked external catalog item; the crawler skips it before creating a work item. |
+| `bricklink.pricing.crawl.job.completed` | Scheduled run completed and logs `BricklinkPricingCrawlResult`. |
+
+`BricklinkPricingCrawlResult` fields:
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `NO_WORK`, `SUCCESS`, or `PARTIAL_SUCCESS`. |
+| `listingsSelected` | Number of active BrickLink marketplace listings selected for the run. |
+| `snapshotsWritten` | Number of `pricing_snapshot` rows inserted. |
+| `snapshotListingsWritten` | Number of `pricing_snapshot_listing` rows inserted. |
+| `hydratedCatalogItems` | Number of missing BrickLink internal `idItem` values populated into `external_catalog_item.external_unique_key`. |
+| `skippedListings` | Number of listings skipped for missing/unusable local data. |
+| `failedListings` | Number of listings that failed due to lookup, HTTP/client, or parsing errors. |
+| `elapsedMillis` | Run duration in milliseconds. |
 
 ### Fulfillment Sync Logs
 
@@ -876,6 +1076,34 @@ Primary events:
 | `photo.delete.process.start` | Delete service started processing an object delete. |
 
 ## Rollout Procedures
+
+### Safe BrickLink Pricing Crawl Rollout
+
+1. Confirm the Pricing Plane tables exist in the target database: `pricing_crawl_work_item`, `pricing_snapshot`, `pricing_snapshot_listing`, and `pricing_decision`.
+2. Confirm active BrickLink marketplace listings exist with `marketplace_listing.listing_external_service_id=2`, `listing_status_code='ACTIVE'`, and a populated `external_catalog_item_id`.
+3. Confirm `external_catalog_item.external_item_key` contains the public BrickLink item number, for example `6390-1`.
+4. Set `bricklink.ajax.uri=https://www.bricklink.com`.
+5. Keep `bricklink.ajax.rate-limit.enabled=true`.
+6. Keep `bricklink.ajax.rate-limit.minimum-delay-ms` at `2000` or higher for live BrickLink calls.
+7. Start with `lego.bricklink.pricing.crawl.enabled=true` and `lego.bricklink.pricing.crawl.scheduled.enabled=false`.
+8. For the first scheduled validation, use a small `lego.bricklink.pricing.crawl.batch-size`, for example `1` to `5`.
+9. Enable `lego.bricklink.pricing.crawl.scheduled.enabled=true` only during a controlled local/sandbox run.
+10. Watch `bricklink.pricing.crawl.job.completed` for selected, hydrated, snapshot, listing, skipped, and failed counters.
+11. Run the pricing SQL checks below to confirm work items, snapshots, snapshot listings, and `external_unique_key` hydration.
+12. Disable scheduling again after validation unless the fixed-delay cadence is intentionally safe for the current listing count.
+
+Rollback:
+
+```yaml
+lego:
+  bricklink:
+    pricing:
+      crawl:
+        scheduled:
+          enabled: false
+```
+
+Set `lego.bricklink.pricing.crawl.enabled=false` if the service bean should be disabled entirely. If BrickLink starts failing or throttling AJAX requests, stop the job first; do not repeatedly retry at a high cadence.
 
 ### Safe BrickLink Order Sync Rollout
 
@@ -984,6 +1212,148 @@ POST /internal/image-hosting/item-inventories/{itemInventoryId}/sync?dryRun=fals
 3. Confirm Kafka dynamic bean registration logs appear and sensitive values are masked.
 4. Confirm `image_hosting.readiness.startup` if readiness is enabled.
 5. Confirm scheduled jobs are either enabled intentionally or absent because the corresponding `enabled` property is false.
+
+### BrickLink Pricing Crawl SQL Checks
+
+Confirm active BrickLink listings eligible for crawl:
+
+```sql
+select ml.marketplace_listing_id,
+       ml.item_inventory_id,
+       ml.listing_external_service_id,
+       ml.external_catalog_item_id,
+       ml.external_listing_id,
+       ml.listing_status_code,
+       ii.uuid,
+       ii.new_or_used,
+       ii.completeness,
+       eci.external_item_key,
+       eci.external_unique_key
+from marketplace_listing ml
+join item_inventory ii
+  on ii.item_inventory_id = ml.item_inventory_id
+join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where ml.listing_external_service_id = 2
+  and ml.listing_status_code = 'ACTIVE'
+order by ml.marketplace_listing_id
+limit 50;
+```
+
+Check recent work item outcomes:
+
+```sql
+select work_status_code,
+       count(*) as row_count,
+       min(created_at) as first_created,
+       max(updated_at) as last_updated
+from pricing_crawl_work_item
+group by work_status_code
+order by row_count desc;
+```
+
+Review recent work items with request parameters and errors:
+
+```sql
+select pcwi.pricing_crawl_work_item_id,
+       pcwi.marketplace_listing_id,
+       pcwi.external_catalog_item_id,
+       eci.external_item_key,
+       eci.external_unique_key,
+       pcwi.work_status_code,
+       pcwi.attempt_count,
+       pcwi.max_attempts,
+       pcwi.next_attempt_at,
+       pcwi.claimed_at,
+       pcwi.completed_at,
+       pcwi.source_request_url,
+       pcwi.source_request_parameters,
+       pcwi.last_error_message,
+       pcwi.created_at
+from pricing_crawl_work_item pcwi
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = pcwi.external_catalog_item_id
+order by pcwi.pricing_crawl_work_item_id desc
+limit 50;
+```
+
+Check recent snapshots and persisted comparable counts:
+
+```sql
+select ps.pricing_snapshot_id,
+       ps.marketplace_listing_id,
+       ps.source_item_key,
+       ps.source_unique_key,
+       ps.item_condition_code,
+       ps.completeness_code,
+       ps.comparable_count,
+       count(psl.pricing_snapshot_listing_id) as persisted_listing_count,
+       min(psl.unit_price) as min_unit_price,
+       avg(psl.unit_price) as avg_unit_price,
+       max(psl.unit_price) as max_unit_price,
+       ps.captured_at
+from pricing_snapshot ps
+left join pricing_snapshot_listing psl
+  on psl.pricing_snapshot_id = ps.pricing_snapshot_id
+group by ps.pricing_snapshot_id,
+         ps.marketplace_listing_id,
+         ps.source_item_key,
+         ps.source_unique_key,
+         ps.item_condition_code,
+         ps.completeness_code,
+         ps.comparable_count,
+         ps.captured_at
+order by ps.pricing_snapshot_id desc
+limit 25;
+```
+
+Query latest exact comparables for one marketplace listing. This is the shape Phase 3 pricing should use by default:
+
+```sql
+select psl.external_listing_id,
+       psl.seller_name,
+       psl.seller_country_code,
+       psl.item_condition_code,
+       psl.completeness_code,
+       psl.quantity_available,
+       psl.unit_price,
+       psl.currency_code,
+       psl.description
+from pricing_snapshot ps
+join pricing_snapshot_listing psl
+  on psl.pricing_snapshot_id = ps.pricing_snapshot_id
+where ps.pricing_snapshot_id = (
+    select ps2.pricing_snapshot_id
+    from pricing_snapshot ps2
+    where ps2.marketplace_listing_id = 24
+      and ps2.item_condition_code = 'N'
+      and ps2.completeness_code = 'S'
+    order by ps2.captured_at desc, ps2.pricing_snapshot_id desc
+    limit 1
+)
+  and psl.item_condition_code = ps.item_condition_code
+  and (
+        psl.completeness_code = ps.completeness_code
+        or (psl.completeness_code is null and ps.completeness_code is null)
+      )
+order by psl.unit_price, psl.pricing_snapshot_listing_id;
+```
+
+Check whether missing BrickLink internal ids were hydrated:
+
+```sql
+select eci.external_catalog_item_id,
+       eci.external_item_key,
+       eci.external_unique_key,
+       eci.item_name
+from external_catalog_item eci
+where eci.external_service_id = 2
+  and eci.external_catalog_item_id in (
+      select distinct external_catalog_item_id
+      from pricing_snapshot
+  )
+order by eci.external_item_key;
+```
 
 ### BrickLink Order Sync SQL Checks
 
@@ -1133,6 +1503,13 @@ order by ai.sort_order;
 | Application fails because config import is missing | Required external file absent under `import-path` | Create/project the expected YAML file or adjust active profiles. |
 | BrickLink responses are `302` to error page | Wrong BrickLink base URI | Use `https://api.bricklink.com/api/store/v1`. |
 | BrickLink sync discovers orders but writes nothing | `lego.bricklink.orders.sync.scheduled.apply=false` | This is probe mode. Set apply true only after DB tables exist and probe output is reviewed. |
+| Pricing crawl job does not start | `lego.bricklink.pricing.crawl.enabled=false` or `lego.bricklink.pricing.crawl.scheduled.enabled=false` | Set both properties true for scheduled runs. |
+| Pricing crawl repeatedly re-crawls the same listings | Phase 2 scheduled job selects active listings by status each run and has no due-time/windowing yet | Disable scheduling after validation or use a conservative fixed delay and small batch size until crawl spreading is implemented. |
+| Pricing crawl writes many `SKIPPED_MISSING_CONDITION` work items | `item_inventory.new_or_used` is null or not `N`/`NEW`/`U`/`USED` | Fix inventory condition data before crawling that listing. |
+| Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the configured `catalog-item-type` | Verify item number and use `catalog-item-type=S` for sets. |
+| Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition or parsing returned an empty list | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. |
+| Pricing crawl returns New/Complete rows for a New/Sealed inventory item | BrickLink pricing AJAX filters by condition only, not completeness | This is expected. Phase 3 pricing should query exact comparables by matching snapshot/listing condition and completeness. |
+| BrickLink AJAX calls start failing after a fast test run | BrickLink may be throttling or temporarily banning the external IP | Stop the scheduled job, keep `bricklink.ajax.rate-limit.enabled=true`, keep `minimum-delay-ms >= 2000`, and wait before retrying. |
 | Fulfillment sync maps orders but creates no ShipStation orders | `lego.fulfillment.sync.scheduled.apply=false` | This is dry-run mapping mode. Set apply true only after staged payloads and credentials are verified. |
 | Fulfillment sync reports `PAYLOADS_MISSING` | BrickLink order sync has not stored latest `ORDER_RESPONSE` and `ORDER_ITEMS_RESPONSE` payloads for candidates | Run BrickLink order sync with `apply=true` first and confirm `marketplace_order_payload` rows exist. |
 | Fulfillment candidate fails with duplicate ShipStation orders | More than one ShipStation order exists for the same `BL-{orderId}` order number | Resolve the duplicate in ShipStation before re-running live fulfillment apply. |
