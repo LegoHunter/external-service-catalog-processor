@@ -5,6 +5,10 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Duration;
+import java.time.LocalTime;
+import java.util.Set;
+
 @Getter
 @Setter
 @Configuration
@@ -15,8 +19,16 @@ public class BricklinkPricingCrawlProperties {
     private String activeListingStatusCode = "ACTIVE";
     private String catalogItemType = "S";
     private int batchSize = 25;
+    private int workerBatchSize = 1;
     private int resultsPerPage = 500;
     private int maxAttempts = 3;
+    private Duration crawlCadence = Duration.ofDays(7);
+    private Duration scheduleSpreadWindow = Duration.ofHours(72);
+    private Duration retryBackoff = Duration.ofHours(6);
+    private Duration claimStaleAfter = Duration.ofHours(2);
+    private Duration scheduleJitter = Duration.ZERO;
+    private Set<Integer> marketplaceListingAllowlist = Set.of();
+    private Blackout blackout = new Blackout();
     private Scheduled scheduled = new Scheduled();
 
     public String effectiveActiveListingStatusCode() {
@@ -37,12 +49,64 @@ public class BricklinkPricingCrawlProperties {
         return Math.max(1, batchSize);
     }
 
+    public int effectiveWorkerBatchSize() {
+        return Math.max(1, workerBatchSize);
+    }
+
     public int effectiveResultsPerPage() {
         return Math.max(1, resultsPerPage);
     }
 
     public int effectiveMaxAttempts() {
         return Math.max(1, maxAttempts);
+    }
+
+    public Duration effectiveCrawlCadence() {
+        return positiveOrDefault(crawlCadence, Duration.ofDays(7));
+    }
+
+    public Duration effectiveScheduleSpreadWindow() {
+        return nonNegativeOrDefault(scheduleSpreadWindow, Duration.ofHours(72));
+    }
+
+    public Duration effectiveRetryBackoff() {
+        return positiveOrDefault(retryBackoff, Duration.ofHours(6));
+    }
+
+    public Duration effectiveClaimStaleAfter() {
+        return positiveOrDefault(claimStaleAfter, Duration.ofHours(2));
+    }
+
+    public Duration effectiveScheduleJitter() {
+        return nonNegativeOrDefault(scheduleJitter, Duration.ZERO);
+    }
+
+    public Set<Integer> effectiveMarketplaceListingAllowlist() {
+        return marketplaceListingAllowlist == null ? Set.of() : marketplaceListingAllowlist;
+    }
+
+    private Duration positiveOrDefault(Duration value, Duration defaultValue) {
+        if (value == null || value.isZero() || value.isNegative()) {
+            return defaultValue;
+        }
+        return value;
+    }
+
+    private Duration nonNegativeOrDefault(Duration value, Duration defaultValue) {
+        if (value == null || value.isNegative()) {
+            return defaultValue;
+        }
+        return value;
+    }
+
+    @Getter
+    @Setter
+    public static class Blackout {
+        private boolean enabled = false;
+        private String zoneId = "America/New_York";
+        private LocalTime start = LocalTime.of(21, 30);
+        private LocalTime end = LocalTime.of(8, 30);
+        private boolean weekdaysOnly = true;
     }
 
     @Getter

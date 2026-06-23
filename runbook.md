@@ -243,13 +243,25 @@ Schedule and selection settings:
 
 | Setting | Default | Valid values | Description |
 | --- | --- | --- | --- |
-| `lego.bricklink.pricing.crawl.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between pricing crawl runs. Keep conservative until crawl windowing/due-time selection is added. |
+| `lego.bricklink.pricing.crawl.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between scheduler/worker runs. Keep conservative for live BrickLink calls. |
 | `lego.bricklink.pricing.crawl.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Delay after startup before first run. |
 | `lego.bricklink.pricing.crawl.scheduled.lock-at-most-for` | `30m` | ShedLock duration | Maximum distributed lock duration. |
 | `lego.bricklink.pricing.crawl.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
-| `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value is at least `1` | Maximum active marketplace listings selected per run. |
+| `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value is at least `1` | Maximum eligible marketplace listings considered for scheduling per run. |
+| `lego.bricklink.pricing.crawl.worker-batch-size` | `1` | Integer; effective value is at least `1` | Maximum due `pricing_crawl_work_item` rows claimed and processed per run. Keep small for live BrickLink calls. |
 | `lego.bricklink.pricing.crawl.results-per-page` | `500` | Integer; effective value is at least `1` | BrickLink `catalogifs.ajax` `rpp` parameter. Current default asks for up to 500 comparables per item/condition. |
-| `lego.bricklink.pricing.crawl.max-attempts` | `3` | Integer; effective value is at least `1` | Stored on each work item for future retry/due-time orchestration. Phase 2 does not yet reselect due work items. |
+| `lego.bricklink.pricing.crawl.max-attempts` | `3` | Integer; effective value is at least `1` | Stored on each work item. Retryable lookup/pricing failures are requeued until this count is reached. |
+| `lego.bricklink.pricing.crawl.crawl-cadence` | `7d` | Spring `Duration`, positive | Cooling period before the same listing is eligible to be scheduled again after success, skip, or terminal failure. |
+| `lego.bricklink.pricing.crawl.schedule-spread-window` | `72h` | Spring `Duration`, zero or positive | Window used to spread newly scheduled work item `next_attempt_at` values across time. |
+| `lego.bricklink.pricing.crawl.schedule-jitter` | `0s` | Spring `Duration`, zero or positive | Optional random positive jitter added to newly scheduled work item due times. |
+| `lego.bricklink.pricing.crawl.retry-backoff` | `6h` | Spring `Duration`, positive | Delay before retrying a retryable failed work item. |
+| `lego.bricklink.pricing.crawl.claim-stale-after` | `2h` | Spring `Duration`, positive | Age after which abandoned `CLAIMED` work is requeued to `PENDING`. |
+| `lego.bricklink.pricing.crawl.marketplace-listing-allowlist` | empty | Set of integer `marketplace_listing_id` values | Optional sandbox guard. When populated, only those listings are scheduled. |
+| `lego.bricklink.pricing.crawl.blackout.enabled` | `false` | `true`, `false` | When true, scheduled due times and retry due times are moved out of the configured local blackout period. |
+| `lego.bricklink.pricing.crawl.blackout.zone-id` | `America/New_York` | Java time zone id | Time zone used to evaluate blackout windows. |
+| `lego.bricklink.pricing.crawl.blackout.start` | `21:30` | `HH:mm` local time | Start of the blackout window. |
+| `lego.bricklink.pricing.crawl.blackout.end` | `08:30` | `HH:mm` local time | End of the blackout window. |
+| `lego.bricklink.pricing.crawl.blackout.weekdays-only` | `true` | `true`, `false` | When true, blackout adjustment is applied only on Monday through Friday local dates. |
 
 Candidate selection:
 
@@ -258,13 +270,18 @@ Candidate selection:
 | Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.crawl.bricklink-external-service-id`. |
 | Marketplace listing status | `marketplace_listing.listing_status_code` must equal `lego.bricklink.pricing.crawl.active-listing-status-code` after trimming/uppercasing. |
 | Catalog link | `marketplace_listing.external_catalog_item_id` must be populated. |
-| Batch limit | The selection query orders by `marketplace_listing_id` and applies `lego.bricklink.pricing.crawl.batch-size`. |
+| Already queued work | Listings with `PENDING` or `CLAIMED` work are not scheduled again. |
+| Cooling period | Listings with any work item whose `next_attempt_at` is still in the future are not scheduled again. |
+| Batch limit | The scheduling query orders by `marketplace_listing_id` and applies `lego.bricklink.pricing.crawl.batch-size`. |
+| Allowlist | If `marketplace-listing-allowlist` is populated, candidates outside the allowlist are ignored after DB selection. |
 
 Crawler behavior:
 
 | Step | Description |
 | --- | --- |
-| Start work item | Inserts `pricing_crawl_work_item` with `STARTED`, `attempt_count=1`, `next_attempt_at=now`, and `claimed_at=now`. |
+| Recover stale claims | Requeues old `CLAIMED` work back to `PENDING` when `claimed_at` is older than `claim-stale-after` and attempts remain. |
+| Schedule work | Inserts `pricing_crawl_work_item` rows with `PENDING`, `attempt_count=0`, and `next_attempt_at` spread across `schedule-spread-window` plus optional jitter/blackout adjustment. |
+| Claim due work | Atomically transitions due `PENDING` rows to `CLAIMED`, increments `attempt_count`, and limits processing to `worker-batch-size`. |
 | Load inventory | Loads `item_inventory` for the listing so condition and completeness can be captured. |
 | Resolve condition | Maps `item_inventory.new_or_used` values `N`/`NEW` to BrickLink `N`, and `U`/`USED` to BrickLink `U`. |
 | Resolve item number | Uses `external_catalog_item.external_item_key`, for example `6390-1`. |
@@ -273,7 +290,8 @@ Crawler behavior:
 | Crawl comparables | Calls `catalogifs.ajax` through `BricklinkAjaxClient.catalogItemsForSaleByInternalItemId(itemId, condition, resultsPerPage)`. |
 | Persist snapshot | Inserts one immutable `pricing_snapshot` per successful listing crawl. |
 | Persist snapshot listings | Inserts one immutable `pricing_snapshot_listing` per comparable listing returned by BrickLink. |
-| Complete work item | Updates the work item to `SUCCESS` or a failure/skip status. |
+| Complete work item | Updates the work item to `SUCCEEDED` or a failure/skip status, clears `claimed_at`, and sets `next_attempt_at` using `crawl-cadence`. |
+| Retry work item | Retryable lookup/pricing failures return the work item to `PENDING`, clear `claimed_at`, and set `next_attempt_at` using `retry-backoff`. |
 
 BrickLink AJAX endpoints used:
 
@@ -297,7 +315,7 @@ Data written:
 
 | Table | Write behavior |
 | --- | --- |
-| `pricing_crawl_work_item` | Inserted for each selected listing that has a linked catalog item; updated with request metadata, completion time, status, and last error. |
+| `pricing_crawl_work_item` | Inserted as durable scheduled work. Due rows are claimed before AJAX calls, updated with request metadata, completion/retry status, next due time, and last error. |
 | `external_catalog_item` | Updated only when missing BrickLink internal `idItem` is successfully hydrated into `external_unique_key`. |
 | `pricing_snapshot` | Inserted once for each successful pricing crawl. Captures source item number, internal `idItem`, requested condition, inventory completeness, request metadata, payload hash, comparable count, and capture time. |
 | `pricing_snapshot_listing` | Inserted once per comparable listing returned by BrickLink. Captures external listing id, seller, country, condition, completeness, quantity, unit price, currency, description, and raw comparable payload. |
@@ -306,8 +324,11 @@ Work item statuses:
 
 | Status | Meaning |
 | --- | --- |
-| `STARTED` | Work item was inserted and crawl processing began. |
-| `SUCCESS` | Pricing snapshot and returned comparable rows were persisted. |
+| `PENDING` | Work is scheduled and eligible to be claimed when `next_attempt_at <= now` and attempts remain. |
+| `CLAIMED` | Worker claimed the row for processing. `attempt_count` has already been incremented. |
+| `SUCCEEDED` | Pricing snapshot and returned comparable rows were persisted. |
+| `SKIPPED_MISSING_LISTING` | The queued `marketplace_listing` row no longer exists. |
+| `SKIPPED_MISSING_CATALOG` | The queued listing no longer has a linked catalog item. |
 | `SKIPPED_MISSING_CONDITION` | `item_inventory.new_or_used` was absent or not recognized as New/Used. No AJAX calls are made. |
 | `SKIPPED_MISSING_ITEM_NUMBER` | `external_catalog_item.external_item_key` was absent. No pricing AJAX call is made. |
 | `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | `searchproduct.ajax` found no exact catalog item match. |
@@ -320,25 +341,27 @@ Outcomes:
 
 | Outcome | Meaning |
 | --- | --- |
-| `NO_WORK` | No active BrickLink marketplace listings selected. |
-| `SUCCESS` | Selected listings were processed and no listing failed. Skipped listings do not currently make the run outcome partial. |
-| `PARTIAL_SUCCESS` | At least one selected listing failed. |
+| `NO_WORK` | No work was scheduled, claimed, processed, or requeued. |
+| `SCHEDULED` | Work items were scheduled or stale claims were requeued, but no due work was claimed in this run. |
+| `SUCCESS` | At least one due work item was claimed and no listing failed. Skipped listings do not currently make the run outcome partial. |
+| `PARTIAL_SUCCESS` | At least one claimed work item failed. |
 
 Important logs:
 
 | Event | Meaning |
 | --- | --- |
-| `bricklink.pricing.crawl.skipped_missing_catalog` | Selected listing had no attached `ExternalCatalogItem`; no work item is created for that listing. |
-| `bricklink.pricing.crawl.job.completed` | Scheduled run completed and logs `BricklinkPricingCrawlResult` with selected, snapshot, listing, hydration, skip, failure, and elapsed counters. |
+| `bricklink.pricing.crawl.schedule.skipped_missing_catalog` | Scheduling candidate had no attached `ExternalCatalogItem`; no work item is created for that listing. |
+| `bricklink.pricing.crawl.skipped_missing_catalog` | Claimed work item pointed to a listing with no attached `ExternalCatalogItem`; work item is skipped. |
+| `bricklink.pricing.crawl.job.completed` | Scheduled run completed and logs `BricklinkPricingCrawlResult` with selected, scheduled, claimed, stale requeue, snapshot, listing, hydration, skip, failure, and elapsed counters. |
 
 Operational boundaries:
 
 | Boundary | Detail |
 | --- | --- |
-| Crawl only captures source data | The crawl job only persists pricing history. Competitive price calculation is handled by `BricklinkPricingDecisionJob`; neither job updates listing prices or triggers marketplace sync in Phase 3. |
+| Crawl only captures source data | The crawl job only persists pricing history. Competitive price calculation is handled by `BricklinkPricingDecisionJob`; neither job updates listing prices or triggers marketplace sync in Phase 4. |
 | Immutable history | `pricing_snapshot` and `pricing_snapshot_listing` are append-only observations for each crawl. The same BrickLink listing can appear in many snapshots over time. |
 | No latest competitor table yet | Current market views should query the latest relevant snapshot and its listings. A mutable latest competitor table is intentionally deferred. |
-| No crawl windowing yet | The current scheduled job selects active listings every run. Keep the job disabled or use conservative scheduling until due-time spreading, blackout windows, and randomized delays are added. |
+| Durable queue | The scheduler creates `PENDING` work and the worker processes only due rows it can claim. This is not strict FIFO, but due rows are selected by `next_attempt_at` then work item id. |
 | AJAX rate limit protection | Outbound AJAX calls are protected by `bricklink-ajax` rate limiting. Keep it enabled for live runs. |
 
 ### `BricklinkPricingDecisionJob`
@@ -712,9 +735,21 @@ Backed by `BricklinkPricingCrawlProperties`.
 | `lego.bricklink.pricing.crawl.bricklink-external-service-id` | `2` | Integer external service id | External service id for BrickLink rows in `external_service`, `marketplace_listing`, and `external_catalog_item`. |
 | `lego.bricklink.pricing.crawl.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Marketplace listing status selected for pricing crawl. |
 | `lego.bricklink.pricing.crawl.catalog-item-type` | `S` | BrickLink catalog item type; code trims and uppercases | Type sent to `searchproduct.ajax`. `S` means LEGO set and is the current supported pricing crawl target. |
-| `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value at least `1` | Maximum active BrickLink marketplace listings selected per run. |
+| `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value at least `1` | Maximum eligible BrickLink marketplace listings considered for work scheduling per run. |
+| `lego.bricklink.pricing.crawl.worker-batch-size` | `1` | Integer; effective value at least `1` | Maximum due work items claimed and processed per run. |
 | `lego.bricklink.pricing.crawl.results-per-page` | `500` | Integer; effective value at least `1` | `rpp` sent to `catalogifs.ajax`. |
-| `lego.bricklink.pricing.crawl.max-attempts` | `3` | Integer; effective value at least `1` | Stored on `pricing_crawl_work_item.max_attempts` for future retry orchestration. |
+| `lego.bricklink.pricing.crawl.max-attempts` | `3` | Integer; effective value at least `1` | Stored on `pricing_crawl_work_item.max_attempts`; retryable failures requeue until attempts are exhausted. |
+| `lego.bricklink.pricing.crawl.crawl-cadence` | `7d` | Spring `Duration`, positive | Cooling period before the same listing becomes eligible to schedule again. |
+| `lego.bricklink.pricing.crawl.schedule-spread-window` | `72h` | Spring `Duration`, zero or positive | Window used to spread newly created work item due times. |
+| `lego.bricklink.pricing.crawl.schedule-jitter` | `0s` | Spring `Duration`, zero or positive | Optional random positive jitter added to new work item due times. |
+| `lego.bricklink.pricing.crawl.retry-backoff` | `6h` | Spring `Duration`, positive | Delay before a retryable failed work item becomes due again. |
+| `lego.bricklink.pricing.crawl.claim-stale-after` | `2h` | Spring `Duration`, positive | Requeue age for abandoned `CLAIMED` work. |
+| `lego.bricklink.pricing.crawl.marketplace-listing-allowlist` | empty | Set of integer ids | Optional sandbox guard limiting scheduling to specific `marketplace_listing_id` values. |
+| `lego.bricklink.pricing.crawl.blackout.enabled` | `false` | `true`, `false` | Enables blackout adjustment for scheduled and retry due times. |
+| `lego.bricklink.pricing.crawl.blackout.zone-id` | `America/New_York` | Java time zone id | Time zone used for blackout evaluation. |
+| `lego.bricklink.pricing.crawl.blackout.start` | `21:30` | `HH:mm` local time | Blackout start time. |
+| `lego.bricklink.pricing.crawl.blackout.end` | `08:30` | `HH:mm` local time | Blackout end time. |
+| `lego.bricklink.pricing.crawl.blackout.weekdays-only` | `true` | `true`, `false` | Applies blackout adjustment only Monday through Friday when true. |
 | `lego.bricklink.pricing.crawl.scheduled.enabled` | `false` | `true`, `false` | Creates the scheduled job bean only when `lego.bricklink.pricing.crawl.enabled=true` is also set. |
 | `lego.bricklink.pricing.crawl.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between scheduled crawl runs. |
 | `lego.bricklink.pricing.crawl.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | First-run startup delay. |
@@ -732,14 +767,26 @@ lego:
         bricklink-external-service-id: 2
         active-listing-status-code: ACTIVE
         catalog-item-type: S
-        batch-size: 5
+        batch-size: 25
+        worker-batch-size: 1
+        crawl-cadence: 7d
+        schedule-spread-window: 72h
+        schedule-jitter: 30s
+        retry-backoff: 6h
+        claim-stale-after: 2h
         results-per-page: 500
         max-attempts: 3
+        blackout:
+          enabled: true
+          zone-id: America/New_York
+          start: "21:30"
+          end: "08:30"
+          weekdays-only: true
         scheduled:
           enabled: false
 ```
 
-Enable `scheduled.enabled` only for a controlled local/sandbox run until crawl windowing and due-time selection are implemented.
+Enable `scheduled.enabled` only for a controlled local/sandbox run. Keep `worker-batch-size` small; the scheduler can create many future-due rows while the worker processes only the rows that are currently due.
 
 ### `lego.bricklink.pricing.decision.*`
 
@@ -1083,7 +1130,7 @@ Prometheus uses Micrometer naming conventions. For example, counter `image_hosti
 
 ### BrickLink Pricing Crawl Metrics
 
-No dedicated Micrometer meters are emitted for the pricing crawl yet. Use `bricklink.pricing.crawl.job.completed` logs and SQL checks against `pricing_crawl_work_item`, `pricing_snapshot`, and `pricing_snapshot_listing` for Phase 2 validation.
+No dedicated Micrometer meters are emitted for the pricing crawl yet. Use `bricklink.pricing.crawl.job.completed` logs and SQL checks against `pricing_crawl_work_item`, `pricing_snapshot`, and `pricing_snapshot_listing` for Phase 4 validation. The crawl result includes scheduling, claiming, stale requeue, snapshot, hydration, skip, and failure counters.
 
 ### BrickLink Pricing Decision Metrics
 
@@ -1140,15 +1187,19 @@ Primary events:
 
 | Event | Purpose |
 | --- | --- |
-| `bricklink.pricing.crawl.skipped_missing_catalog` | One selected listing had no linked external catalog item; the crawler skips it before creating a work item. |
+| `bricklink.pricing.crawl.schedule.skipped_missing_catalog` | One scheduling candidate had no linked external catalog item; the scheduler skips creating a work item. |
+| `bricklink.pricing.crawl.skipped_missing_catalog` | One claimed work item referenced a listing without a linked external catalog item; the worker marks the item skipped. |
 | `bricklink.pricing.crawl.job.completed` | Scheduled run completed and logs `BricklinkPricingCrawlResult`. |
 
 `BricklinkPricingCrawlResult` fields:
 
 | Field | Meaning |
 | --- | --- |
-| `outcome` | `NO_WORK`, `SUCCESS`, or `PARTIAL_SUCCESS`. |
-| `listingsSelected` | Number of active BrickLink marketplace listings selected for the run. |
+| `outcome` | `NO_WORK`, `SCHEDULED`, `SUCCESS`, or `PARTIAL_SUCCESS`. |
+| `listingsSelected` | Number of active BrickLink marketplace listings selected as scheduling candidates after allowlist filtering. |
+| `workItemsScheduled` | Number of new `PENDING` `pricing_crawl_work_item` rows inserted. |
+| `workItemsClaimed` | Number of due work items transitioned from `PENDING` to `CLAIMED` and processed. |
+| `staleWorkItemsRequeued` | Number of abandoned `CLAIMED` work items returned to `PENDING`. |
 | `snapshotsWritten` | Number of `pricing_snapshot` rows inserted. |
 | `snapshotListingsWritten` | Number of `pricing_snapshot_listing` rows inserted. |
 | `hydratedCatalogItems` | Number of missing BrickLink internal `idItem` values populated into `external_catalog_item.external_unique_key`. |
@@ -1247,11 +1298,14 @@ Primary events:
 5. Keep `bricklink.ajax.rate-limit.enabled=true`.
 6. Keep `bricklink.ajax.rate-limit.minimum-delay-ms` at `2000` or higher for live BrickLink calls.
 7. Start with `lego.bricklink.pricing.crawl.enabled=true` and `lego.bricklink.pricing.crawl.scheduled.enabled=false`.
-8. For the first scheduled validation, use a small `lego.bricklink.pricing.crawl.batch-size`, for example `1` to `5`.
-9. Enable `lego.bricklink.pricing.crawl.scheduled.enabled=true` only during a controlled local/sandbox run.
-10. Watch `bricklink.pricing.crawl.job.completed` for selected, hydrated, snapshot, listing, skipped, and failed counters.
-11. Run the pricing SQL checks below to confirm work items, snapshots, snapshot listings, and `external_unique_key` hydration.
-12. Disable scheduling again after validation unless the fixed-delay cadence is intentionally safe for the current listing count.
+8. For the first scheduled validation, use `lego.bricklink.pricing.crawl.marketplace-listing-allowlist` or a small `batch-size` to limit scheduled work.
+9. Keep `lego.bricklink.pricing.crawl.worker-batch-size=1` for first live AJAX validation.
+10. Enable `lego.bricklink.pricing.crawl.scheduled.enabled=true` only during a controlled local/sandbox run.
+11. Watch `bricklink.pricing.crawl.job.completed` for selected, scheduled, claimed, stale requeue, hydrated, snapshot, listing, skipped, and failed counters.
+12. Confirm new work items are spread across `schedule-spread-window` and not placed inside blackout periods when blackout is enabled.
+13. Confirm due work is processed one claimed row at a time according to `worker-batch-size`.
+14. Run the pricing SQL checks below to confirm work items, snapshots, snapshot listings, and `external_unique_key` hydration.
+15. Disable scheduling again after validation unless the configured schedule window, fixed delay, and worker batch size are intentionally safe for the current listing count.
 
 Rollback:
 
@@ -1438,6 +1492,39 @@ select work_status_code,
 from pricing_crawl_work_item
 group by work_status_code
 order by row_count desc;
+```
+
+Check due pending work in the crawl queue:
+
+```sql
+select pricing_crawl_work_item_id,
+       marketplace_listing_id,
+       attempt_count,
+       max_attempts,
+       next_attempt_at,
+       created_at,
+       updated_at
+from pricing_crawl_work_item
+where work_status_code = 'PENDING'
+  and next_attempt_at <= current_timestamp
+  and coalesce(attempt_count, 0) < coalesce(max_attempts, 3)
+order by next_attempt_at, pricing_crawl_work_item_id
+limit 50;
+```
+
+Check stale claimed work that should be recovered by a later run:
+
+```sql
+select pricing_crawl_work_item_id,
+       marketplace_listing_id,
+       attempt_count,
+       max_attempts,
+       claimed_at,
+       last_error_message
+from pricing_crawl_work_item
+where work_status_code = 'CLAIMED'
+order by claimed_at, pricing_crawl_work_item_id
+limit 50;
 ```
 
 Review recent work items with request parameters and errors:
@@ -1852,7 +1939,9 @@ order by ai.sort_order;
 | BrickLink responses are `302` to error page | Wrong BrickLink base URI | Use `https://api.bricklink.com/api/store/v1`. |
 | BrickLink sync discovers orders but writes nothing | `lego.bricklink.orders.sync.scheduled.apply=false` | This is probe mode. Set apply true only after DB tables exist and probe output is reviewed. |
 | Pricing crawl job does not start | `lego.bricklink.pricing.crawl.enabled=false` or `lego.bricklink.pricing.crawl.scheduled.enabled=false` | Set both properties true for scheduled runs. |
-| Pricing crawl repeatedly re-crawls the same listings | Phase 2 scheduled job selects active listings by status each run and has no due-time/windowing yet | Disable scheduling after validation or use a conservative fixed delay and small batch size until crawl spreading is implemented. |
+| Pricing crawl schedules work but makes no AJAX calls | Newly created work has `next_attempt_at` in the future or no pending work is currently due | Check `pricing_crawl_work_item.next_attempt_at`, `schedule-spread-window`, blackout settings, and `worker-batch-size`. |
+| Pricing crawl repeatedly re-crawls the same listings | `crawl-cadence` is too short or terminal work rows have past `next_attempt_at` values | Increase `crawl-cadence` and check recent `pricing_crawl_work_item` rows for the listing. |
+| Pricing crawl leaves rows in `CLAIMED` | JVM stopped or failed after claim and before completion | Rows older than `claim-stale-after` are requeued on a later run if attempts remain. |
 | Pricing crawl writes many `SKIPPED_MISSING_CONDITION` work items | `item_inventory.new_or_used` is null or not `N`/`NEW`/`U`/`USED` | Fix inventory condition data before crawling that listing. |
 | Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the configured `catalog-item-type` | Verify item number and use `catalog-item-type=S` for sets. |
 | Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition or parsing returned an empty list | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. |
