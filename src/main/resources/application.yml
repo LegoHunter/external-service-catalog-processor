@@ -27,6 +27,7 @@ lego:
         bricklink-external-service-id: 2
         active-listing-status-code: ACTIVE
         batch-size: 25
+        require-current-snapshot: false
         algorithm-version: bricklink-competitive-v1
         strategy-code: LEGACY_COMPETITIVE
         minimum-price:

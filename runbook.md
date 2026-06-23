@@ -386,6 +386,7 @@ Schedule and selection settings:
 | `lego.bricklink.pricing.decision.scheduled.lock-at-most-for` | `10m` | ShedLock duration | Maximum distributed lock duration. |
 | `lego.bricklink.pricing.decision.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
 | `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value is at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
+| `lego.bricklink.pricing.decision.require-current-snapshot` | `false` | `true`, `false` | When true, non-fixed candidates must already have a matching pricing snapshot for their normalized condition/completeness before they are selected. Fixed-price listings remain eligible. |
 | `lego.bricklink.pricing.decision.algorithm-version` | `bricklink-competitive-v1` | Non-blank string | Stored on each `pricing_decision` row for algorithm traceability. |
 | `lego.bricklink.pricing.decision.strategy-code` | `LEGACY_COMPETITIVE` | Non-blank string; code trims and uppercases | Stored on each `pricing_decision` row. |
 | `lego.bricklink.pricing.decision.minimum-price` | null | Decimal money amount or null | Optional lower bound. If computed price is below this value, final price is clamped and reason is `BELOW_MIN_PRICE_CLAMPED`. |
@@ -400,6 +401,7 @@ Candidate selection:
 | Catalog mapping | `marketplace_listing.external_catalog_item_id` must be populated. |
 | Fixed-price eligibility | `marketplace_listing.fixed_price=true` listings are candidates even when condition/completeness are missing because fixed price is authoritative. |
 | Non-fixed eligibility | Non-fixed listings must have non-blank `item_inventory.new_or_used` and non-blank `item_inventory.completeness`. |
+| Optional snapshot gate | When `require-current-snapshot=true`, non-fixed listings must also have an existing `pricing_snapshot` matching normalized condition/completeness. Use this after crawl data is flowing to avoid filling review batches with `NO_CURRENT_SNAPSHOT` decisions. |
 | Batch limit | The selection query filters to eligible candidates, orders by `marketplace_listing_id`, and applies `lego.bricklink.pricing.decision.batch-size`. |
 
 Decision behavior:
@@ -798,6 +800,7 @@ Backed by `BricklinkPricingDecisionProperties`.
 | `lego.bricklink.pricing.decision.bricklink-external-service-id` | `2` | Integer external service id | External service id for BrickLink marketplace listings selected for pricing decisions. |
 | `lego.bricklink.pricing.decision.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Marketplace listing status selected for pricing decisions. |
 | `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
+| `lego.bricklink.pricing.decision.require-current-snapshot` | `false` | `true`, `false` | When true, non-fixed candidates must already have a matching `pricing_snapshot`; this suppresses `NO_CURRENT_SNAPSHOT` review rows and keeps batches focused on calculable or fixed-price listings. |
 | `lego.bricklink.pricing.decision.algorithm-version` | `bricklink-competitive-v1` | Non-blank string | Stored on `pricing_decision.algorithm_version`. |
 | `lego.bricklink.pricing.decision.strategy-code` | `LEGACY_COMPETITIVE` | Non-blank string; code trims and uppercases | Stored on `pricing_decision.strategy_code`. |
 | `lego.bricklink.pricing.decision.minimum-price` | null | Decimal money amount or null | Optional lower bound for computed decisions. Produces `BELOW_MIN_PRICE_CLAMPED` when applied. |
@@ -819,6 +822,7 @@ lego:
         bricklink-external-service-id: 2
         active-listing-status-code: ACTIVE
         batch-size: 25
+        require-current-snapshot: false
         algorithm-version: bricklink-competitive-v1
         strategy-code: LEGACY_COMPETITIVE
         scheduled:
@@ -1677,6 +1681,80 @@ order by pd.pricing_decision_id desc
 limit 50;
 ```
 
+Review latest decision state per active BrickLink listing. This is the preferred Phase 5 review query because `pricing_decision` is historical and can contain older failed rows for the same listing:
+
+```sql
+select ml.marketplace_listing_id,
+       ml.external_listing_id,
+       eci.external_item_key,
+       eci.external_unique_key,
+       ii.uuid,
+       ii.new_or_used,
+       ii.completeness,
+       ml.unit_price as current_unit_price,
+       ml.fixed_price,
+       pd.pricing_decision_id,
+       pd.decision_status_code,
+       pd.reason_code,
+       pd.computed_price,
+       pd.final_price,
+       pd.final_price - ml.unit_price as current_to_final_delta,
+       pd.comparable_count,
+       pd.confidence,
+       pd.created_at as decision_created_at,
+       ps.captured_at as snapshot_captured_at,
+       ps.comparable_count as snapshot_comparable_count
+from marketplace_listing ml
+join item_inventory ii
+  on ii.item_inventory_id = ml.item_inventory_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+left join (
+    select pd.*
+    from pricing_decision pd
+    join (
+        select marketplace_listing_id,
+               max(pricing_decision_id) as pricing_decision_id
+        from pricing_decision
+        group by marketplace_listing_id
+    ) latest
+      on latest.pricing_decision_id = pd.pricing_decision_id
+) pd
+  on pd.marketplace_listing_id = ml.marketplace_listing_id
+left join pricing_snapshot ps
+  on ps.pricing_snapshot_id = pd.pricing_snapshot_id
+where ml.listing_external_service_id = 2
+  and ml.listing_status_code = 'ACTIVE'
+order by ml.marketplace_listing_id
+limit 100;
+```
+
+Summarize latest active-listing review state:
+
+```sql
+select coalesce(latest.decision_status_code, 'NO_DECISION') as decision_status_code,
+       coalesce(latest.reason_code, 'NO_DECISION') as reason_code,
+       count(*) as listing_count
+from marketplace_listing ml
+left join (
+    select pd.*
+    from pricing_decision pd
+    join (
+        select marketplace_listing_id,
+               max(pricing_decision_id) as pricing_decision_id
+        from pricing_decision
+        group by marketplace_listing_id
+    ) latest
+      on latest.pricing_decision_id = pd.pricing_decision_id
+) latest
+  on latest.marketplace_listing_id = ml.marketplace_listing_id
+where ml.listing_external_service_id = 2
+  and ml.listing_status_code = 'ACTIVE'
+group by coalesce(latest.decision_status_code, 'NO_DECISION'),
+         coalesce(latest.reason_code, 'NO_DECISION')
+order by listing_count desc;
+```
+
 Find active BrickLink pricing decision candidates with no pricing decision yet:
 
 ```sql
@@ -1769,6 +1847,44 @@ order by abs(pd.final_price - pd.previous_price) desc,
 limit 50;
 ```
 
+Review latest decisions that are ready for a future apply phase. This excludes stale proposals that were superseded by a newer decision for the same listing:
+
+```sql
+select pd.pricing_decision_id,
+       ml.marketplace_listing_id,
+       ml.external_listing_id,
+       eci.external_item_key,
+       ml.unit_price as current_unit_price,
+       pd.previous_price,
+       pd.computed_price,
+       pd.final_price,
+       pd.final_price - ml.unit_price as current_to_final_delta,
+       pd.reason_code,
+       pd.comparable_count,
+       pd.confidence,
+       pd.created_at
+from pricing_decision pd
+join (
+    select marketplace_listing_id,
+           max(pricing_decision_id) as pricing_decision_id
+    from pricing_decision
+    group by marketplace_listing_id
+) latest
+  on latest.pricing_decision_id = pd.pricing_decision_id
+join marketplace_listing ml
+  on ml.marketplace_listing_id = pd.marketplace_listing_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where ml.listing_external_service_id = 2
+  and ml.listing_status_code = 'ACTIVE'
+  and pd.decision_status_code = 'PROPOSED'
+  and pd.final_price is not null
+  and coalesce(ml.fixed_price, 0) <> 1
+order by abs(pd.final_price - ml.unit_price) desc,
+         pd.pricing_decision_id desc
+limit 100;
+```
+
 Review failed or skipped decisions:
 
 ```sql
@@ -1789,6 +1905,33 @@ where pd.decision_status_code in ('FAILED', 'SKIPPED')
 order by pd.pricing_decision_id desc
 limit 50;
 ```
+
+Review stale historical decisions that have been superseded by a newer decision for the same listing:
+
+```sql
+select pd.pricing_decision_id,
+       pd.marketplace_listing_id,
+       ml.external_listing_id,
+       eci.external_item_key,
+       pd.decision_status_code,
+       pd.reason_code,
+       pd.created_at
+from pricing_decision pd
+join marketplace_listing ml
+  on ml.marketplace_listing_id = pd.marketplace_listing_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where exists (
+    select 1
+    from pricing_decision newer
+    where newer.marketplace_listing_id = pd.marketplace_listing_id
+      and newer.pricing_decision_id > pd.pricing_decision_id
+)
+order by pd.marketplace_listing_id,
+         pd.pricing_decision_id;
+```
+
+Do not delete historical `pricing_decision` rows during Phase 5. They are an audit trail and are useful for explaining why earlier runs failed, for example before inventory condition/completeness was backfilled. Use latest-decision queries for review. If storage cleanup is ever needed later, add an archival policy rather than ad hoc deletes.
 
 ### BrickLink Order Sync SQL Checks
 
