@@ -38,6 +38,26 @@ lego:
           initial-delay-ms: 30000
           lock-at-most-for: 10m
           lock-at-least-for: 0s
+      apply-readiness:
+        enabled: false
+        bricklink-external-service-id: 2
+        active-listing-status-code: ACTIVE
+        proposed-decision-status-code: PROPOSED
+        batch-size: 25
+        minimum-price-delta: 0.01
+        apply-eligible-reason-codes:
+          - SINGLE_COMPARABLE_DISCOUNTED
+          - TWO_COMPARABLES_WEIGHTED
+          - MEAN_PLUS_STDDEV
+          - MATCHED_LOWEST_COMPETITOR
+          - BELOW_MIN_PRICE_CLAMPED
+          - ABOVE_MAX_PRICE_CLAMPED
+        scheduled:
+          enabled: false
+          fixed-delay-ms: 300000
+          initial-delay-ms: 30000
+          lock-at-most-for: 10m
+          lock-at-least-for: 0s
     orders:
       sync:
         marketplace-code: BRICKLINK
