@@ -16,6 +16,7 @@ public class BricklinkPricingDecisionProperties {
     private Integer bricklinkExternalServiceId = 2;
     private String activeListingStatusCode = "ACTIVE";
     private int batchSize = 25;
+    private boolean requireCurrentSnapshot = false;
     private String algorithmVersion = "bricklink-competitive-v1";
     private String strategyCode = "LEGACY_COMPETITIVE";
     private BigDecimal minimumPrice;

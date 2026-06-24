@@ -91,7 +91,8 @@ public class BricklinkPricingDecisionService {
         Set<MarketplaceListing> listings = marketplaceListingDao.findPricingDecisionCandidatesByListingExternalServiceIdAndListingStatusCode(
                 properties.getBricklinkExternalServiceId(),
                 properties.effectiveActiveListingStatusCode(),
-                properties.effectiveBatchSize()
+                properties.effectiveBatchSize(),
+                properties.isRequireCurrentSnapshot()
         );
 
         if (listings.isEmpty()) {

@@ -26,6 +26,19 @@ lego:
         scheduled:
           enabled: true
           apply: true
+    pricing:
+      crawl:
+        enabled: true
+        batch-size: 100
+        scheduled:
+          enabled: true
+      decision:
+        enabled: true
+        batch-size: 100
+        scheduled:
+          enabled: true
+          initial-delay-ms: 5000
+          fixed-delay-ms: 600000
   fulfillment:
     sync:
       scheduled:
