@@ -32,6 +32,7 @@ The service defaults to the `local,sandbox` profiles unless overridden by `sprin
 | Image-hosting repair | REST | Repair DB links from current remote image-hosting state. |
 | BrickLink pricing crawl | Scheduled job | Crawl active BrickLink marketplace listings, hydrate missing BrickLink internal catalog ids, and persist immutable pricing snapshots/listings for later pricing decisions. |
 | BrickLink pricing decision | Scheduled job | Read latest BrickLink pricing snapshots, compute competitive prices with the legacy algorithm, and persist auditable non-applied pricing decisions. |
+| BrickLink pricing apply readiness | Scheduled job | Dry-run review of latest proposed pricing decisions that would change current marketplace listing prices; writes no listing prices and triggers no marketplace sync. |
 | BrickLink order sync | Scheduled job | Poll BrickLink open orders and, when apply mode is enabled, sync marketplace order staging tables. |
 | Fulfillment sync | Scheduled job | Map staged BrickLink marketplace orders to ShipStation orders, then reconcile shipped ShipStation orders back to BrickLink when apply mode is enabled. |
 
@@ -561,6 +562,62 @@ Important logs:
 | --- | --- |
 | `bricklink.pricing.decision.job.completed` | Scheduled run completed and logs `BricklinkPricingDecisionResult` with selected, written, proposed, skipped, failed, and elapsed counters. |
 
+### `BricklinkPricingApplyReadinessJob`
+
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyReadinessJob`
+
+Condition:
+
+```yaml
+lego.bricklink.pricing.apply-readiness.enabled: true
+lego.bricklink.pricing.apply-readiness.scheduled.enabled: true
+```
+
+`lego.bricklink.pricing.apply-readiness.enabled=true` creates the dry-run readiness service. The scheduled job bean is created only when both `enabled` and `scheduled.enabled` are true.
+
+This job is intentionally read-only. It does not update `marketplace_listing.unit_price`, does not mark `pricing_decision.applied_at`, and does not trigger marketplace sync. It is the Phase 6 bridge between trusted read-only pricing decisions and a later apply/sync phase.
+
+Schedule and selection settings:
+
+| Setting | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.bricklink.pricing.apply-readiness.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between dry-run readiness scans. |
+| `lego.bricklink.pricing.apply-readiness.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Delay after startup before first run. |
+| `lego.bricklink.pricing.apply-readiness.scheduled.lock-at-most-for` | `10m` | ShedLock duration | Maximum distributed lock duration. |
+| `lego.bricklink.pricing.apply-readiness.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
+| `lego.bricklink.pricing.apply-readiness.batch-size` | `25` | Integer; effective value is at least `1` | Maximum latest proposed decisions reviewed per run. |
+| `lego.bricklink.pricing.apply-readiness.minimum-price-delta` | `0.01` | Decimal money amount, zero or positive | Minimum absolute difference between current listing price and proposed final price required to count as ready. |
+| `lego.bricklink.pricing.apply-readiness.apply-eligible-reason-codes` | successful algorithm reason codes | Set of reason code strings | Only proposed decisions with these reason codes are counted as ready. |
+
+Candidate selection:
+
+| Requirement | Detail |
+| --- | --- |
+| Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.apply-readiness.bricklink-external-service-id`. |
+| Marketplace listing status | `marketplace_listing.listing_status_code` must equal `lego.bricklink.pricing.apply-readiness.active-listing-status-code` after trimming/uppercasing. |
+| Latest decision only | The query selects only the newest `pricing_decision` per `marketplace_listing_id`, using `pricing_decision_id` as the tiebreaker. |
+| Proposed only | The latest decision must match `lego.bricklink.pricing.apply-readiness.proposed-decision-status-code`, normally `PROPOSED`. |
+| Unapplied only | `pricing_decision.applied_at` must be null. Phase 6 never changes it, but the filter protects future phases. |
+| Batch limit | The selection query orders by latest decision recency and applies `lego.bricklink.pricing.apply-readiness.batch-size`. |
+
+Readiness behavior:
+
+| Outcome bucket | Meaning |
+| --- | --- |
+| `readyToApply` | Latest proposed decision is non-fixed, has current and final prices, has matching current/decision currency, uses an eligible reason code, and meets the minimum price delta. |
+| `skippedFixedPrice` | Listing is currently marked fixed price, so the proposed decision is not considered apply-ready. |
+| `skippedMissingPrice` | Current listing price or proposed final price is missing. |
+| `skippedCurrencyMismatch` | Current listing currency and decision currency differ. |
+| `skippedIneligibleReason` | Proposed decision reason code is not in `apply-eligible-reason-codes`. |
+| `skippedBelowMinimumDelta` | Proposed price equals current price or differs by less than `minimum-price-delta`. |
+
+Important logs:
+
+| Event | Meaning |
+| --- | --- |
+| `bricklink.pricing.apply_readiness.ready` | One latest proposed decision would change a listing if a later apply phase existed. Logs listing id, decision id, current price, proposed price, delta, currency, reason, and algorithm version. |
+| `bricklink.pricing.apply_readiness.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyReadinessResult` with selected, ready, skipped, and elapsed counters. |
+
 ### `ImageHostingScheduledSyncJob`
 
 Class: `io.legohunter.egress.imagehosting.ImageHostingScheduledSyncJob`
@@ -929,6 +986,44 @@ lego:
 
 Run pricing decisions after a successful crawl has populated `pricing_snapshot` and `pricing_snapshot_listing`. The decision job selects fixed-price overrides and non-fixed listings with populated condition/completeness data; legacy listings missing those fields do not consume the configured decision batch. Phase 3 decisions are non-applying; review `pricing_decision` rows before any future apply/sync phase.
 
+### `lego.bricklink.pricing.apply-readiness.*`
+
+Backed by `BricklinkPricingApplyReadinessProperties`.
+
+| Property | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.bricklink.pricing.apply-readiness.enabled` | `false` | `true`, `false` | Creates the BrickLink pricing apply-readiness dry-run service bean when true. |
+| `lego.bricklink.pricing.apply-readiness.bricklink-external-service-id` | `2` | Integer external service id | External service id for BrickLink marketplace listings selected for readiness review. |
+| `lego.bricklink.pricing.apply-readiness.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Marketplace listing status selected for readiness review. |
+| `lego.bricklink.pricing.apply-readiness.proposed-decision-status-code` | `PROPOSED` | Non-blank decision status string; code trims and uppercases | Latest decision status eligible for dry-run apply review. |
+| `lego.bricklink.pricing.apply-readiness.batch-size` | `25` | Integer; effective value at least `1` | Maximum latest proposed decisions reviewed per run. |
+| `lego.bricklink.pricing.apply-readiness.minimum-price-delta` | `0.01` | Decimal money amount, zero or positive | Minimum absolute price delta required before a proposed decision is counted as ready. |
+| `lego.bricklink.pricing.apply-readiness.apply-eligible-reason-codes` | successful algorithm reason codes | Set of reason code strings | Proposed decisions outside this set are skipped as ineligible. |
+| `lego.bricklink.pricing.apply-readiness.scheduled.enabled` | `false` | `true`, `false` | Creates the scheduled job bean only when `lego.bricklink.pricing.apply-readiness.enabled=true` is also set. |
+| `lego.bricklink.pricing.apply-readiness.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between scheduled readiness scans. |
+| `lego.bricklink.pricing.apply-readiness.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | First-run startup delay. |
+| `lego.bricklink.pricing.apply-readiness.scheduled.lock-at-most-for` | `10m` | ShedLock duration string | Maximum distributed lock time. |
+| `lego.bricklink.pricing.apply-readiness.scheduled.lock-at-least-for` | `0s` | ShedLock duration string | Minimum distributed lock time. |
+
+Recommended safe defaults:
+
+```yaml
+lego:
+  bricklink:
+    pricing:
+      apply-readiness:
+        enabled: true
+        bricklink-external-service-id: 2
+        active-listing-status-code: ACTIVE
+        proposed-decision-status-code: PROPOSED
+        batch-size: 25
+        minimum-price-delta: 0.01
+        scheduled:
+          enabled: false
+```
+
+Enable this only after the crawl and decision jobs are producing recent `PROPOSED` decisions. Phase 6 is read-only, so a successful run means the system found rows that would be eligible for a later apply phase; no prices are changed.
+
 ### `bricklink.rest.*`
 
 Backed by `bricklink-rest` dependency `BricklinkRestProperties`.
@@ -1238,6 +1333,10 @@ No dedicated Micrometer meters are emitted for the pricing crawl yet. Use `brick
 
 No dedicated Micrometer meters are emitted for the pricing decision job yet. Use `bricklink.pricing.decision.job.completed` logs and SQL checks against `pricing_decision` for Phase 3 validation.
 
+### BrickLink Pricing Apply Readiness Metrics
+
+No dedicated Micrometer meters are emitted for the pricing apply-readiness job yet. Use `bricklink.pricing.apply_readiness.job.completed` logs and SQL checks against the latest `pricing_decision` rows for Phase 6 validation. The result includes selected, ready, skipped fixed price, skipped missing price, skipped currency mismatch, skipped ineligible reason, skipped below minimum delta, and elapsed counters.
+
 ### Fulfillment Sync Metrics
 
 | Meter | Type | Tags | Description |
@@ -1327,6 +1426,29 @@ Primary events:
 | `proposedDecisions` | Number of computed non-applied `PROPOSED` decisions. |
 | `skippedDecisions` | Number of intentional skips, currently fixed-price overrides. |
 | `failedDecisions` | Number of listings where no price could be safely computed. |
+| `elapsedMillis` | Run duration in milliseconds. |
+
+### BrickLink Pricing Apply Readiness Logs
+
+Primary events:
+
+| Event | Purpose |
+| --- | --- |
+| `bricklink.pricing.apply_readiness.ready` | One latest proposed decision would update a current marketplace listing price in a later apply phase. |
+| `bricklink.pricing.apply_readiness.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyReadinessResult`. |
+
+`BricklinkPricingApplyReadinessResult` fields:
+
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `NO_WORK`, `SUCCESS`, or `NO_READY_DECISIONS`. |
+| `decisionsSelected` | Number of latest proposed, unapplied decisions selected for dry-run readiness review. |
+| `readyToApply` | Number of selected decisions that would be eligible for a later apply phase. |
+| `skippedFixedPrice` | Number skipped because the current marketplace listing is fixed price. |
+| `skippedMissingPrice` | Number skipped because the current listing price or proposed final price is missing. |
+| `skippedCurrencyMismatch` | Number skipped because current listing currency and decision currency differ. |
+| `skippedIneligibleReason` | Number skipped because the proposed decision reason code is not configured as apply-eligible. |
+| `skippedBelowMinimumDelta` | Number skipped because current and proposed prices differ by less than `minimum-price-delta`. |
 | `elapsedMillis` | Run duration in milliseconds. |
 
 ### Fulfillment Sync Logs
@@ -1448,6 +1570,32 @@ lego:
 ```
 
 Set `lego.bricklink.pricing.decision.enabled=false` if the service bean should be disabled entirely. Phase 3 does not update marketplace listing prices, so rollback is stopping future decision rows rather than undoing applied price changes.
+
+### Safe BrickLink Pricing Apply Readiness Rollout
+
+1. Confirm the BrickLink pricing crawl has produced recent `pricing_snapshot` and `pricing_snapshot_listing` rows.
+2. Confirm the BrickLink pricing decision job has produced recent latest `PROPOSED` decisions.
+3. Start with `lego.bricklink.pricing.apply-readiness.enabled=true` and `lego.bricklink.pricing.apply-readiness.scheduled.enabled=false`.
+4. Use a small `lego.bricklink.pricing.apply-readiness.batch-size` for first validation, for example `1` to `5`.
+5. Keep `lego.bricklink.pricing.apply-readiness.minimum-price-delta=0.01` unless you want to suppress very small price changes.
+6. Enable `lego.bricklink.pricing.apply-readiness.scheduled.enabled=true` only during a controlled local/sandbox run.
+7. Watch `bricklink.pricing.apply_readiness.job.completed` for selected, ready, and skipped counters.
+8. Watch `bricklink.pricing.apply_readiness.ready` rows for the specific marketplace listings and price deltas that a later apply phase would change.
+9. Run the ready-for-apply SQL check below and confirm it agrees with the job counters.
+10. Disable scheduling again after validation unless the run cadence is intentionally safe.
+
+Rollback:
+
+```yaml
+lego:
+  bricklink:
+    pricing:
+      apply-readiness:
+        scheduled:
+          enabled: false
+```
+
+Set `lego.bricklink.pricing.apply-readiness.enabled=false` if the service bean should be disabled entirely. Phase 6 does not update `marketplace_listing`, mark decisions applied, or trigger marketplace sync, so rollback is stopping future dry-run scans.
 
 ### Safe BrickLink Order Sync Rollout
 
@@ -1945,7 +2093,7 @@ order by abs(pd.final_price - pd.previous_price) desc,
 limit 50;
 ```
 
-Review latest decisions that are ready for a future apply phase. This excludes stale proposals that were superseded by a newer decision for the same listing:
+Review latest decisions that the Phase 6 dry-run apply-readiness job would count as ready. This excludes stale proposals superseded by newer decisions and still does not apply any prices:
 
 ```sql
 select pd.pricing_decision_id,
@@ -1953,9 +2101,11 @@ select pd.pricing_decision_id,
        ml.external_listing_id,
        eci.external_item_key,
        ml.unit_price as current_unit_price,
+       ml.currency_code as current_currency_code,
        pd.previous_price,
        pd.computed_price,
        pd.final_price,
+       pd.currency_code as decision_currency_code,
        pd.final_price - ml.unit_price as current_to_final_delta,
        pd.reason_code,
        pd.comparable_count,
@@ -1976,8 +2126,20 @@ left join external_catalog_item eci
 where ml.listing_external_service_id = 2
   and ml.listing_status_code = 'ACTIVE'
   and pd.decision_status_code = 'PROPOSED'
+  and pd.applied_at is null
+  and ml.unit_price is not null
   and pd.final_price is not null
   and coalesce(ml.fixed_price, 0) <> 1
+  and coalesce(upper(trim(ml.currency_code)), 'USD') = coalesce(upper(trim(pd.currency_code)), 'USD')
+  and pd.reason_code in (
+      'SINGLE_COMPARABLE_DISCOUNTED',
+      'TWO_COMPARABLES_WEIGHTED',
+      'MEAN_PLUS_STDDEV',
+      'MATCHED_LOWEST_COMPETITOR',
+      'BELOW_MIN_PRICE_CLAMPED',
+      'ABOVE_MAX_PRICE_CLAMPED'
+  )
+  and abs(pd.final_price - ml.unit_price) >= 0.01
 order by abs(pd.final_price - ml.unit_price) desc,
          pd.pricing_decision_id desc
 limit 100;
@@ -2194,6 +2356,8 @@ order by ai.sort_order;
 | Pricing decisions are `SKIPPED` with `FIXED_PRICE_OVERRIDE` | `marketplace_listing.fixed_price=true` | Expected when the listing price is intentionally fixed. |
 | Pricing decisions are clamped | `minimum-price` or `maximum-price` is configured | Review global clamp properties and `source_summary_json` for the original algorithm branch. |
 | Pricing decision final price differs greatly from current price | Competitive algorithm found a large market delta or stale listing price | Review exact comparable rows, comparable count, confidence, and reason code before any future apply phase. |
+| Pricing apply-readiness job reports `NO_WORK` | No latest, unapplied `PROPOSED` decisions match the configured marketplace service/status | Run the decision job first and inspect latest decision state per active listing. |
+| Pricing apply-readiness job reports `NO_READY_DECISIONS` | Selected proposed decisions were skipped by fixed-price, missing-price, currency, reason-code, or minimum-delta guards | Review `BricklinkPricingApplyReadinessResult` counters and the ready-for-apply SQL query. |
 | BrickLink AJAX calls start failing after a fast test run | BrickLink may be throttling or temporarily banning the external IP | Stop the scheduled job, keep `bricklink.ajax.rate-limit.enabled=true`, keep `minimum-delay-ms >= 2000`, and wait before retrying. |
 | Fulfillment sync maps orders but creates no ShipStation orders | `lego.fulfillment.sync.scheduled.apply=false` | This is dry-run mapping mode. Set apply true only after staged payloads and credentials are verified. |
 | Fulfillment sync reports `PAYLOADS_MISSING` | BrickLink order sync has not stored latest `ORDER_RESPONSE` and `ORDER_ITEMS_RESPONSE` payloads for candidates | Run BrickLink order sync with `apply=true` first and confirm `marketplace_order_payload` rows exist. |
