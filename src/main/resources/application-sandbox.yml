@@ -26,6 +26,71 @@ lego:
   object-storage:
     buckets:
       final-photo: lego-photos-sandbox
+  bricklink:
+    pricing:
+      crawl:
+        enabled: true
+        bricklink-external-service-id: 2
+        active-listing-status-code: ACTIVE
+        catalog-item-type: S
+        batch-size: 100
+        worker-batch-size: 1
+        results-per-page: 500
+        max-attempts: 3
+        crawl-cadence: 7d
+        schedule-spread-window: 72h
+        schedule-jitter: 30s
+        retry-backoff: 6h
+        claim-stale-after: 2h
+        marketplace-listing-allowlist: []
+        blackout:
+          enabled: true
+          zone-id: America/New_York
+          start: "21:30"
+          end: "08:30"
+          weekdays-only: true
+        scheduled:
+          enabled: true
+          fixed-delay-ms: 600000
+          initial-delay-ms: 30000
+          lock-at-most-for: 30m
+          lock-at-least-for: 0s
+      decision:
+        enabled: true
+        bricklink-external-service-id: 2
+        active-listing-status-code: ACTIVE
+        batch-size: 100
+        require-current-snapshot: true
+        algorithm-version: bricklink-competitive-v1
+        strategy-code: LEGACY_COMPETITIVE
+        minimum-price:
+        maximum-price:
+        scheduled:
+          enabled: true
+          fixed-delay-ms: 600000
+          initial-delay-ms: 120000
+          lock-at-most-for: 10m
+          lock-at-least-for: 0s
+      apply-readiness:
+        enabled: true
+        bricklink-external-service-id: 2
+        active-listing-status-code: ACTIVE
+        proposed-decision-status-code: PROPOSED
+        batch-size: 100
+        minimum-price-delta: 0.01
+        apply-eligible-reason-codes:
+          - SINGLE_COMPARABLE_DISCOUNTED
+          - TWO_COMPARABLES_WEIGHTED
+          - MEAN_PLUS_STDDEV
+          - MATCHED_LOWEST_COMPETITOR
+          - BELOW_MIN_PRICE_CLAMPED
+          - ABOVE_MAX_PRICE_CLAMPED
+        scheduled:
+          enabled: true
+          fixed-delay-ms: 600000
+          initial-delay-ms: 180000
+          lock-at-most-for: 10m
+          lock-at-least-for: 0s
 
 kafka:
   bootstrap-servers: redpanda-dev-0.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-1.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-2.redpanda-dev.redpanda-dev.svc.cluster.local:9092
@@ -153,3 +218,12 @@ kafka:
         group-id: sandbox-rebrickable-theme-entry-group
       producer:
         retries: 3
+
+bricklink:
+  ajax:
+    uri: https://www.bricklink.com
+    rate-limit:
+      enabled: true
+      minimum-delay-ms: 2000
+    http-logging:
+      enabled: false
