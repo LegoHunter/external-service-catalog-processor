@@ -53,6 +53,7 @@ public class JobConfigurationMetrics {
                 .tag("display_name", displayName)
                 .tag("enabled", Boolean.toString(enabled))
                 .tag("apply", Boolean.toString(apply))
+                .strongReference(true)
                 .register(meterRegistry);
     }
 }
