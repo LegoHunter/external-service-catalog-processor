@@ -1327,15 +1327,90 @@ Prometheus uses Micrometer naming conventions. For example, counter `image_hosti
 
 ### BrickLink Pricing Crawl Metrics
 
-No dedicated Micrometer meters are emitted for the pricing crawl yet. Use `bricklink.pricing.crawl.job.completed` logs and SQL checks against `pricing_crawl_work_item`, `pricing_snapshot`, and `pricing_snapshot_listing` for Phase 4 validation. The crawl result includes scheduling, claiming, stale requeue, snapshot, hydration, skip, and failure counters.
+| Meter | Type | Tags | Description |
+| --- | --- | --- | --- |
+| `bricklink_pricing_crawl_job` | Counter | `outcome` | One count per crawl job run. Outcomes are lowercased result values such as `success`, `scheduled`, `partial_success`, or `no_work`. |
+| `bricklink_pricing_crawl_job_duration` | Timer | `outcome` | Crawl job run duration. Prometheus exposes this as `_seconds_count`, `_seconds_sum`, and `_seconds_max`. |
+| `bricklink_pricing_crawl_listing` | Counter | `result` | Listing counts by `selected`, `skipped`, and `failed`. |
+| `bricklink_pricing_crawl_work_item` | Counter | `result` | Work item counts by `scheduled`, `claimed`, and `stale_requeued`. |
+| `bricklink_pricing_crawl_snapshot` | Counter | `result` | Snapshot write counts by `snapshot` and `snapshot_listing`. |
+| `bricklink_pricing_crawl_catalog_item` | Counter | `result` | Catalog hydration count by `hydrated`. |
+| `bricklink_pricing_crawl_work_item_current` | Gauge | `state` | Current work item counts. States are `pending`, `due`, `retryable`, `claimed`, `stale_claimed`, `succeeded`, `failed`, and `skipped`. |
+
+Prometheus examples:
+
+```promql
+sum by (outcome) (increase(bricklink_pricing_crawl_job_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (result) (increase(bricklink_pricing_crawl_snapshot_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (state) (bricklink_pricing_crawl_work_item_current{namespace="$namespace",service="$service"})
+sum by (outcome) (rate(bricklink_pricing_crawl_job_duration_seconds_sum{namespace="$namespace",service="$service"}[5m]))
+/
+sum by (outcome) (rate(bricklink_pricing_crawl_job_duration_seconds_count{namespace="$namespace",service="$service"}[5m]))
+```
+
+Healthy sandbox behavior:
+
+| Signal | Expected behavior |
+| --- | --- |
+| Crawl job runs | Counter increases on the configured scheduler cadence. In Kubernetes sandbox this may be every 3 minutes when the faster sandbox cadence is deployed. |
+| Claimed work items | Usually increments by the worker batch size, currently expected to be small for BrickLink safety. |
+| Snapshot listings | Increases only when BrickLink returns comparable listings and snapshot persistence succeeds. |
+| `due` gauge | Can be nonzero when pending work is immediately eligible. A constantly growing `due` count means the worker is not keeping up or is failing before claim. |
+| `retryable` gauge | Nonzero is acceptable for transient BrickLink/network failures. It should not grow without later successful retries or terminal failures. |
+| `stale_claimed` gauge | Should normally be zero. Nonzero means prior claimed work was abandoned long enough to pass `claim-stale-after`. |
 
 ### BrickLink Pricing Decision Metrics
 
-No dedicated Micrometer meters are emitted for the pricing decision job yet. Use `bricklink.pricing.decision.job.completed` logs and SQL checks against `pricing_decision` for Phase 3 validation.
+| Meter | Type | Tags | Description |
+| --- | --- | --- | --- |
+| `bricklink_pricing_decision_job` | Counter | `outcome` | One count per pricing decision job run. |
+| `bricklink_pricing_decision_job_duration` | Timer | `outcome` | Decision job run duration. |
+| `bricklink_pricing_decision_listing` | Counter | `result` | Listing counts by `selected`. |
+| `bricklink_pricing_decision` | Counter | `result` | Decision counts by `written`, `proposed`, `skipped`, and `failed`. |
+| `bricklink_pricing_decision_current` | Gauge | `status`, `unapplied_only` | Current latest decision counts by status. Status values include `proposed`, `failed`, and `skipped`. `unapplied_only=true` is currently registered for latest proposed decisions. |
+
+Prometheus examples:
+
+```promql
+sum by (outcome) (increase(bricklink_pricing_decision_job_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (result) (increase(bricklink_pricing_decision_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (status,unapplied_only) (bricklink_pricing_decision_current{namespace="$namespace",service="$service"})
+```
+
+Healthy sandbox behavior:
+
+| Signal | Expected behavior |
+| --- | --- |
+| Decision job runs | Counter increases on the configured scheduler cadence. |
+| Decisions written | Should increase when new priceable candidates exist. After de-dupe hardening, it should not repeatedly write identical decisions for the same listing and same latest snapshot. |
+| Proposed decisions | Should rise as matching crawl snapshots become available. |
+| Failed decisions | Useful during early crawl rollout. High `failed` counts usually mean no matching snapshot yet, no exact comparables, or missing inventory condition/completeness. |
+| Current gauges | Use these for current review state instead of counting all historical `pricing_decision` rows. |
 
 ### BrickLink Pricing Apply Readiness Metrics
 
-No dedicated Micrometer meters are emitted for the pricing apply-readiness job yet. Use `bricklink.pricing.apply_readiness.job.completed` logs and SQL checks against the latest `pricing_decision` rows for Phase 6 validation. The result includes selected, ready, skipped fixed price, skipped missing price, skipped currency mismatch, skipped ineligible reason, skipped below minimum delta, and elapsed counters.
+| Meter | Type | Tags | Description |
+| --- | --- | --- | --- |
+| `bricklink_pricing_apply_readiness_job` | Counter | `outcome` | One count per apply-readiness dry-run job. |
+| `bricklink_pricing_apply_readiness_job_duration` | Timer | `outcome` | Apply-readiness dry-run duration. |
+| `bricklink_pricing_apply_readiness_decision` | Counter | `result` | Decision review counts by `selected`, `ready_to_apply`, `skipped_fixed_price`, `skipped_missing_price`, `skipped_currency_mismatch`, `skipped_ineligible_reason`, and `skipped_below_minimum_delta`. |
+
+Prometheus examples:
+
+```promql
+sum by (outcome) (increase(bricklink_pricing_apply_readiness_job_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (result) (increase(bricklink_pricing_apply_readiness_decision_total{namespace="$namespace",service="$service"}[$__range]))
+```
+
+Healthy sandbox behavior:
+
+| Signal | Expected behavior |
+| --- | --- |
+| Apply-readiness runs | Counter increases when the dry-run job is enabled. |
+| Ready to apply | Indicates latest proposed decisions that would be eligible for a future apply phase. Phase 7 still does not mutate listing prices. |
+| Skipped fixed price | Expected for fixed-price listings. These are intentionally protected. |
+| Skipped below minimum delta | Expected when proposed and current prices are effectively the same. |
+| Skipped ineligible reason | Review if unexpectedly high. It means the proposed decision reason code is not configured as apply-eligible. |
 
 ### Fulfillment Sync Metrics
 
