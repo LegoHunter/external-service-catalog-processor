@@ -32,6 +32,10 @@ lego:
   minio:
     url: http://minio.minio-dev.svc.cluster.local
   bricklink:
+    pricing:
+      crawl:
+        scheduled:
+          fixed-delay-ms: 180000
     orders:
       sync:
         scheduled:
