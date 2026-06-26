@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 )
 public class BricklinkPricingApplyReadinessJob {
     private final BricklinkPricingApplyReadinessService applyReadinessService;
+    private final BricklinkPricingMetricsService metricsService;
 
     @Scheduled(
             fixedDelayString = "${lego.bricklink.pricing.apply-readiness.scheduled.fixed-delay-ms:300000}",
@@ -33,6 +34,7 @@ public class BricklinkPricingApplyReadinessJob {
 
     BricklinkPricingApplyReadinessResult runOnce() {
         BricklinkPricingApplyReadinessResult result = applyReadinessService.runOnce();
+        metricsService.recordApplyReadiness(result);
         log.info("bricklink.pricing.apply_readiness.job.completed result={}", result);
         return result;
     }

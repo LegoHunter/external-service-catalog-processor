@@ -24,10 +24,12 @@ class BricklinkPricingApplyReadinessJobTest {
         );
         when(applyReadinessService.runOnce()).thenReturn(expected);
 
-        BricklinkPricingApplyReadinessJob job = new BricklinkPricingApplyReadinessJob(applyReadinessService);
+        BricklinkPricingMetricsService metricsService = mock(BricklinkPricingMetricsService.class);
+        BricklinkPricingApplyReadinessJob job = new BricklinkPricingApplyReadinessJob(applyReadinessService, metricsService);
         BricklinkPricingApplyReadinessResult result = job.runOnce();
 
         assertThat(result).isEqualTo(expected);
         verify(applyReadinessService).runOnce();
+        verify(metricsService).recordApplyReadiness(expected);
     }
 }

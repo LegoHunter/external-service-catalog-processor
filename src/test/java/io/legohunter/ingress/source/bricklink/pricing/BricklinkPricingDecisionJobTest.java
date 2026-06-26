@@ -22,10 +22,12 @@ class BricklinkPricingDecisionJobTest {
         );
         when(decisionService.runOnce()).thenReturn(expected);
 
-        BricklinkPricingDecisionJob job = new BricklinkPricingDecisionJob(decisionService);
+        BricklinkPricingMetricsService metricsService = mock(BricklinkPricingMetricsService.class);
+        BricklinkPricingDecisionJob job = new BricklinkPricingDecisionJob(decisionService, metricsService);
         BricklinkPricingDecisionResult result = job.runOnce();
 
         assertThat(result).isEqualTo(expected);
         verify(decisionService).runOnce();
+        verify(metricsService).recordDecision(expected);
     }
 }

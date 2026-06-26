@@ -26,10 +26,12 @@ class BricklinkPricingCrawlJobTest {
         );
         when(crawlService.runOnce()).thenReturn(expected);
 
-        BricklinkPricingCrawlJob job = new BricklinkPricingCrawlJob(crawlService);
+        BricklinkPricingMetricsService metricsService = mock(BricklinkPricingMetricsService.class);
+        BricklinkPricingCrawlJob job = new BricklinkPricingCrawlJob(crawlService, metricsService);
         BricklinkPricingCrawlResult result = job.runOnce();
 
         assertThat(result).isEqualTo(expected);
         verify(crawlService).runOnce();
+        verify(metricsService).recordCrawl(expected);
     }
 }

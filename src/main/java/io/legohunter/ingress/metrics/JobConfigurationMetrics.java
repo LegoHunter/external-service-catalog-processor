@@ -3,6 +3,9 @@ package io.legohunter.ingress.metrics;
 import io.legohunter.egress.fulfillment.FulfillmentSyncProperties;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.ingress.source.bricklink.orders.BricklinkOrderSyncProperties;
+import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyReadinessProperties;
+import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingCrawlProperties;
+import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingDecisionProperties;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Component;
@@ -15,7 +18,10 @@ public class JobConfigurationMetrics {
             MeterRegistry meterRegistry,
             BricklinkOrderSyncProperties bricklinkOrderSyncProperties,
             ImageHostingSyncProperties imageHostingSyncProperties,
-            FulfillmentSyncProperties fulfillmentSyncProperties
+            FulfillmentSyncProperties fulfillmentSyncProperties,
+            BricklinkPricingCrawlProperties bricklinkPricingCrawlProperties,
+            BricklinkPricingDecisionProperties bricklinkPricingDecisionProperties,
+            BricklinkPricingApplyReadinessProperties bricklinkPricingApplyReadinessProperties
     ) {
         register(
                 meterRegistry,
@@ -37,6 +43,27 @@ public class JobConfigurationMetrics {
                 "Fulfillment Sync",
                 fulfillmentSyncProperties.getSync().getScheduled().isEnabled(),
                 fulfillmentSyncProperties.getSync().getScheduled().isApply()
+        );
+        register(
+                meterRegistry,
+                "bricklink_pricing_crawl",
+                "BrickLink Pricing Crawl",
+                bricklinkPricingCrawlProperties.isEnabled() && bricklinkPricingCrawlProperties.getScheduled().isEnabled(),
+                false
+        );
+        register(
+                meterRegistry,
+                "bricklink_pricing_decision",
+                "BrickLink Pricing Decision",
+                bricklinkPricingDecisionProperties.isEnabled() && bricklinkPricingDecisionProperties.getScheduled().isEnabled(),
+                false
+        );
+        register(
+                meterRegistry,
+                "bricklink_pricing_apply_readiness",
+                "BrickLink Pricing Apply Readiness",
+                bricklinkPricingApplyReadinessProperties.isEnabled() && bricklinkPricingApplyReadinessProperties.getScheduled().isEnabled(),
+                false
         );
     }
 

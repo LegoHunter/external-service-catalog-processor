@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 )
 public class BricklinkPricingCrawlJob {
     private final BricklinkPricingCrawlService crawlService;
+    private final BricklinkPricingMetricsService metricsService;
 
     @Scheduled(
             fixedDelayString = "${lego.bricklink.pricing.crawl.scheduled.fixed-delay-ms:300000}",
@@ -33,6 +34,7 @@ public class BricklinkPricingCrawlJob {
 
     BricklinkPricingCrawlResult runOnce() {
         BricklinkPricingCrawlResult result = crawlService.runOnce();
+        metricsService.recordCrawl(result);
         log.info("bricklink.pricing.crawl.job.completed result={}", result);
         return result;
     }
