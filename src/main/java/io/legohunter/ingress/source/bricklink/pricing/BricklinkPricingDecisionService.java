@@ -45,6 +45,7 @@ public class BricklinkPricingDecisionService {
     static final String REASON_TWO_COMPARABLES_WEIGHTED = "TWO_COMPARABLES_WEIGHTED";
     static final String REASON_MEAN_PLUS_STDDEV = "MEAN_PLUS_STDDEV";
     static final String REASON_NO_CURRENT_SNAPSHOT = "NO_CURRENT_SNAPSHOT";
+    static final String REASON_NO_CURRENT_COMPARABLES = "NO_CURRENT_COMPARABLES";
     static final String REASON_NO_EXACT_COMPARABLES = "NO_EXACT_COMPARABLES";
     static final String REASON_MISSING_INVENTORY = "MISSING_INVENTORY";
     static final String REASON_MISSING_CONDITION = "MISSING_CONDITION";
@@ -166,6 +167,14 @@ public class BricklinkPricingDecisionService {
                 .toList();
 
         if (exactComparables.isEmpty()) {
+            if (Integer.valueOf(0).equals(snapshot.get().getComparableCount())) {
+                return failed(
+                        listing,
+                        snapshot.get(),
+                        REASON_NO_CURRENT_COMPARABLES,
+                        "Current pricing snapshot contains no BrickLink comparable listing rows."
+                );
+            }
             return failed(
                     listing,
                     snapshot.get(),

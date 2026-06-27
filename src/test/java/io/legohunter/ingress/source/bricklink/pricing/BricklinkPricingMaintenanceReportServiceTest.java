@@ -1,0 +1,67 @@
+package io.legohunter.ingress.source.bricklink.pricing;
+
+import io.legohunter.data.dao.MarketplaceListingDao;
+import io.legohunter.data.dao.PricingCrawlWorkItemDao;
+import io.legohunter.data.dto.PricingCrawlWorkItemDuplicate;
+import io.legohunter.data.dto.PricingCrawlWorkItemMaintenanceSummary;
+import io.legohunter.data.dto.PricingHydrationGap;
+import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
+import java.util.Set;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class BricklinkPricingMaintenanceReportServiceTest {
+    @Test
+    void buildReportReturnsDryRunQueueAndHydrationDiagnostics() {
+        PricingCrawlWorkItemDao workItemDao = mock(PricingCrawlWorkItemDao.class);
+        MarketplaceListingDao marketplaceListingDao = mock(MarketplaceListingDao.class);
+        BricklinkPricingCrawlProperties properties = new BricklinkPricingCrawlProperties();
+        properties.setBricklinkExternalServiceId(7);
+        properties.setActiveListingStatusCode("active");
+        properties.setClaimStaleAfter(Duration.ofHours(3));
+
+        PricingCrawlWorkItemMaintenanceSummary summary = PricingCrawlWorkItemMaintenanceSummary.builder()
+                .workItemCount(10L)
+                .duplicatePendingWorkItemCount(1L)
+                .build();
+        PricingCrawlWorkItemDuplicate duplicate = PricingCrawlWorkItemDuplicate.builder()
+                .marketplaceListingId(100)
+                .workItemCount(2)
+                .pendingCount(1)
+                .build();
+        PricingHydrationGap hydrationGap = PricingHydrationGap.builder()
+                .marketplaceListingId(200)
+                .externalItemKey("6390-1")
+                .build();
+
+        when(workItemDao.summarizeMaintenance(eq("PENDING"), eq("CLAIMED"), eq("SUCCEEDED"), any(), any()))
+                .thenReturn(summary);
+        when(workItemDao.findDuplicateMarketplaceListingWorkItems("PENDING", 1)).thenReturn(Set.of(duplicate));
+        when(marketplaceListingDao.findPricingHydrationGapsByListingExternalServiceIdAndListingStatusCode(7, "ACTIVE", 1))
+                .thenReturn(Set.of(hydrationGap));
+
+        BricklinkPricingMaintenanceReportService service = new BricklinkPricingMaintenanceReportService(
+                workItemDao,
+                marketplaceListingDao,
+                properties
+        );
+
+        BricklinkPricingMaintenanceReport report = service.buildReport(0);
+
+        assertThat(report.dryRun()).isTrue();
+        assertThat(report.generatedAt()).isNotNull();
+        assertThat(report.workItemSummary()).isSameAs(summary);
+        assertThat(report.duplicateWorkItems()).containsExactly(duplicate);
+        assertThat(report.hydrationGaps()).containsExactly(hydrationGap);
+        verify(workItemDao).summarizeMaintenance(eq("PENDING"), eq("CLAIMED"), eq("SUCCEEDED"), any(), any());
+        verify(workItemDao).findDuplicateMarketplaceListingWorkItems("PENDING", 1);
+        verify(marketplaceListingDao).findPricingHydrationGapsByListingExternalServiceIdAndListingStatusCode(7, "ACTIVE", 1);
+    }
+}

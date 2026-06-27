@@ -24,6 +24,7 @@ class BricklinkPricingApplyReadinessServiceTest {
         properties = new BricklinkPricingApplyReadinessProperties();
         properties.setEnabled(true);
         properties.setBatchSize(10);
+        properties.setMinimumComparableCount(0);
         service = new BricklinkPricingApplyReadinessService(properties, pricingDecisionDao);
     }
 
@@ -55,7 +56,8 @@ class BricklinkPricingApplyReadinessServiceTest {
         assertThat(result.decisionsSelected()).isOne();
         assertThat(result.readyToApply()).isOne();
         assertThat(result.skippedFixedPrice()).isZero();
-        assertThat(result.skippedMissingPrice()).isZero();
+        assertThat(result.skippedMissingCurrentPrice()).isZero();
+        assertThat(result.skippedMissingFinalPrice()).isZero();
         assertThat(result.skippedCurrencyMismatch()).isZero();
         assertThat(result.skippedIneligibleReason()).isZero();
         assertThat(result.skippedBelowMinimumDelta()).isZero();
@@ -65,7 +67,8 @@ class BricklinkPricingApplyReadinessServiceTest {
     void runOnceSeparatesAllSkipBuckets() {
         PricingDecisionReview fixedPrice = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
         fixedPrice.setFixedPrice(true);
-        PricingDecisionReview missingPrice = review("100.00", null, BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview missingCurrentPrice = review(null, "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview missingFinalPrice = review("100.00", null, BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
         PricingDecisionReview currencyMismatch = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
         currencyMismatch.setDecisionCurrencyCode("CAD");
         PricingDecisionReview ineligibleReason = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_OUTLIER_SPREAD_TOO_HIGH);
@@ -73,15 +76,16 @@ class BricklinkPricingApplyReadinessServiceTest {
 
         when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
                 2, "ACTIVE", "PROPOSED", 10
-        )).thenReturn(Set.of(fixedPrice, missingPrice, currencyMismatch, ineligibleReason, belowMinimumDelta));
+        )).thenReturn(Set.of(fixedPrice, missingCurrentPrice, missingFinalPrice, currencyMismatch, ineligibleReason, belowMinimumDelta));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
 
         assertThat(result.outcome()).isEqualTo("NO_READY_DECISIONS");
-        assertThat(result.decisionsSelected()).isEqualTo(5);
+        assertThat(result.decisionsSelected()).isEqualTo(6);
         assertThat(result.readyToApply()).isZero();
         assertThat(result.skippedFixedPrice()).isOne();
-        assertThat(result.skippedMissingPrice()).isOne();
+        assertThat(result.skippedMissingCurrentPrice()).isOne();
+        assertThat(result.skippedMissingFinalPrice()).isOne();
         assertThat(result.skippedCurrencyMismatch()).isOne();
         assertThat(result.skippedIneligibleReason()).isOne();
         assertThat(result.skippedBelowMinimumDelta()).isOne();
@@ -107,6 +111,41 @@ class BricklinkPricingApplyReadinessServiceTest {
         );
     }
 
+    @Test
+    void runOnceSeparatesPhaseEightGuardrailBuckets() {
+        properties.setMinimumConfidence(new BigDecimal("0.75"));
+        properties.setMinimumComparableCount(3);
+        properties.setMaximumAbsoluteDelta(new BigDecimal("50.00"));
+        properties.setMaximumPercentDelta(new BigDecimal("0.50"));
+        properties.setBlockedReasonCodes(Set.of(BricklinkPricingDecisionService.REASON_SINGLE_COMPARABLE_DISCOUNTED));
+
+        PricingDecisionReview unsupportedStatus = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        unsupportedStatus.setDecisionStatusCode("FAILED");
+        PricingDecisionReview blockedReason = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_SINGLE_COMPARABLE_DISCOUNTED);
+        PricingDecisionReview lowConfidence = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        lowConfidence.setConfidence(new BigDecimal("0.50"));
+        PricingDecisionReview lowComparableCount = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        lowComparableCount.setComparableCount(2);
+        PricingDecisionReview aboveAbsoluteDelta = review("200.00", "90.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        PricingDecisionReview abovePercentDelta = review("100.00", "40.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        properties.setMaximumAbsoluteDelta(new BigDecimal("100.00"));
+
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
+                2, "ACTIVE", "PROPOSED", 10
+        )).thenReturn(Set.of(unsupportedStatus, blockedReason, lowConfidence, lowComparableCount, aboveAbsoluteDelta, abovePercentDelta));
+
+        BricklinkPricingApplyReadinessResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("NO_READY_DECISIONS");
+        assertThat(result.decisionsSelected()).isEqualTo(6);
+        assertThat(result.skippedUnsupportedDecisionStatus()).isOne();
+        assertThat(result.skippedBlockedReasonCode()).isOne();
+        assertThat(result.skippedBelowMinimumConfidence()).isOne();
+        assertThat(result.skippedBelowMinimumComparableCount()).isOne();
+        assertThat(result.skippedAboveMaximumAbsoluteDelta()).isOne();
+        assertThat(result.skippedAboveMaximumPercentDelta()).isOne();
+    }
+
     private PricingDecisionReview review(String currentPrice, String finalPrice, String reasonCode) {
         return PricingDecisionReview.builder()
                 .marketplaceListingId(10)
@@ -122,6 +161,8 @@ class BricklinkPricingApplyReadinessServiceTest {
                 .currencyCode("USD")
                 .decisionCurrencyCode("USD")
                 .algorithmVersion("bricklink-competitive-v1")
+                .comparableCount(5)
+                .confidence(new BigDecimal("0.90"))
                 .build();
     }
 }

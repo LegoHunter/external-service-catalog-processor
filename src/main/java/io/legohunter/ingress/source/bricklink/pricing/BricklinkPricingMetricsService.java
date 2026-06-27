@@ -37,8 +37,12 @@ public class BricklinkPricingMetricsService {
         increment("bricklink_pricing_crawl_work_item", "claimed", result.workItemsClaimed());
         increment("bricklink_pricing_crawl_work_item", "stale_requeued", result.staleWorkItemsRequeued());
         increment("bricklink_pricing_crawl_snapshot", "snapshot", result.snapshotsWritten());
+        increment("bricklink_pricing_crawl_snapshot", "zero_comparable_snapshot", result.zeroComparableSnapshotsWritten());
         increment("bricklink_pricing_crawl_snapshot", "snapshot_listing", result.snapshotListingsWritten());
         increment("bricklink_pricing_crawl_catalog_item", "hydrated", result.hydratedCatalogItems());
+        increment("bricklink_pricing_crawl_catalog_item", "no_match", result.catalogItemLookupNoMatches());
+        increment("bricklink_pricing_crawl_catalog_item", "ambiguous_match", result.catalogItemLookupAmbiguousMatches());
+        increment("bricklink_pricing_crawl_catalog_item", "failed_request", result.catalogItemLookupFailures());
     }
 
     public void recordDecision(BricklinkPricingDecisionResult result) {
@@ -62,10 +66,17 @@ public class BricklinkPricingMetricsService {
         increment("bricklink_pricing_apply_readiness_decision", "selected", result.decisionsSelected());
         increment("bricklink_pricing_apply_readiness_decision", "ready_to_apply", result.readyToApply());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_fixed_price", result.skippedFixedPrice());
-        increment("bricklink_pricing_apply_readiness_decision", "skipped_missing_price", result.skippedMissingPrice());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_missing_current_price", result.skippedMissingCurrentPrice());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_missing_final_price", result.skippedMissingFinalPrice());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_currency_mismatch", result.skippedCurrencyMismatch());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_unsupported_decision_status", result.skippedUnsupportedDecisionStatus());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_blocked_reason_code", result.skippedBlockedReasonCode());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_ineligible_reason", result.skippedIneligibleReason());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_delta", result.skippedBelowMinimumDelta());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_confidence", result.skippedBelowMinimumConfidence());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_comparable_count", result.skippedBelowMinimumComparableCount());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_above_maximum_absolute_delta", result.skippedAboveMaximumAbsoluteDelta());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_above_maximum_percent_delta", result.skippedAboveMaximumPercentDelta());
     }
 
     private synchronized void registerGauges() {

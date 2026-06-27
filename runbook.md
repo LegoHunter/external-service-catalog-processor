@@ -338,6 +338,8 @@ Work item statuses:
 | `FAILED_PRICING_HTTP_ERROR` | Pricing AJAX call failed due to client/runtime error. |
 | `FAILED_PRICING_PARSE_ERROR` | Pricing payload serialization/parsing failed during persistence. |
 
+BrickLink can return an empty JSON array from `catalogifs.ajax` when the catalog item has no current for-sale comparables. The crawler treats that as a successful source observation, not as an HTTP failure: it writes a `pricing_snapshot` with `comparable_count=0`, writes no `pricing_snapshot_listing` rows, increments the `zero_comparable_snapshot` metric, and marks the work item `SUCCEEDED`.
+
 Outcomes:
 
 | Outcome | Meaning |
@@ -420,6 +422,7 @@ Current snapshot:
 | --- | --- |
 | Current snapshot | The newest `pricing_snapshot` for the marketplace listing whose `item_condition_code` and `completeness_code` match the listing's normalized `item_inventory.new_or_used` and `item_inventory.completeness`. |
 | Not available | No matching `pricing_snapshot` exists yet. The listing can be valid and priceable, but the crawler has not stored matching source data yet. |
+| Zero-comparable snapshot | A matching `pricing_snapshot` exists and proves BrickLink returned no current for-sale comparable rows for that crawl. This is different from no snapshot. |
 | Historical snapshot | Any older `pricing_snapshot` for the same listing. Historical rows are retained for audit and trend analysis. |
 
 There is no separate mutable "current snapshot" table. "Current" is a query-time concept: select the latest matching snapshot by `captured_at` and `pricing_snapshot_id`.
@@ -446,6 +449,7 @@ Decision outcomes that commonly indicate timing or source-data state:
 | Decision reason | Meaning | Next action |
 | --- | --- | --- |
 | `NO_CURRENT_SNAPSHOT` | No latest matching snapshot exists for the listing condition/completeness. | Let the crawl scheduler/worker run, or inspect pending crawl work. |
+| `NO_CURRENT_COMPARABLES` | A latest matching snapshot exists, but BrickLink returned zero current comparable listings in that snapshot. | No crawl timing problem exists; review manually, wait for market listings, or use a later fallback strategy. |
 | `NO_EXACT_COMPARABLES` | A matching snapshot exists, but after exact condition/completeness filtering and own-listing exclusion there are no usable competitor rows. | Inspect `pricing_snapshot_listing` rows for that snapshot and confirm BrickLink has comparable listings. |
 | `FIXED_PRICE_OVERRIDE` | Listing is marked fixed price, so no snapshot is needed and the current price remains authoritative. | No action unless the fixed-price flag should change. |
 | `PROPOSED` reason codes | A snapshot and exact comparables were available and the algorithm produced a recommendation. | Review latest decision rows before any future apply phase. |
@@ -521,7 +525,8 @@ Legacy algorithm behavior:
 
 | Exact comparable count / case | Price behavior |
 | --- | --- |
-| `0` | Writes a `FAILED` decision with reason `NO_EXACT_COMPARABLES`. |
+| `0`, snapshot `comparable_count=0` | Writes a `FAILED` decision with reason `NO_CURRENT_COMPARABLES`. |
+| `0`, snapshot had rows but none exact after filtering | Writes a `FAILED` decision with reason `NO_EXACT_COMPARABLES`. |
 | `1` | Prices below the only comparable: `min(price - min(price * 0.03, 10), max(price - 1, 1))`. |
 | `2` | Prices 75% from low to high: `low + (high - low) * 0.75`. |
 | `>2`, Used | If highest/second-highest is greater than `3`, writes `FAILED` with `OUTLIER_SPREAD_TOO_HIGH`; otherwise uses `mean + sampleStandardDeviation`. |
@@ -548,6 +553,7 @@ Reason codes:
 | `TWO_COMPARABLES_WEIGHTED` | Two exact comparables were available. |
 | `MEAN_PLUS_STDDEV` | More than two comparables used mean plus sample standard deviation. |
 | `NO_CURRENT_SNAPSHOT` | No latest pricing snapshot exists for the listing condition/completeness. Run the crawl first. |
+| `NO_CURRENT_COMPARABLES` | A latest matching snapshot exists, but BrickLink returned no comparable listings for that crawl. |
 | `NO_EXACT_COMPARABLES` | Snapshot exists, but no exact comparable remains after filtering and own-listing exclusion. |
 | `MISSING_INVENTORY` | Marketplace listing points to missing `item_inventory`. |
 | `MISSING_CONDITION` | Inventory condition is missing or not recognized. |
@@ -587,6 +593,11 @@ Schedule and selection settings:
 | `lego.bricklink.pricing.apply-readiness.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
 | `lego.bricklink.pricing.apply-readiness.batch-size` | `25` | Integer; effective value is at least `1` | Maximum latest proposed decisions reviewed per run. |
 | `lego.bricklink.pricing.apply-readiness.minimum-price-delta` | `0.01` | Decimal money amount, zero or positive | Minimum absolute difference between current listing price and proposed final price required to count as ready. |
+| `lego.bricklink.pricing.apply-readiness.minimum-confidence` | `0.00` | Decimal, zero or positive | Minimum decision confidence required before a proposed decision counts as ready. |
+| `lego.bricklink.pricing.apply-readiness.minimum-comparable-count` | `1` | Integer, effective value at least `0` | Minimum exact comparable count required before a proposed decision counts as ready. |
+| `lego.bricklink.pricing.apply-readiness.maximum-absolute-delta` | null | Decimal money amount or null | Optional maximum absolute price movement allowed by the dry-run readiness scan. Null disables the guard. |
+| `lego.bricklink.pricing.apply-readiness.maximum-percent-delta` | null | Decimal ratio or null | Optional maximum relative price movement allowed by the dry-run readiness scan. `0.50` means 50%. Null disables the guard. |
+| `lego.bricklink.pricing.apply-readiness.blocked-reason-codes` | empty | Set of reason code strings | Proposed decisions with these reason codes are never counted as ready, even if they also appear in `apply-eligible-reason-codes`. |
 | `lego.bricklink.pricing.apply-readiness.apply-eligible-reason-codes` | successful algorithm reason codes | Set of reason code strings | Only proposed decisions with these reason codes are counted as ready. |
 
 Candidate selection:
@@ -604,12 +615,19 @@ Readiness behavior:
 
 | Outcome bucket | Meaning |
 | --- | --- |
-| `readyToApply` | Latest proposed decision is non-fixed, has current and final prices, has matching current/decision currency, uses an eligible reason code, and meets the minimum price delta. |
+| `readyToApply` | Latest proposed decision is non-fixed, has current and final prices, has matching current/decision currency, uses an eligible non-blocked reason code, meets the minimum price delta, meets the minimum confidence/comparable thresholds, and stays inside configured movement limits. |
 | `skippedFixedPrice` | Listing is currently marked fixed price, so the proposed decision is not considered apply-ready. |
-| `skippedMissingPrice` | Current listing price or proposed final price is missing. |
+| `skippedMissingCurrentPrice` | Current listing price is missing. |
+| `skippedMissingFinalPrice` | Proposed final price is missing. |
 | `skippedCurrencyMismatch` | Current listing currency and decision currency differ. |
+| `skippedUnsupportedDecisionStatus` | Defensive bucket for a selected decision whose status no longer matches the configured proposed status. |
+| `skippedBlockedReasonCode` | Proposed decision reason code appears in `blocked-reason-codes`. |
 | `skippedIneligibleReason` | Proposed decision reason code is not in `apply-eligible-reason-codes`. |
 | `skippedBelowMinimumDelta` | Proposed price equals current price or differs by less than `minimum-price-delta`. |
+| `skippedBelowMinimumConfidence` | Decision confidence is lower than `minimum-confidence`. |
+| `skippedBelowMinimumComparableCount` | Decision comparable count is lower than `minimum-comparable-count`. |
+| `skippedAboveMaximumAbsoluteDelta` | Absolute proposed price movement is greater than `maximum-absolute-delta`. |
+| `skippedAboveMaximumPercentDelta` | Relative proposed price movement is greater than `maximum-percent-delta`. |
 
 Important logs:
 
@@ -617,6 +635,28 @@ Important logs:
 | --- | --- |
 | `bricklink.pricing.apply_readiness.ready` | One latest proposed decision would change a listing if a later apply phase existed. Logs listing id, decision id, current price, proposed price, delta, currency, reason, and algorithm version. |
 | `bricklink.pricing.apply_readiness.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyReadinessResult` with selected, ready, skipped, and elapsed counters. |
+
+### BrickLink Pricing Maintenance Report
+
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingMaintenanceReportController`
+
+Endpoint:
+
+```text
+GET /internal/bricklink/pricing/maintenance-report?limit=100
+```
+
+This is a dry-run diagnostic report. It does not delete, requeue, archive, or otherwise mutate Pricing Plane data.
+
+Report sections:
+
+| Section | Meaning |
+| --- | --- |
+| `workItemSummary` | Aggregate crawl queue health, including pending, retryable, due, claimed, stale claimed, succeeded, skipped, failed, and duplicate counts. |
+| `duplicateWorkItems` | Marketplace listings with more than one crawl work item, useful for spotting queue hygiene issues before any cleanup policy exists. |
+| `hydrationGaps` | Active BrickLink marketplace listings whose catalog item still lacks BrickLink's internal `idItem` in `external_catalog_item.external_unique_key`. |
+
+Use this endpoint before considering any manual maintenance. If the report finds stale or duplicate rows, inspect the matching SQL checks first and prefer code-level idempotency fixes over ad hoc deletes.
 
 ### `ImageHostingScheduledSyncJob`
 
@@ -998,6 +1038,11 @@ Backed by `BricklinkPricingApplyReadinessProperties`.
 | `lego.bricklink.pricing.apply-readiness.proposed-decision-status-code` | `PROPOSED` | Non-blank decision status string; code trims and uppercases | Latest decision status eligible for dry-run apply review. |
 | `lego.bricklink.pricing.apply-readiness.batch-size` | `25` | Integer; effective value at least `1` | Maximum latest proposed decisions reviewed per run. |
 | `lego.bricklink.pricing.apply-readiness.minimum-price-delta` | `0.01` | Decimal money amount, zero or positive | Minimum absolute price delta required before a proposed decision is counted as ready. |
+| `lego.bricklink.pricing.apply-readiness.minimum-confidence` | `0.00` | Decimal, zero or positive | Minimum pricing decision confidence required before a proposed decision is counted as ready. |
+| `lego.bricklink.pricing.apply-readiness.minimum-comparable-count` | `1` | Integer; effective value at least `0` | Minimum exact comparable count required before a proposed decision is counted as ready. |
+| `lego.bricklink.pricing.apply-readiness.maximum-absolute-delta` | null | Decimal money amount or null | Optional maximum absolute price movement allowed by readiness review. Null disables this guard. |
+| `lego.bricklink.pricing.apply-readiness.maximum-percent-delta` | null | Decimal ratio or null | Optional maximum relative price movement allowed by readiness review. `0.50` means 50 percent. Null disables this guard. |
+| `lego.bricklink.pricing.apply-readiness.blocked-reason-codes` | empty | Set of reason code strings | Reason codes that are never counted as ready, even if also present in `apply-eligible-reason-codes`. |
 | `lego.bricklink.pricing.apply-readiness.apply-eligible-reason-codes` | successful algorithm reason codes | Set of reason code strings | Proposed decisions outside this set are skipped as ineligible. |
 | `lego.bricklink.pricing.apply-readiness.scheduled.enabled` | `false` | `true`, `false` | Creates the scheduled job bean only when `lego.bricklink.pricing.apply-readiness.enabled=true` is also set. |
 | `lego.bricklink.pricing.apply-readiness.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between scheduled readiness scans. |
@@ -1018,6 +1063,11 @@ lego:
         proposed-decision-status-code: PROPOSED
         batch-size: 25
         minimum-price-delta: 0.01
+        minimum-confidence: 0.00
+        minimum-comparable-count: 1
+        maximum-absolute-delta:
+        maximum-percent-delta:
+        blocked-reason-codes: []
         scheduled:
           enabled: false
 ```
@@ -1333,8 +1383,8 @@ Prometheus uses Micrometer naming conventions. For example, counter `image_hosti
 | `bricklink_pricing_crawl_job_duration` | Timer | `outcome` | Crawl job run duration. Prometheus exposes this as `_seconds_count`, `_seconds_sum`, and `_seconds_max`. |
 | `bricklink_pricing_crawl_listing` | Counter | `result` | Listing counts by `selected`, `skipped`, and `failed`. |
 | `bricklink_pricing_crawl_work_item` | Counter | `result` | Work item counts by `scheduled`, `claimed`, and `stale_requeued`. |
-| `bricklink_pricing_crawl_snapshot` | Counter | `result` | Snapshot write counts by `snapshot` and `snapshot_listing`. |
-| `bricklink_pricing_crawl_catalog_item` | Counter | `result` | Catalog hydration count by `hydrated`. |
+| `bricklink_pricing_crawl_snapshot` | Counter | `result` | Snapshot write counts by `snapshot`, `zero_comparable_snapshot`, and `snapshot_listing`. |
+| `bricklink_pricing_crawl_catalog_item` | Counter | `result` | Catalog hydration counts by `hydrated`, `no_match`, `ambiguous_match`, and `failed_request`. |
 | `bricklink_pricing_crawl_work_item_current` | Gauge | `state` | Current work item counts. States are `pending`, `due`, `retryable`, `claimed`, `stale_claimed`, `succeeded`, `failed`, and `skipped`. |
 
 Prometheus examples:
@@ -1393,7 +1443,7 @@ Healthy sandbox behavior:
 | --- | --- | --- | --- |
 | `bricklink_pricing_apply_readiness_job` | Counter | `outcome` | One count per apply-readiness dry-run job. |
 | `bricklink_pricing_apply_readiness_job_duration` | Timer | `outcome` | Apply-readiness dry-run duration. |
-| `bricklink_pricing_apply_readiness_decision` | Counter | `result` | Decision review counts by `selected`, `ready_to_apply`, `skipped_fixed_price`, `skipped_missing_price`, `skipped_currency_mismatch`, `skipped_ineligible_reason`, and `skipped_below_minimum_delta`. |
+| `bricklink_pricing_apply_readiness_decision` | Counter | `result` | Decision review counts by `selected`, `ready_to_apply`, `skipped_fixed_price`, `skipped_missing_current_price`, `skipped_missing_final_price`, `skipped_currency_mismatch`, `skipped_unsupported_decision_status`, `skipped_blocked_reason_code`, `skipped_ineligible_reason`, `skipped_below_minimum_delta`, `skipped_below_minimum_confidence`, `skipped_below_minimum_comparable_count`, `skipped_above_maximum_absolute_delta`, and `skipped_above_maximum_percent_delta`. |
 
 Prometheus examples:
 
@@ -1407,7 +1457,7 @@ Healthy sandbox behavior:
 | Signal | Expected behavior |
 | --- | --- |
 | Apply-readiness runs | Counter increases when the dry-run job is enabled. |
-| Ready to apply | Indicates latest proposed decisions that would be eligible for a future apply phase. Phase 7 still does not mutate listing prices. |
+| Ready to apply | Indicates latest proposed decisions that would be eligible for a future apply phase. This still does not mutate listing prices. |
 | Skipped fixed price | Expected for fixed-price listings. These are intentionally protected. |
 | Skipped below minimum delta | Expected when proposed and current prices are effectively the same. |
 | Skipped ineligible reason | Review if unexpectedly high. It means the proposed decision reason code is not configured as apply-eligible. |
@@ -1477,8 +1527,12 @@ Primary events:
 | `workItemsClaimed` | Number of due work items transitioned from `PENDING` to `CLAIMED` and processed. |
 | `staleWorkItemsRequeued` | Number of abandoned `CLAIMED` work items returned to `PENDING`. |
 | `snapshotsWritten` | Number of `pricing_snapshot` rows inserted. |
+| `zeroComparableSnapshotsWritten` | Number of `pricing_snapshot` rows inserted after BrickLink returned no comparable listing rows. |
 | `snapshotListingsWritten` | Number of `pricing_snapshot_listing` rows inserted. |
 | `hydratedCatalogItems` | Number of missing BrickLink internal `idItem` values populated into `external_catalog_item.external_unique_key`. |
+| `catalogItemLookupNoMatches` | Number of BrickLink internal id lookups with no exact match. |
+| `catalogItemLookupAmbiguousMatches` | Number of BrickLink internal id lookups with multiple matches. |
+| `catalogItemLookupFailures` | Number of BrickLink internal id lookup client/runtime failures. |
 | `skippedListings` | Number of listings skipped for missing/unusable local data. |
 | `failedListings` | Number of listings that failed due to lookup, HTTP/client, or parsing errors. |
 | `elapsedMillis` | Run duration in milliseconds. |
@@ -1520,10 +1574,17 @@ Primary events:
 | `decisionsSelected` | Number of latest proposed, unapplied decisions selected for dry-run readiness review. |
 | `readyToApply` | Number of selected decisions that would be eligible for a later apply phase. |
 | `skippedFixedPrice` | Number skipped because the current marketplace listing is fixed price. |
-| `skippedMissingPrice` | Number skipped because the current listing price or proposed final price is missing. |
+| `skippedMissingCurrentPrice` | Number skipped because the current marketplace listing price is missing. |
+| `skippedMissingFinalPrice` | Number skipped because the proposed final price is missing. |
 | `skippedCurrencyMismatch` | Number skipped because current listing currency and decision currency differ. |
+| `skippedUnsupportedDecisionStatus` | Number skipped because the selected decision status no longer matches the proposed status guard. |
+| `skippedBlockedReasonCode` | Number skipped because the proposed decision reason code is configured as blocked. |
 | `skippedIneligibleReason` | Number skipped because the proposed decision reason code is not configured as apply-eligible. |
 | `skippedBelowMinimumDelta` | Number skipped because current and proposed prices differ by less than `minimum-price-delta`. |
+| `skippedBelowMinimumConfidence` | Number skipped because decision confidence is below `minimum-confidence`. |
+| `skippedBelowMinimumComparableCount` | Number skipped because comparable count is below `minimum-comparable-count`. |
+| `skippedAboveMaximumAbsoluteDelta` | Number skipped because absolute price movement is greater than `maximum-absolute-delta`. |
+| `skippedAboveMaximumPercentDelta` | Number skipped because relative price movement is greater than `maximum-percent-delta`. |
 | `elapsedMillis` | Run duration in milliseconds. |
 
 ### Fulfillment Sync Logs
@@ -1907,6 +1968,31 @@ order by ps.pricing_snapshot_id desc
 limit 25;
 ```
 
+Review latest zero-comparable snapshots. These indicate BrickLink returned no current comparable listings for the crawl target; they are successful observations and can produce `NO_CURRENT_COMPARABLES` decisions:
+
+```sql
+select ps.pricing_snapshot_id,
+       ps.marketplace_listing_id,
+       ml.external_listing_id,
+       eci.external_item_key,
+       ps.source_unique_key,
+       ps.item_condition_code,
+       ps.completeness_code,
+       ps.comparable_count,
+       ps.source_request_url,
+       ps.source_request_parameters,
+       ps.captured_at
+from pricing_snapshot ps
+join marketplace_listing ml
+  on ml.marketplace_listing_id = ps.marketplace_listing_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ps.external_catalog_item_id
+where ps.comparable_count = 0
+order by ps.captured_at desc,
+         ps.pricing_snapshot_id desc
+limit 50;
+```
+
 Query latest exact comparables for one marketplace listing. This is the shape Phase 3 pricing should use by default:
 
 ```sql
@@ -1953,6 +2039,47 @@ where eci.external_service_id = 2
       from pricing_snapshot
   )
 order by eci.external_item_key;
+```
+
+Review active BrickLink listings that still need BrickLink internal id hydration:
+
+```sql
+select ml.marketplace_listing_id,
+       ml.external_listing_id,
+       eci.external_catalog_item_id,
+       eci.external_item_key,
+       eci.external_unique_key,
+       ii.item_inventory_id,
+       ii.uuid,
+       ii.new_or_used,
+       ii.completeness
+from marketplace_listing ml
+join item_inventory ii
+  on ii.item_inventory_id = ml.item_inventory_id
+join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where ml.listing_external_service_id = 2
+  and ml.listing_status_code = 'ACTIVE'
+  and (eci.external_unique_key is null or trim(eci.external_unique_key) = '')
+order by ml.marketplace_listing_id
+limit 100;
+```
+
+Review duplicate crawl work items per marketplace listing. This should normally be empty or explainable by historical runs:
+
+```sql
+select marketplace_listing_id,
+       count(*) as work_item_count,
+       sum(case when work_status_code = 'PENDING' then 1 else 0 end) as pending_count,
+       group_concat(distinct work_status_code order by work_status_code separator ',') as work_status_codes,
+       group_concat(pricing_crawl_work_item_id order by pricing_crawl_work_item_id separator ',') as pricing_crawl_work_item_ids
+from pricing_crawl_work_item
+group by marketplace_listing_id
+having count(*) > 1
+order by pending_count desc,
+         work_item_count desc,
+         marketplace_listing_id
+limit 100;
 ```
 
 ### BrickLink Pricing Decision SQL Checks
@@ -2214,7 +2341,14 @@ where ml.listing_external_service_id = 2
       'BELOW_MIN_PRICE_CLAMPED',
       'ABOVE_MAX_PRICE_CLAMPED'
   )
+  and pd.reason_code not in (
+      'NO_CURRENT_COMPARABLES',
+      'NO_EXACT_COMPARABLES',
+      'NO_CURRENT_SNAPSHOT'
+  )
   and abs(pd.final_price - ml.unit_price) >= 0.01
+  and coalesce(pd.confidence, 0) >= 0.00
+  and coalesce(pd.comparable_count, 0) >= 1
 order by abs(pd.final_price - ml.unit_price) desc,
          pd.pricing_decision_id desc
 limit 100;
@@ -2422,17 +2556,18 @@ order by ai.sort_order;
 | Pricing crawl leaves rows in `CLAIMED` | JVM stopped or failed after claim and before completion | Rows older than `claim-stale-after` are requeued on a later run if attempts remain. |
 | Pricing crawl writes many `SKIPPED_MISSING_CONDITION` work items | `item_inventory.new_or_used` is null or not `N`/`NEW`/`U`/`USED` | Fix inventory condition data before crawling that listing. |
 | Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the configured `catalog-item-type` | Verify item number and use `catalog-item-type=S` for sets. |
-| Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition or parsing returned an empty list | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. |
+| Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. This can be valid sparse-market behavior. |
 | Pricing crawl returns New/Complete rows for a New/Sealed inventory item | BrickLink pricing AJAX filters by condition only, not completeness | This is expected. Phase 3 pricing should query exact comparables by matching snapshot/listing condition and completeness. |
 | Pricing decision job does not start | `lego.bricklink.pricing.decision.enabled=false` or `lego.bricklink.pricing.decision.scheduled.enabled=false` | Set both properties true for scheduled runs. |
 | Pricing decision job reports `NO_WORK` even though active BrickLink listings exist | No active listings currently meet decision-candidate eligibility | Check for missing `external_catalog_item_id`, missing inventory condition/completeness, or non-fixed legacy listings excluded by the candidate query. |
 | Pricing decisions are `FAILED` with `NO_CURRENT_SNAPSHOT` | No crawl snapshot exists for that listing and exact condition/completeness | Run the pricing crawl first and confirm normalized `pricing_snapshot.item_condition_code` and `completeness_code`. |
+| Pricing decisions are `FAILED` with `NO_CURRENT_COMPARABLES` | Latest matching crawl snapshot exists and has `comparable_count=0` | This is not a crawl timing issue. Review manually, wait for future comparables, or add a later fallback strategy. |
 | Pricing decisions are `FAILED` with `NO_EXACT_COMPARABLES` | Snapshot exists, but no returned rows match condition/completeness after excluding your own listing | Check latest exact comparable SQL; this can be valid sparse-market behavior. |
 | Pricing decisions are `SKIPPED` with `FIXED_PRICE_OVERRIDE` | `marketplace_listing.fixed_price=true` | Expected when the listing price is intentionally fixed. |
 | Pricing decisions are clamped | `minimum-price` or `maximum-price` is configured | Review global clamp properties and `source_summary_json` for the original algorithm branch. |
 | Pricing decision final price differs greatly from current price | Competitive algorithm found a large market delta or stale listing price | Review exact comparable rows, comparable count, confidence, and reason code before any future apply phase. |
 | Pricing apply-readiness job reports `NO_WORK` | No latest, unapplied `PROPOSED` decisions match the configured marketplace service/status | Run the decision job first and inspect latest decision state per active listing. |
-| Pricing apply-readiness job reports `NO_READY_DECISIONS` | Selected proposed decisions were skipped by fixed-price, missing-price, currency, reason-code, or minimum-delta guards | Review `BricklinkPricingApplyReadinessResult` counters and the ready-for-apply SQL query. |
+| Pricing apply-readiness job reports `NO_READY_DECISIONS` | Selected proposed decisions were skipped by fixed-price, missing-price, currency, reason-code, confidence, comparable-count, or movement guards | Review `BricklinkPricingApplyReadinessResult` counters and the ready-for-apply SQL query. |
 | BrickLink AJAX calls start failing after a fast test run | BrickLink may be throttling or temporarily banning the external IP | Stop the scheduled job, keep `bricklink.ajax.rate-limit.enabled=true`, keep `minimum-delay-ms >= 2000`, and wait before retrying. |
 | Fulfillment sync maps orders but creates no ShipStation orders | `lego.fulfillment.sync.scheduled.apply=false` | This is dry-run mapping mode. Set apply true only after staged payloads and credentials are verified. |
 | Fulfillment sync reports `PAYLOADS_MISSING` | BrickLink order sync has not stored latest `ORDER_RESPONSE` and `ORDER_ITEMS_RESPONSE` payloads for candidates | Run BrickLink order sync with `apply=true` first and confirm `marketplace_order_payload` rows exist. |

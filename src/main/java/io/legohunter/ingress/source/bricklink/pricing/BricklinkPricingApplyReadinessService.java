@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Set;
 
 @Service
@@ -33,14 +34,12 @@ public class BricklinkPricingApplyReadinessService {
         }
 
         ApplyReadinessCounters counters = new ApplyReadinessCounters(reviews.size());
-        Set<String> eligibleReasonCodes = properties.effectiveApplyEligibleReasonCodes();
-        BigDecimal minimumPriceDelta = properties.effectiveMinimumPriceDelta();
         for (PricingDecisionReview review : reviews) {
-            ApplyReadinessStatus status = status(review, eligibleReasonCodes, minimumPriceDelta);
+            ApplyReadinessStatus status = status(review);
             counters.record(status);
             if (status == ApplyReadinessStatus.READY_TO_APPLY) {
                 log.info(
-                        "bricklink.pricing.apply_readiness.ready marketplaceListingId={} pricingDecisionId={} externalListingId={} currentPrice={} proposedPrice={} delta={} currencyCode={} reasonCode={} algorithmVersion={}",
+                        "bricklink.pricing.apply_readiness.ready marketplaceListingId={} pricingDecisionId={} externalListingId={} currentPrice={} proposedPrice={} delta={} currencyCode={} reasonCode={} algorithmVersion={} confidence={} comparableCount={}",
                         review.getMarketplaceListingId(),
                         review.getPricingDecisionId(),
                         review.getExternalListingId(),
@@ -49,15 +48,21 @@ public class BricklinkPricingApplyReadinessService {
                         money(delta(review)),
                         decisionCurrencyCode(review),
                         review.getReasonCode(),
-                        review.getAlgorithmVersion()
+                        review.getAlgorithmVersion(),
+                        review.getConfidence(),
+                        review.getComparableCount()
                 );
             } else {
-                log.debug(
-                        "bricklink.pricing.apply_readiness.skipped marketplaceListingId={} pricingDecisionId={} status={} reasonCode={}",
+                log.info(
+                        "bricklink.pricing.apply_readiness.skipped marketplaceListingId={} pricingDecisionId={} status={} reasonCode={} currentPrice={} proposedPrice={} confidence={} comparableCount={}",
                         review.getMarketplaceListingId(),
                         review.getPricingDecisionId(),
                         status,
-                        review.getReasonCode()
+                        review.getReasonCode(),
+                        money(review.getCurrentUnitPrice()),
+                        money(review.getFinalPrice()),
+                        review.getConfidence(),
+                        review.getComparableCount()
                 );
             }
         }
@@ -65,26 +70,57 @@ public class BricklinkPricingApplyReadinessService {
         return counters.result(elapsedMillis(start));
     }
 
-    private ApplyReadinessStatus status(
-            PricingDecisionReview review,
-            Set<String> eligibleReasonCodes,
-            BigDecimal minimumPriceDelta
-    ) {
+    private ApplyReadinessStatus status(PricingDecisionReview review) {
         if (Boolean.TRUE.equals(review.getFixedPrice())) {
             return ApplyReadinessStatus.SKIPPED_FIXED_PRICE;
         }
-        if (review.getCurrentUnitPrice() == null || review.getFinalPrice() == null) {
-            return ApplyReadinessStatus.SKIPPED_MISSING_PRICE;
+        if (!properties.effectiveProposedDecisionStatusCode().equals(cleanStatusCode(review.getDecisionStatusCode()))) {
+            return ApplyReadinessStatus.SKIPPED_UNSUPPORTED_DECISION_STATUS;
+        }
+        if (review.getCurrentUnitPrice() == null) {
+            return ApplyReadinessStatus.SKIPPED_MISSING_CURRENT_PRICE;
+        }
+        if (review.getFinalPrice() == null) {
+            return ApplyReadinessStatus.SKIPPED_MISSING_FINAL_PRICE;
         }
         if (!sameCurrency(review)) {
             return ApplyReadinessStatus.SKIPPED_CURRENCY_MISMATCH;
         }
-        if (!eligibleReasonCodes.contains(cleanReasonCode(review.getReasonCode()))) {
+
+        String reasonCode = cleanReasonCode(review.getReasonCode());
+        if (properties.effectiveBlockedReasonCodes().contains(reasonCode)) {
+            return ApplyReadinessStatus.SKIPPED_BLOCKED_REASON_CODE;
+        }
+        if (!properties.effectiveApplyEligibleReasonCodes().contains(reasonCode)) {
             return ApplyReadinessStatus.SKIPPED_INELIGIBLE_REASON;
         }
-        if (delta(review).compareTo(minimumPriceDelta) < 0) {
+
+        BigDecimal absoluteDelta = delta(review);
+        if (absoluteDelta.compareTo(properties.effectiveMinimumPriceDelta()) < 0) {
             return ApplyReadinessStatus.SKIPPED_BELOW_MINIMUM_DELTA;
         }
+        if (confidence(review).compareTo(properties.effectiveMinimumConfidence()) < 0) {
+            return ApplyReadinessStatus.SKIPPED_BELOW_MINIMUM_CONFIDENCE;
+        }
+        if (comparableCount(review) < properties.effectiveMinimumComparableCount()) {
+            return ApplyReadinessStatus.SKIPPED_BELOW_MINIMUM_COMPARABLE_COUNT;
+        }
+
+        BigDecimal maximumAbsoluteDelta = properties.effectiveMaximumAbsoluteDelta();
+        if (maximumAbsoluteDelta != null && absoluteDelta.compareTo(maximumAbsoluteDelta) > 0) {
+            return ApplyReadinessStatus.SKIPPED_ABOVE_MAXIMUM_ABSOLUTE_DELTA;
+        }
+
+        BigDecimal maximumPercentDelta = properties.effectiveMaximumPercentDelta();
+        if (maximumPercentDelta != null) {
+            if (review.getCurrentUnitPrice().signum() <= 0) {
+                return ApplyReadinessStatus.SKIPPED_MISSING_CURRENT_PRICE;
+            }
+            if (percentDelta(review, absoluteDelta).compareTo(maximumPercentDelta) > 0) {
+                return ApplyReadinessStatus.SKIPPED_ABOVE_MAXIMUM_PERCENT_DELTA;
+            }
+        }
+
         return ApplyReadinessStatus.READY_TO_APPLY;
     }
 
@@ -114,12 +150,31 @@ public class BricklinkPricingApplyReadinessService {
         return reasonCode.trim().toUpperCase();
     }
 
+    private String cleanStatusCode(String statusCode) {
+        if (statusCode == null || statusCode.isBlank()) {
+            return "";
+        }
+        return statusCode.trim().toUpperCase();
+    }
+
     private BigDecimal delta(PricingDecisionReview review) {
         return review.getFinalPrice().subtract(review.getCurrentUnitPrice()).abs();
     }
 
+    private BigDecimal percentDelta(PricingDecisionReview review, BigDecimal absoluteDelta) {
+        return absoluteDelta.divide(review.getCurrentUnitPrice().abs(), 8, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal confidence(PricingDecisionReview review) {
+        return review.getConfidence() == null ? BigDecimal.ZERO : review.getConfidence();
+    }
+
+    private int comparableCount(PricingDecisionReview review) {
+        return review.getComparableCount() == null ? 0 : review.getComparableCount();
+    }
+
     private BigDecimal money(BigDecimal value) {
-        return value == null ? null : value.setScale(2, java.math.RoundingMode.HALF_UP);
+        return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
     }
 
     private long elapsedMillis(long start) {
@@ -129,20 +184,34 @@ public class BricklinkPricingApplyReadinessService {
     private enum ApplyReadinessStatus {
         READY_TO_APPLY,
         SKIPPED_FIXED_PRICE,
-        SKIPPED_MISSING_PRICE,
+        SKIPPED_MISSING_CURRENT_PRICE,
+        SKIPPED_MISSING_FINAL_PRICE,
         SKIPPED_CURRENCY_MISMATCH,
+        SKIPPED_UNSUPPORTED_DECISION_STATUS,
+        SKIPPED_BLOCKED_REASON_CODE,
         SKIPPED_INELIGIBLE_REASON,
-        SKIPPED_BELOW_MINIMUM_DELTA
+        SKIPPED_BELOW_MINIMUM_DELTA,
+        SKIPPED_BELOW_MINIMUM_CONFIDENCE,
+        SKIPPED_BELOW_MINIMUM_COMPARABLE_COUNT,
+        SKIPPED_ABOVE_MAXIMUM_ABSOLUTE_DELTA,
+        SKIPPED_ABOVE_MAXIMUM_PERCENT_DELTA
     }
 
     private static final class ApplyReadinessCounters {
         private final int decisionsSelected;
         private int readyToApply;
         private int skippedFixedPrice;
-        private int skippedMissingPrice;
+        private int skippedMissingCurrentPrice;
+        private int skippedMissingFinalPrice;
         private int skippedCurrencyMismatch;
+        private int skippedUnsupportedDecisionStatus;
+        private int skippedBlockedReasonCode;
         private int skippedIneligibleReason;
         private int skippedBelowMinimumDelta;
+        private int skippedBelowMinimumConfidence;
+        private int skippedBelowMinimumComparableCount;
+        private int skippedAboveMaximumAbsoluteDelta;
+        private int skippedAboveMaximumPercentDelta;
 
         private ApplyReadinessCounters(int decisionsSelected) {
             this.decisionsSelected = decisionsSelected;
@@ -152,10 +221,17 @@ public class BricklinkPricingApplyReadinessService {
             switch (status) {
                 case READY_TO_APPLY -> readyToApply++;
                 case SKIPPED_FIXED_PRICE -> skippedFixedPrice++;
-                case SKIPPED_MISSING_PRICE -> skippedMissingPrice++;
+                case SKIPPED_MISSING_CURRENT_PRICE -> skippedMissingCurrentPrice++;
+                case SKIPPED_MISSING_FINAL_PRICE -> skippedMissingFinalPrice++;
                 case SKIPPED_CURRENCY_MISMATCH -> skippedCurrencyMismatch++;
+                case SKIPPED_UNSUPPORTED_DECISION_STATUS -> skippedUnsupportedDecisionStatus++;
+                case SKIPPED_BLOCKED_REASON_CODE -> skippedBlockedReasonCode++;
                 case SKIPPED_INELIGIBLE_REASON -> skippedIneligibleReason++;
                 case SKIPPED_BELOW_MINIMUM_DELTA -> skippedBelowMinimumDelta++;
+                case SKIPPED_BELOW_MINIMUM_CONFIDENCE -> skippedBelowMinimumConfidence++;
+                case SKIPPED_BELOW_MINIMUM_COMPARABLE_COUNT -> skippedBelowMinimumComparableCount++;
+                case SKIPPED_ABOVE_MAXIMUM_ABSOLUTE_DELTA -> skippedAboveMaximumAbsoluteDelta++;
+                case SKIPPED_ABOVE_MAXIMUM_PERCENT_DELTA -> skippedAboveMaximumPercentDelta++;
             }
         }
 
@@ -165,10 +241,17 @@ public class BricklinkPricingApplyReadinessService {
                     decisionsSelected,
                     readyToApply,
                     skippedFixedPrice,
-                    skippedMissingPrice,
+                    skippedMissingCurrentPrice,
+                    skippedMissingFinalPrice,
                     skippedCurrencyMismatch,
+                    skippedUnsupportedDecisionStatus,
+                    skippedBlockedReasonCode,
                     skippedIneligibleReason,
                     skippedBelowMinimumDelta,
+                    skippedBelowMinimumConfidence,
+                    skippedBelowMinimumComparableCount,
+                    skippedAboveMaximumAbsoluteDelta,
+                    skippedAboveMaximumPercentDelta,
                     elapsedMillis
             );
         }

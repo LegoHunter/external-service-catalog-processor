@@ -44,7 +44,11 @@ class BricklinkPricingMetricsServiceTest {
                 1,
                 1,
                 1,
+                1,
                 99,
+                1,
+                1,
+                1,
                 1,
                 2,
                 1,
@@ -55,7 +59,9 @@ class BricklinkPricingMetricsServiceTest {
         assertThat(timerCount("bricklink_pricing_crawl_job_duration", "outcome", "success")).isOne();
         assertThat(counter("bricklink_pricing_crawl_listing", "result", "selected")).isEqualTo(4.0d);
         assertThat(counter("bricklink_pricing_crawl_work_item", "result", "scheduled")).isEqualTo(3.0d);
+        assertThat(counter("bricklink_pricing_crawl_snapshot", "result", "zero_comparable_snapshot")).isEqualTo(1.0d);
         assertThat(counter("bricklink_pricing_crawl_snapshot", "result", "snapshot_listing")).isEqualTo(99.0d);
+        assertThat(counter("bricklink_pricing_crawl_catalog_item", "result", "no_match")).isEqualTo(1.0d);
         assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "pending")).isEqualTo(7.0d);
         assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "due")).isEqualTo(2.0d);
         assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "retryable")).isEqualTo(3.0d);
@@ -94,6 +100,13 @@ class BricklinkPricingMetricsServiceTest {
                 1,
                 1,
                 1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
                 75
         ));
 
@@ -102,7 +115,10 @@ class BricklinkPricingMetricsServiceTest {
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "selected")).isEqualTo(12.0d);
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "ready_to_apply")).isEqualTo(7.0d);
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_fixed_price")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_missing_current_price")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_blocked_reason_code")).isEqualTo(1.0d);
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_below_minimum_delta")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_above_maximum_percent_delta")).isEqualTo(1.0d);
     }
 
     private double counter(String metricName, String tag, String value) {

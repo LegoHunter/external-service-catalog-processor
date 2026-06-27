@@ -78,6 +78,16 @@ lego:
         proposed-decision-status-code: PROPOSED
         batch-size: 100
         minimum-price-delta: 0.01
+        minimum-confidence: 0.75
+        minimum-comparable-count: 3
+        maximum-absolute-delta: 50.00
+        maximum-percent-delta: 0.50
+        blocked-reason-codes:
+          - SINGLE_COMPARABLE_DISCOUNTED
+          - OUTLIER_SPREAD_TOO_HIGH
+          - NO_CURRENT_COMPARABLES
+          - NO_EXACT_COMPARABLES
+          - NO_CURRENT_SNAPSHOT
         apply-eligible-reason-codes:
           - SINGLE_COMPARABLE_DISCOUNTED
           - TWO_COMPARABLES_WEIGHTED
