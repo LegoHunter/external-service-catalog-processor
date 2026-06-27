@@ -20,6 +20,13 @@ class BricklinkPricingApplyReadinessJobTest {
                 0,
                 0,
                 0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
                 50L
         );
         when(applyReadinessService.runOnce()).thenReturn(expected);

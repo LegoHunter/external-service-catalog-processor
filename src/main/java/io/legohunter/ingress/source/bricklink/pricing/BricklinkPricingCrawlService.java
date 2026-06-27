@@ -110,8 +110,12 @@ public class BricklinkPricingCrawlService {
                 counters.workItemsClaimed,
                 counters.staleWorkItemsRequeued,
                 counters.snapshotsWritten,
+                counters.zeroComparableSnapshotsWritten,
                 counters.snapshotListingsWritten,
                 counters.hydratedCatalogItems,
+                counters.catalogItemLookupNoMatches,
+                counters.catalogItemLookupAmbiguousMatches,
+                counters.catalogItemLookupFailures,
                 counters.skippedListings,
                 counters.failedListings,
                 elapsedMillis(start)
@@ -215,6 +219,7 @@ public class BricklinkPricingCrawlService {
             Optional<Item> foundItem = bricklinkAjaxClient.findCatalogItem(itemNumber, properties.effectiveCatalogItemType());
             if (foundItem.isEmpty()) {
                 completeWorkItem(workItem, STATUS_FAILED_ITEM_ID_LOOKUP_NO_MATCH, "No exact BrickLink catalog item match for " + itemNumber);
+                counters.catalogItemLookupNoMatches++;
                 return Optional.empty();
             }
 
@@ -226,12 +231,15 @@ public class BricklinkPricingCrawlService {
         } catch (BricklinkAjaxClientException e) {
             if (e.getMessage() != null && e.getMessage().contains("Ambiguous")) {
                 completeWorkItem(workItem, STATUS_FAILED_ITEM_ID_LOOKUP_AMBIGUOUS, e.getMessage());
+                counters.catalogItemLookupAmbiguousMatches++;
             } else {
                 retryOrFail(workItem, STATUS_FAILED_ITEM_ID_LOOKUP_HTTP_ERROR, e.getMessage());
+                counters.catalogItemLookupFailures++;
             }
             return Optional.empty();
         } catch (RuntimeException e) {
             retryOrFail(workItem, STATUS_FAILED_ITEM_ID_LOOKUP_HTTP_ERROR, e.getMessage());
+            counters.catalogItemLookupFailures++;
             return Optional.empty();
         }
     }
@@ -261,30 +269,29 @@ public class BricklinkPricingCrawlService {
                     requestedCondition,
                     properties.effectiveResultsPerPage()
             );
-            String rawPayload = writeJson(result);
-            PricingSnapshot snapshot = pricingSnapshotDao.insert(PricingSnapshot.builder()
-                    .pricingCrawlWorkItemId(workItem.getPricingCrawlWorkItemId())
-                    .marketplaceListingId(listing.getMarketplaceListingId())
-                    .externalCatalogItemId(catalogItem.getExternalCatalogItemId())
-                    .sourceExternalServiceId(properties.getBricklinkExternalServiceId())
-                    .sourceItemKey(catalogItem.getExternalItemKey())
-                    .sourceUniqueKey(String.valueOf(itemId))
-                    .itemConditionCode(requestedCondition)
-                    .completenessCode(inventory == null ? null : BricklinkPricingCodeNormalizer.completeness(inventory.getCompleteness()))
-                    .sourceRequestUrl(CATALOG_ITEMS_FOR_SALE_PATH)
-                    .sourceRequestParameters(writeJson(requestParameters))
-                    .rawPayloadHash(sha256(rawPayload))
-                    .comparableCount(result.getList().size())
-                    .capturedAt(now())
-                    .build());
-            counters.snapshotsWritten++;
-
-            for (ItemForSale itemForSale : result.getList()) {
-                pricingSnapshotListingDao.insert(snapshotListing(snapshot, itemForSale));
-                counters.snapshotListingsWritten++;
+            persistPricingSnapshot(listing, catalogItem, inventory, workItem, requestedCondition, itemId, requestParameters, result, counters);
+        } catch (BricklinkAjaxClientException e) {
+            if (isEmptyCatalogItemsForSaleResponse(e)) {
+                try {
+                    persistPricingSnapshot(
+                            listing,
+                            catalogItem,
+                            inventory,
+                            workItem,
+                            requestedCondition,
+                            itemId,
+                            requestParameters,
+                            new CatalogItemsForSaleResult(),
+                            counters
+                    );
+                } catch (JsonProcessingException jsonException) {
+                    completeWorkItem(workItem, STATUS_FAILED_PRICING_PARSE_ERROR, jsonException.getMessage());
+                    counters.failedListings++;
+                }
+                return;
             }
-
-            completeWorkItem(workItem, STATUS_SUCCEEDED, null);
+            retryOrFail(workItem, STATUS_FAILED_PRICING_HTTP_ERROR, e.getMessage());
+            counters.failedListings++;
         } catch (JsonProcessingException e) {
             completeWorkItem(workItem, STATUS_FAILED_PRICING_PARSE_ERROR, e.getMessage());
             counters.failedListings++;
@@ -292,6 +299,53 @@ public class BricklinkPricingCrawlService {
             retryOrFail(workItem, STATUS_FAILED_PRICING_HTTP_ERROR, e.getMessage());
             counters.failedListings++;
         }
+    }
+
+    private void persistPricingSnapshot(
+            MarketplaceListing listing,
+            ExternalCatalogItem catalogItem,
+            ItemInventory inventory,
+            PricingCrawlWorkItem workItem,
+            String requestedCondition,
+            Integer itemId,
+            Map<String, Object> requestParameters,
+            CatalogItemsForSaleResult result,
+            CrawlCounters counters
+    ) throws JsonProcessingException {
+        String rawPayload = writeJson(result);
+        PricingSnapshot snapshot = pricingSnapshotDao.insert(PricingSnapshot.builder()
+                .pricingCrawlWorkItemId(workItem.getPricingCrawlWorkItemId())
+                .marketplaceListingId(listing.getMarketplaceListingId())
+                .externalCatalogItemId(catalogItem.getExternalCatalogItemId())
+                .sourceExternalServiceId(properties.getBricklinkExternalServiceId())
+                .sourceItemKey(catalogItem.getExternalItemKey())
+                .sourceUniqueKey(String.valueOf(itemId))
+                .itemConditionCode(requestedCondition)
+                .completenessCode(inventory == null ? null : BricklinkPricingCodeNormalizer.completeness(inventory.getCompleteness()))
+                .sourceRequestUrl(CATALOG_ITEMS_FOR_SALE_PATH)
+                .sourceRequestParameters(writeJson(requestParameters))
+                .rawPayloadHash(sha256(rawPayload))
+                .comparableCount(result.getList().size())
+                .capturedAt(now())
+                .build());
+        counters.snapshotsWritten++;
+        if (result.getList().isEmpty()) {
+            counters.zeroComparableSnapshotsWritten++;
+        }
+
+        for (ItemForSale itemForSale : result.getList()) {
+            pricingSnapshotListingDao.insert(snapshotListing(snapshot, itemForSale));
+            counters.snapshotListingsWritten++;
+        }
+
+        completeWorkItem(workItem, STATUS_SUCCEEDED, null);
+    }
+
+    private boolean isEmptyCatalogItemsForSaleResponse(BricklinkAjaxClientException e) {
+        String message = e.getMessage();
+        return message != null
+                && message.contains(CATALOG_ITEMS_FOR_SALE_PATH)
+                && message.contains("returned [[]]");
     }
 
     private PricingSnapshotListing snapshotListing(PricingSnapshot snapshot, ItemForSale itemForSale) throws JsonProcessingException {
@@ -472,8 +526,12 @@ public class BricklinkPricingCrawlService {
         private int workItemsClaimed;
         private int staleWorkItemsRequeued;
         private int snapshotsWritten;
+        private int zeroComparableSnapshotsWritten;
         private int snapshotListingsWritten;
         private int hydratedCatalogItems;
+        private int catalogItemLookupNoMatches;
+        private int catalogItemLookupAmbiguousMatches;
+        private int catalogItemLookupFailures;
         private int skippedListings;
         private int failedListings;
     }

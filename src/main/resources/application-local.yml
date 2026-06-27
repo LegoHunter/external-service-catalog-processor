@@ -39,6 +39,23 @@ lego:
           enabled: true
           initial-delay-ms: 5000
           fixed-delay-ms: 600000
+      apply-readiness:
+        enabled: true
+        batch-size: 100
+        minimum-confidence: 0.75
+        minimum-comparable-count: 3
+        maximum-absolute-delta: 50.00
+        maximum-percent-delta: 0.50
+        blocked-reason-codes:
+          - SINGLE_COMPARABLE_DISCOUNTED
+          - OUTLIER_SPREAD_TOO_HIGH
+          - NO_CURRENT_COMPARABLES
+          - NO_EXACT_COMPARABLES
+          - NO_CURRENT_SNAPSHOT
+        scheduled:
+          enabled: true
+          initial-delay-ms: 10000
+          fixed-delay-ms: 600000
   fulfillment:
     sync:
       scheduled:

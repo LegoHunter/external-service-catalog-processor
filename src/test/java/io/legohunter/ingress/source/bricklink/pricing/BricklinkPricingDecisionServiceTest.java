@@ -279,6 +279,24 @@ class BricklinkPricingDecisionServiceTest {
         assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecisionService.REASON_NO_EXACT_COMPARABLES);
     }
 
+    @Test
+    void runOnceWritesNoCurrentComparablesWhenLatestSnapshotHasZeroRows() {
+        MarketplaceListing listing = listing(false, "150.00");
+        PricingSnapshot snapshot = snapshot("U", "C");
+        snapshot.setComparableCount(0);
+        arrangeListingWithSnapshot(listing, inventory("U", "C"), snapshot);
+        when(pricingSnapshotListingDao.findExactComparablesByPricingSnapshotId(500L))
+                .thenReturn(List.of());
+
+        BricklinkPricingDecisionResult result = service.runOnce();
+
+        assertThat(result.failedDecisions()).isOne();
+        PricingDecision decision = capturedDecision();
+        assertThat(decision.getDecisionStatusCode()).isEqualTo(BricklinkPricingDecisionService.STATUS_FAILED);
+        assertThat(decision.getReasonCode()).isEqualTo(BricklinkPricingDecisionService.REASON_NO_CURRENT_COMPARABLES);
+        assertThat(decision.getPricingSnapshotId()).isEqualTo(500L);
+    }
+
     private void arrangeListingWithSnapshot(MarketplaceListing listing, ItemInventory inventory, PricingSnapshot snapshot) {
         when(marketplaceListingDao.findPricingDecisionCandidatesByListingExternalServiceIdAndListingStatusCode(2, "ACTIVE", 10, false))
                 .thenReturn(Set.of(listing));

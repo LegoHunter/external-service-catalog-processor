@@ -21,6 +21,11 @@ public class BricklinkPricingApplyReadinessProperties {
     private String proposedDecisionStatusCode = BricklinkPricingDecisionService.STATUS_PROPOSED;
     private int batchSize = 25;
     private BigDecimal minimumPriceDelta = new BigDecimal("0.01");
+    private BigDecimal minimumConfidence = BigDecimal.ZERO;
+    private int minimumComparableCount = 1;
+    private BigDecimal maximumAbsoluteDelta;
+    private BigDecimal maximumPercentDelta;
+    private Set<String> blockedReasonCodes = new LinkedHashSet<>();
     private Set<String> applyEligibleReasonCodes = new LinkedHashSet<>(Set.of(
             BricklinkPricingDecisionService.REASON_SINGLE_COMPARABLE_DISCOUNTED,
             BricklinkPricingDecisionService.REASON_TWO_COMPARABLES_WEIGHTED,
@@ -56,8 +61,41 @@ public class BricklinkPricingApplyReadinessProperties {
         return minimumPriceDelta;
     }
 
+    public BigDecimal effectiveMinimumConfidence() {
+        if (minimumConfidence == null || minimumConfidence.signum() < 0) {
+            return BigDecimal.ZERO;
+        }
+        return minimumConfidence;
+    }
+
+    public int effectiveMinimumComparableCount() {
+        return Math.max(0, minimumComparableCount);
+    }
+
+    public BigDecimal effectiveMaximumAbsoluteDelta() {
+        if (maximumAbsoluteDelta == null || maximumAbsoluteDelta.signum() < 0) {
+            return null;
+        }
+        return maximumAbsoluteDelta;
+    }
+
+    public BigDecimal effectiveMaximumPercentDelta() {
+        if (maximumPercentDelta == null || maximumPercentDelta.signum() < 0) {
+            return null;
+        }
+        return maximumPercentDelta;
+    }
+
+    public Set<String> effectiveBlockedReasonCodes() {
+        return normalizeReasonCodes(blockedReasonCodes);
+    }
+
     public Set<String> effectiveApplyEligibleReasonCodes() {
-        return applyEligibleReasonCodes == null ? Set.of() : applyEligibleReasonCodes.stream()
+        return normalizeReasonCodes(applyEligibleReasonCodes);
+    }
+
+    private Set<String> normalizeReasonCodes(Set<String> reasonCodes) {
+        return reasonCodes == null ? Set.of() : reasonCodes.stream()
                 .filter(reasonCode -> reasonCode != null && !reasonCode.isBlank())
                 .map(reasonCode -> reasonCode.trim().toUpperCase())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
