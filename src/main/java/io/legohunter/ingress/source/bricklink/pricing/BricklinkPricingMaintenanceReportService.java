@@ -3,6 +3,7 @@ package io.legohunter.ingress.source.bricklink.pricing;
 import io.legohunter.data.dao.MarketplaceListingDao;
 import io.legohunter.data.dao.PricingCrawlWorkItemDao;
 import io.legohunter.data.dto.PricingCrawlWorkItemDuplicate;
+import io.legohunter.data.dto.PricingCrawlWorkItemFailure;
 import io.legohunter.data.dto.PricingCrawlWorkItemMaintenanceSummary;
 import io.legohunter.data.dto.PricingHydrationGap;
 import lombok.RequiredArgsConstructor;
@@ -15,12 +16,14 @@ import java.util.Set;
 @Service
 @RequiredArgsConstructor
 public class BricklinkPricingMaintenanceReportService {
+    static final int MAX_REPORT_LIMIT = 500;
+
     private final PricingCrawlWorkItemDao pricingCrawlWorkItemDao;
     private final MarketplaceListingDao marketplaceListingDao;
     private final BricklinkPricingCrawlProperties crawlProperties;
 
     public BricklinkPricingMaintenanceReport buildReport(int limit) {
-        int effectiveLimit = Math.max(1, limit);
+        int effectiveLimit = Math.min(MAX_REPORT_LIMIT, Math.max(1, limit));
         ZonedDateTime generatedAt = now();
         PricingCrawlWorkItemMaintenanceSummary summary = pricingCrawlWorkItemDao.summarizeMaintenance(
                 BricklinkPricingCrawlService.STATUS_PENDING,
@@ -31,14 +34,16 @@ public class BricklinkPricingMaintenanceReportService {
         );
         Set<PricingCrawlWorkItemDuplicate> duplicateWorkItems = pricingCrawlWorkItemDao.findDuplicateMarketplaceListingWorkItems(
                 BricklinkPricingCrawlService.STATUS_PENDING,
+                BricklinkPricingCrawlService.STATUS_CLAIMED,
                 effectiveLimit
         );
+        Set<PricingCrawlWorkItemFailure> recentFailures = pricingCrawlWorkItemDao.findRecentFailures(effectiveLimit);
         Set<PricingHydrationGap> hydrationGaps = marketplaceListingDao.findPricingHydrationGapsByListingExternalServiceIdAndListingStatusCode(
                 crawlProperties.getBricklinkExternalServiceId(),
                 crawlProperties.effectiveActiveListingStatusCode(),
                 effectiveLimit
         );
-        return new BricklinkPricingMaintenanceReport(generatedAt, true, summary, duplicateWorkItems, hydrationGaps);
+        return new BricklinkPricingMaintenanceReport(generatedAt, true, summary, duplicateWorkItems, recentFailures, hydrationGaps);
     }
 
     private ZonedDateTime now() {

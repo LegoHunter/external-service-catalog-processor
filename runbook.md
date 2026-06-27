@@ -633,7 +633,7 @@ Important logs:
 
 | Event | Meaning |
 | --- | --- |
-| `bricklink.pricing.apply_readiness.ready` | One latest proposed decision would change a listing if a later apply phase existed. Logs listing id, decision id, current price, proposed price, delta, currency, reason, and algorithm version. |
+| `bricklink.pricing.apply_readiness.ready` | DEBUG-level detail for one latest proposed decision that would change a listing if a later apply phase existed. Logs listing id, decision id, current price, proposed price, delta, currency, reason, and algorithm version. |
 | `bricklink.pricing.apply_readiness.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyReadinessResult` with selected, ready, skipped, and elapsed counters. |
 
 ### BrickLink Pricing Maintenance Report
@@ -648,12 +648,15 @@ GET /internal/bricklink/pricing/maintenance-report?limit=100
 
 This is a dry-run diagnostic report. It does not delete, requeue, archive, or otherwise mutate Pricing Plane data.
 
+The requested `limit` is bounded to the range `1..500`.
+
 Report sections:
 
 | Section | Meaning |
 | --- | --- |
 | `workItemSummary` | Aggregate crawl queue health, including pending, retryable, due, claimed, stale claimed, succeeded, skipped, failed, and duplicate counts. |
-| `duplicateWorkItems` | Marketplace listings with more than one crawl work item, useful for spotting queue hygiene issues before any cleanup policy exists. |
+| `duplicateWorkItems` | Marketplace listings with more than one active crawl work item. Only `PENDING` and `CLAIMED` rows are included so historical successful/skipped/failed crawl rows do not look like active queue defects. |
+| `recentFailures` | Recent crawl work items with `last_error_message` populated or a `FAILED%` status. Includes listing, catalog, inventory condition/completeness, request metadata, attempt counts, and the stored error message. |
 | `hydrationGaps` | Active BrickLink marketplace listings whose catalog item still lacks BrickLink's internal `idItem` in `external_catalog_item.external_unique_key`. |
 
 Use this endpoint before considering any manual maintenance. If the report finds stale or duplicate rows, inspect the matching SQL checks first and prefer code-level idempotency fixes over ad hoc deletes.
@@ -1563,7 +1566,7 @@ Primary events:
 
 | Event | Purpose |
 | --- | --- |
-| `bricklink.pricing.apply_readiness.ready` | One latest proposed decision would update a current marketplace listing price in a later apply phase. |
+| `bricklink.pricing.apply_readiness.ready` | DEBUG-level detail for one latest proposed decision that would update a current marketplace listing price in a later apply phase. |
 | `bricklink.pricing.apply_readiness.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyReadinessResult`. |
 
 `BricklinkPricingApplyReadinessResult` fields:
@@ -2557,6 +2560,7 @@ order by ai.sort_order;
 | Pricing crawl writes many `SKIPPED_MISSING_CONDITION` work items | `item_inventory.new_or_used` is null or not `N`/`NEW`/`U`/`USED` | Fix inventory condition data before crawling that listing. |
 | Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the configured `catalog-item-type` | Verify item number and use `catalog-item-type=S` for sets. |
 | Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. This can be valid sparse-market behavior. |
+| Pricing crawl sees `catalogifs.ajax ... returned []` | BrickLink returned an empty AJAX array for the pricing request | The crawler treats this as a successful zero-comparable snapshot instead of an HTTP failure. Review `zeroComparableSnapshotsWritten` and latest `pricing_snapshot.comparable_count=0` rows. |
 | Pricing crawl returns New/Complete rows for a New/Sealed inventory item | BrickLink pricing AJAX filters by condition only, not completeness | This is expected. Phase 3 pricing should query exact comparables by matching snapshot/listing condition and completeness. |
 | Pricing decision job does not start | `lego.bricklink.pricing.decision.enabled=false` or `lego.bricklink.pricing.decision.scheduled.enabled=false` | Set both properties true for scheduled runs. |
 | Pricing decision job reports `NO_WORK` even though active BrickLink listings exist | No active listings currently meet decision-candidate eligibility | Check for missing `external_catalog_item_id`, missing inventory condition/completeness, or non-fixed legacy listings excluded by the candidate query. |

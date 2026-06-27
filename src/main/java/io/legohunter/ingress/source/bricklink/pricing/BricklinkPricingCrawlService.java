@@ -296,6 +296,25 @@ public class BricklinkPricingCrawlService {
             completeWorkItem(workItem, STATUS_FAILED_PRICING_PARSE_ERROR, e.getMessage());
             counters.failedListings++;
         } catch (RuntimeException e) {
+            if (isEmptyCatalogItemsForSaleResponse(e)) {
+                try {
+                    persistPricingSnapshot(
+                            listing,
+                            catalogItem,
+                            inventory,
+                            workItem,
+                            requestedCondition,
+                            itemId,
+                            requestParameters,
+                            new CatalogItemsForSaleResult(),
+                            counters
+                    );
+                } catch (JsonProcessingException jsonException) {
+                    completeWorkItem(workItem, STATUS_FAILED_PRICING_PARSE_ERROR, jsonException.getMessage());
+                    counters.failedListings++;
+                }
+                return;
+            }
             retryOrFail(workItem, STATUS_FAILED_PRICING_HTTP_ERROR, e.getMessage());
             counters.failedListings++;
         }
@@ -341,11 +360,11 @@ public class BricklinkPricingCrawlService {
         completeWorkItem(workItem, STATUS_SUCCEEDED, null);
     }
 
-    private boolean isEmptyCatalogItemsForSaleResponse(BricklinkAjaxClientException e) {
+    private boolean isEmptyCatalogItemsForSaleResponse(RuntimeException e) {
         String message = e.getMessage();
         return message != null
                 && message.contains(CATALOG_ITEMS_FOR_SALE_PATH)
-                && message.contains("returned [[]]");
+                && (message.contains("returned []") || message.contains("returned [[]]"));
     }
 
     private PricingSnapshotListing snapshotListing(PricingSnapshot snapshot, ItemForSale itemForSale) throws JsonProcessingException {

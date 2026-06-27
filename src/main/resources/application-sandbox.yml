@@ -83,7 +83,6 @@ lego:
         maximum-absolute-delta: 50.00
         maximum-percent-delta: 0.50
         blocked-reason-codes:
-          - SINGLE_COMPARABLE_DISCOUNTED
           - OUTLIER_SPREAD_TOO_HIGH
           - NO_CURRENT_COMPARABLES
           - NO_EXACT_COMPARABLES
