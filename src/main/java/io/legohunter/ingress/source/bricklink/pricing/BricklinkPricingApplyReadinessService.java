@@ -38,7 +38,7 @@ public class BricklinkPricingApplyReadinessService {
             ApplyReadinessStatus status = status(review);
             counters.record(status);
             if (status == ApplyReadinessStatus.READY_TO_APPLY) {
-                log.info(
+                log.debug(
                         "bricklink.pricing.apply_readiness.ready marketplaceListingId={} pricingDecisionId={} externalListingId={} currentPrice={} proposedPrice={} delta={} currencyCode={} reasonCode={} algorithmVersion={} confidence={} comparableCount={}",
                         review.getMarketplaceListingId(),
                         review.getPricingDecisionId(),
@@ -53,7 +53,7 @@ public class BricklinkPricingApplyReadinessService {
                         review.getComparableCount()
                 );
             } else {
-                log.info(
+                log.debug(
                         "bricklink.pricing.apply_readiness.skipped marketplaceListingId={} pricingDecisionId={} status={} reasonCode={} currentPrice={} proposedPrice={} confidence={} comparableCount={}",
                         review.getMarketplaceListingId(),
                         review.getPricingDecisionId(),

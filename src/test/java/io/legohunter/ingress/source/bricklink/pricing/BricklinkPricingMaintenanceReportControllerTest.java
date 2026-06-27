@@ -20,6 +20,7 @@ class BricklinkPricingMaintenanceReportControllerTest {
                 true,
                 null,
                 Set.of(),
+                Set.of(),
                 Set.of()
         );
         when(service.buildReport(25)).thenReturn(expected);
