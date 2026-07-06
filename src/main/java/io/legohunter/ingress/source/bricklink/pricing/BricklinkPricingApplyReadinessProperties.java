@@ -21,6 +21,7 @@ public class BricklinkPricingApplyReadinessProperties {
     private String proposedDecisionStatusCode = BricklinkPricingDecisionService.STATUS_PROPOSED;
     private int batchSize = 25;
     private BigDecimal minimumPriceDelta = new BigDecimal("0.01");
+    private MinimumDelta minimumDelta = new MinimumDelta();
     private BigDecimal minimumConfidence = BigDecimal.ZERO;
     private int minimumComparableCount = 1;
     private BigDecimal maximumAbsoluteDelta;
@@ -61,6 +62,17 @@ public class BricklinkPricingApplyReadinessProperties {
         return minimumPriceDelta;
     }
 
+    public boolean isMinimumDeltaPercentEnabled() {
+        return minimumDelta != null && minimumDelta.enabled;
+    }
+
+    public BigDecimal effectiveMinimumDeltaPercent() {
+        if (minimumDelta == null || minimumDelta.percent == null || minimumDelta.percent.signum() < 0) {
+            return BigDecimal.ZERO;
+        }
+        return minimumDelta.percent;
+    }
+
     public BigDecimal effectiveMinimumConfidence() {
         if (minimumConfidence == null || minimumConfidence.signum() < 0) {
             return BigDecimal.ZERO;
@@ -99,6 +111,13 @@ public class BricklinkPricingApplyReadinessProperties {
                 .filter(reasonCode -> reasonCode != null && !reasonCode.isBlank())
                 .map(reasonCode -> reasonCode.trim().toUpperCase())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    @Getter
+    @Setter
+    public static class MinimumDelta {
+        private boolean enabled = false;
+        private BigDecimal percent = new BigDecimal("0.02");
     }
 
     @Getter

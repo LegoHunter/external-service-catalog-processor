@@ -12,15 +12,19 @@ public record BricklinkPricingApplyReadinessResult(
         int skippedBlockedReasonCode,
         int skippedIneligibleReason,
         int skippedBelowMinimumDelta,
+        int skippedBelowMinimumDeltaPercent,
         int skippedBelowMinimumConfidence,
         int skippedBelowMinimumComparableCount,
         int skippedAboveMaximumAbsoluteDelta,
         int skippedAboveMaximumPercentDelta,
+        int skippedStaleDecision,
         long elapsedMillis
 ) {
     public static BricklinkPricingApplyReadinessResult noWork(long elapsedMillis) {
         return new BricklinkPricingApplyReadinessResult(
                 "NO_WORK",
+                0,
+                0,
                 0,
                 0,
                 0,

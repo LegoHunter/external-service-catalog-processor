@@ -15,10 +15,27 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "BrickLink Pricing Maintenance", description = "Read-only Pricing Plane maintenance and diagnostics endpoints.")
 public class BricklinkPricingMaintenanceReportController {
     private final BricklinkPricingMaintenanceReportService maintenanceReportService;
+    private final BricklinkPricingApplyPreviewService applyPreviewService;
 
     @GetMapping("/maintenance-report")
     @Operation(summary = "Build a dry-run Pricing Plane maintenance report.")
     public ResponseEntity<BricklinkPricingMaintenanceReport> maintenanceReport(@RequestParam(defaultValue = "100") int limit) {
         return ResponseEntity.ok(maintenanceReportService.buildReport(limit));
+    }
+
+    @GetMapping("/apply-preview")
+    @Operation(summary = "Build a dry-run Pricing Plane apply-readiness preview report.")
+    public ResponseEntity<BricklinkPricingApplyPreviewReport> applyPreview(
+            @RequestParam(required = false) String readinessStatusCode,
+            @RequestParam(required = false) String blockReasonCode,
+            @RequestParam(defaultValue = "100") int limit
+    ) {
+        return ResponseEntity.ok(applyPreviewService.buildPreview(readinessStatusCode, blockReasonCode, limit));
+    }
+
+    @GetMapping("/apply-selection/dry-run")
+    @Operation(summary = "Select ready-to-apply pricing decisions without mutating marketplace listings.")
+    public ResponseEntity<BricklinkPricingDryRunApplySelectionReport> dryRunApplySelection(@RequestParam(defaultValue = "100") int limit) {
+        return ResponseEntity.ok(applyPreviewService.buildDryRunApplySelection(limit));
     }
 }
