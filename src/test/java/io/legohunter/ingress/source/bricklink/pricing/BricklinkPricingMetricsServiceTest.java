@@ -1,5 +1,6 @@
 package io.legohunter.ingress.source.bricklink.pricing;
 
+import io.legohunter.data.dao.PricingApplyReadinessDao;
 import io.legohunter.data.dao.PricingCrawlWorkItemDao;
 import io.legohunter.data.dao.PricingDecisionDao;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -17,11 +18,13 @@ class BricklinkPricingMetricsServiceTest {
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private final PricingCrawlWorkItemDao pricingCrawlWorkItemDao = mock(PricingCrawlWorkItemDao.class);
     private final PricingDecisionDao pricingDecisionDao = mock(PricingDecisionDao.class);
+    private final PricingApplyReadinessDao pricingApplyReadinessDao = mock(PricingApplyReadinessDao.class);
     private final BricklinkPricingCrawlProperties crawlProperties = new BricklinkPricingCrawlProperties();
     private final BricklinkPricingMetricsService metricsService = new BricklinkPricingMetricsService(
             meterRegistry,
             pricingCrawlWorkItemDao,
             pricingDecisionDao,
+            pricingApplyReadinessDao,
             crawlProperties
     );
 
@@ -107,6 +110,8 @@ class BricklinkPricingMetricsServiceTest {
                 1,
                 1,
                 1,
+                1,
+                1,
                 75
         ));
 
@@ -118,7 +123,9 @@ class BricklinkPricingMetricsServiceTest {
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_missing_current_price")).isEqualTo(1.0d);
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_blocked_reason_code")).isEqualTo(1.0d);
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_below_minimum_delta")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_below_minimum_delta_percent")).isEqualTo(1.0d);
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_above_maximum_percent_delta")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_stale_decision")).isEqualTo(1.0d);
     }
 
     private double counter(String metricName, String tag, String value) {

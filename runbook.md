@@ -581,7 +581,7 @@ lego.bricklink.pricing.apply-readiness.scheduled.enabled: true
 
 `lego.bricklink.pricing.apply-readiness.enabled=true` creates the dry-run readiness service. The scheduled job bean is created only when both `enabled` and `scheduled.enabled` are true.
 
-This job is intentionally read-only. It does not update `marketplace_listing.unit_price`, does not mark `pricing_decision.applied_at`, and does not trigger marketplace sync. It is the Phase 6 bridge between trusted read-only pricing decisions and a later apply/sync phase.
+This job is intentionally read-only. It does not update `marketplace_listing.unit_price`, does not mark `pricing_decision.applied_at`, and does not trigger marketplace sync. It writes one durable `pricing_apply_readiness` row per evaluated `pricing_decision`, keyed by decision, so the latest apply state can be reviewed without parsing logs.
 
 Schedule and selection settings:
 
@@ -593,6 +593,8 @@ Schedule and selection settings:
 | `lego.bricklink.pricing.apply-readiness.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
 | `lego.bricklink.pricing.apply-readiness.batch-size` | `25` | Integer; effective value is at least `1` | Maximum latest proposed decisions reviewed per run. |
 | `lego.bricklink.pricing.apply-readiness.minimum-price-delta` | `0.01` | Decimal money amount, zero or positive | Minimum absolute difference between current listing price and proposed final price required to count as ready. |
+| `lego.bricklink.pricing.apply-readiness.minimum-delta.enabled` | `false` | `true`, `false` | Enables the configurable percentage-based minimum movement guard. |
+| `lego.bricklink.pricing.apply-readiness.minimum-delta.percent` | `0.02` | Decimal ratio, zero or positive | Minimum relative movement required when enabled. `0.02` means 2%. The required money delta is computed with `BigDecimal` and rounded up to the penny. |
 | `lego.bricklink.pricing.apply-readiness.minimum-confidence` | `0.00` | Decimal, zero or positive | Minimum decision confidence required before a proposed decision counts as ready. |
 | `lego.bricklink.pricing.apply-readiness.minimum-comparable-count` | `1` | Integer, effective value at least `0` | Minimum exact comparable count required before a proposed decision counts as ready. |
 | `lego.bricklink.pricing.apply-readiness.maximum-absolute-delta` | null | Decimal money amount or null | Optional maximum absolute price movement allowed by the dry-run readiness scan. Null disables the guard. |
@@ -624,10 +626,12 @@ Readiness behavior:
 | `skippedBlockedReasonCode` | Proposed decision reason code appears in `blocked-reason-codes`. |
 | `skippedIneligibleReason` | Proposed decision reason code is not in `apply-eligible-reason-codes`. |
 | `skippedBelowMinimumDelta` | Proposed price equals current price or differs by less than `minimum-price-delta`. |
+| `skippedBelowMinimumDeltaPercent` | Proposed price movement is less than the configured percentage threshold. Persisted rows use readiness status `BLOCKED_BELOW_MINIMUM_DELTA_PERCENT` and block reason `BELOW_MINIMUM_DELTA_PERCENT`. |
 | `skippedBelowMinimumConfidence` | Decision confidence is lower than `minimum-confidence`. |
 | `skippedBelowMinimumComparableCount` | Decision comparable count is lower than `minimum-comparable-count`. |
 | `skippedAboveMaximumAbsoluteDelta` | Absolute proposed price movement is greater than `maximum-absolute-delta`. |
 | `skippedAboveMaximumPercentDelta` | Relative proposed price movement is greater than `maximum-percent-delta`. |
+| `skippedStaleDecision` | A newer `pricing_snapshot` exists for the listing than the snapshot used by the latest proposed decision. Persisted rows use readiness status `BLOCKED_STALE_DECISION` and block reason `STALE_DECISION`. |
 
 Important logs:
 
@@ -647,6 +651,20 @@ GET /internal/bricklink/pricing/maintenance-report?limit=100
 ```
 
 This is a dry-run diagnostic report. It does not delete, requeue, archive, or otherwise mutate Pricing Plane data.
+
+### BrickLink Pricing Apply Preview Reports
+
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingMaintenanceReportController`
+
+Endpoints:
+
+```text
+GET /internal/bricklink/pricing/apply-preview?readinessStatusCode=READY_TO_APPLY&limit=100
+GET /internal/bricklink/pricing/apply-preview?blockReasonCode=BELOW_MINIMUM_DELTA_PERCENT&limit=100
+GET /internal/bricklink/pricing/apply-selection/dry-run?limit=100
+```
+
+These reports read `pricing_apply_readiness` and select the latest readiness row per marketplace listing. They do not update prices, mark decisions applied, or enqueue marketplace sync. `apply-preview` supports optional `readinessStatusCode` and `blockReasonCode` filters. `apply-selection/dry-run` returns the current `READY_TO_APPLY` rows that a future apply job would consume.
 
 The requested `limit` is bounded to the range `1..500`.
 
@@ -1041,6 +1059,8 @@ Backed by `BricklinkPricingApplyReadinessProperties`.
 | `lego.bricklink.pricing.apply-readiness.proposed-decision-status-code` | `PROPOSED` | Non-blank decision status string; code trims and uppercases | Latest decision status eligible for dry-run apply review. |
 | `lego.bricklink.pricing.apply-readiness.batch-size` | `25` | Integer; effective value at least `1` | Maximum latest proposed decisions reviewed per run. |
 | `lego.bricklink.pricing.apply-readiness.minimum-price-delta` | `0.01` | Decimal money amount, zero or positive | Minimum absolute price delta required before a proposed decision is counted as ready. |
+| `lego.bricklink.pricing.apply-readiness.minimum-delta.enabled` | `false` | `true`, `false` | Enables percentage-based minimum movement gating. |
+| `lego.bricklink.pricing.apply-readiness.minimum-delta.percent` | `0.02` | Decimal ratio, zero or positive | Minimum relative movement required when percentage gating is enabled. The required money delta is rounded up to the penny. |
 | `lego.bricklink.pricing.apply-readiness.minimum-confidence` | `0.00` | Decimal, zero or positive | Minimum pricing decision confidence required before a proposed decision is counted as ready. |
 | `lego.bricklink.pricing.apply-readiness.minimum-comparable-count` | `1` | Integer; effective value at least `0` | Minimum exact comparable count required before a proposed decision is counted as ready. |
 | `lego.bricklink.pricing.apply-readiness.maximum-absolute-delta` | null | Decimal money amount or null | Optional maximum absolute price movement allowed by readiness review. Null disables this guard. |
@@ -1066,6 +1086,9 @@ lego:
         proposed-decision-status-code: PROPOSED
         batch-size: 25
         minimum-price-delta: 0.01
+        minimum-delta:
+          enabled: false
+          percent: 0.02
         minimum-confidence: 0.00
         minimum-comparable-count: 1
         maximum-absolute-delta:
@@ -1446,13 +1469,17 @@ Healthy sandbox behavior:
 | --- | --- | --- | --- |
 | `bricklink_pricing_apply_readiness_job` | Counter | `outcome` | One count per apply-readiness dry-run job. |
 | `bricklink_pricing_apply_readiness_job_duration` | Timer | `outcome` | Apply-readiness dry-run duration. |
-| `bricklink_pricing_apply_readiness_decision` | Counter | `result` | Decision review counts by `selected`, `ready_to_apply`, `skipped_fixed_price`, `skipped_missing_current_price`, `skipped_missing_final_price`, `skipped_currency_mismatch`, `skipped_unsupported_decision_status`, `skipped_blocked_reason_code`, `skipped_ineligible_reason`, `skipped_below_minimum_delta`, `skipped_below_minimum_confidence`, `skipped_below_minimum_comparable_count`, `skipped_above_maximum_absolute_delta`, and `skipped_above_maximum_percent_delta`. |
+| `bricklink_pricing_apply_readiness_decision` | Counter | `result` | Decision review counts by `selected`, `ready_to_apply`, `skipped_fixed_price`, `skipped_missing_current_price`, `skipped_missing_final_price`, `skipped_currency_mismatch`, `skipped_unsupported_decision_status`, `skipped_blocked_reason_code`, `skipped_ineligible_reason`, `skipped_below_minimum_delta`, `skipped_below_minimum_delta_percent`, `skipped_below_minimum_confidence`, `skipped_below_minimum_comparable_count`, `skipped_above_maximum_absolute_delta`, `skipped_above_maximum_percent_delta`, and `skipped_stale_decision`. |
+| `bricklink_pricing_apply_readiness_current` | Gauge | `status` | Current latest apply-readiness count by persisted status, such as `ready_to_apply`, `blocked_below_minimum_delta_percent`, and `blocked_stale_decision`. |
+| `bricklink_pricing_apply_readiness_block_reason_current` | Gauge | `reason` | Current latest apply-readiness count by persisted block reason, such as `below_minimum_delta_percent` and `stale_decision`. |
 
 Prometheus examples:
 
 ```promql
 sum by (outcome) (increase(bricklink_pricing_apply_readiness_job_total{namespace="$namespace",service="$service"}[$__range]))
 sum by (result) (increase(bricklink_pricing_apply_readiness_decision_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (status) (bricklink_pricing_apply_readiness_current{namespace="$namespace",service="$service"})
+sum by (reason) (bricklink_pricing_apply_readiness_block_reason_current{namespace="$namespace",service="$service"})
 ```
 
 Healthy sandbox behavior:
@@ -1654,7 +1681,7 @@ Primary events:
 
 ### Safe BrickLink Pricing Crawl Rollout
 
-1. Confirm the Pricing Plane tables exist in the target database: `pricing_crawl_work_item`, `pricing_snapshot`, `pricing_snapshot_listing`, and `pricing_decision`.
+1. Confirm the Pricing Plane tables exist in the target database: `pricing_crawl_work_item`, `pricing_snapshot`, `pricing_snapshot_listing`, `pricing_decision`, and `pricing_apply_readiness`.
 2. Confirm active BrickLink marketplace listings exist with `marketplace_listing.listing_external_service_id=2`, `listing_status_code='ACTIVE'`, and a populated `external_catalog_item_id`.
 3. Confirm `external_catalog_item.external_item_key` contains the public BrickLink item number, for example `6390-1`.
 4. Set `bricklink.ajax.uri=https://www.bricklink.com`.
@@ -1685,7 +1712,7 @@ Set `lego.bricklink.pricing.crawl.enabled=false` if the service bean should be d
 
 ### Safe BrickLink Pricing Decision Rollout
 
-1. Confirm the Pricing Plane tables exist in the target database: `pricing_crawl_work_item`, `pricing_snapshot`, `pricing_snapshot_listing`, and `pricing_decision`.
+1. Confirm the Pricing Plane tables exist in the target database: `pricing_crawl_work_item`, `pricing_snapshot`, `pricing_snapshot_listing`, `pricing_decision`, and `pricing_apply_readiness`.
 2. Run the BrickLink pricing crawl first and verify recent `pricing_snapshot` and `pricing_snapshot_listing` rows exist.
 3. Confirm active BrickLink marketplace listings have `marketplace_listing.unit_price`, `currency_code`, `fixed_price`, `external_listing_id`, and a linked `item_inventory`.
 4. Confirm `item_inventory.new_or_used` and `item_inventory.completeness` are populated. Supported values normalize to `N`/`U` and `S`/`C`/`X`.
@@ -2298,7 +2325,62 @@ order by abs(pd.final_price - pd.previous_price) desc,
 limit 50;
 ```
 
-Review latest decisions that the Phase 6 dry-run apply-readiness job would count as ready. This excludes stale proposals superseded by newer decisions and still does not apply any prices:
+Review the current latest persisted apply-readiness state per listing:
+
+```sql
+select par.readiness_status_code,
+       par.block_reason_code,
+       count(*) as listing_count
+from pricing_apply_readiness par
+join (
+    select marketplace_listing_id,
+           max(pricing_apply_readiness_id) as pricing_apply_readiness_id
+    from pricing_apply_readiness
+    group by marketplace_listing_id
+) latest
+  on latest.pricing_apply_readiness_id = par.pricing_apply_readiness_id
+group by par.readiness_status_code,
+         par.block_reason_code
+order by par.readiness_status_code,
+         par.block_reason_code;
+```
+
+Review latest persisted decisions that the dry-run apply selection skeleton would select. This still does not apply any prices:
+
+```sql
+select par.pricing_apply_readiness_id,
+       par.pricing_decision_id,
+       ml.marketplace_listing_id,
+       ml.external_listing_id,
+       eci.external_item_key,
+       par.current_price,
+       par.proposed_price,
+       par.delta_amount,
+       par.delta_percent,
+       par.minimum_required_delta,
+       par.currency_code,
+       par.confidence,
+       par.comparable_count,
+       par.evaluated_at
+from pricing_apply_readiness par
+join (
+    select marketplace_listing_id,
+           max(pricing_apply_readiness_id) as pricing_apply_readiness_id
+    from pricing_apply_readiness
+    group by marketplace_listing_id
+) latest
+  on latest.pricing_apply_readiness_id = par.pricing_apply_readiness_id
+join marketplace_listing ml
+  on ml.marketplace_listing_id = par.marketplace_listing_id
+left join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where par.readiness_status_code = 'READY_TO_APPLY'
+order by par.delta_amount desc,
+         par.pricing_apply_readiness_id desc
+limit 50;
+```
+
+Review latest decisions that the dry-run apply-readiness job would count as ready from source decision data. This excludes stale proposals superseded by newer decisions and still does not apply any prices:
 
 ```sql
 select pd.pricing_decision_id,
@@ -2571,7 +2653,7 @@ order by ai.sort_order;
 | Pricing decisions are clamped | `minimum-price` or `maximum-price` is configured | Review global clamp properties and `source_summary_json` for the original algorithm branch. |
 | Pricing decision final price differs greatly from current price | Competitive algorithm found a large market delta or stale listing price | Review exact comparable rows, comparable count, confidence, and reason code before any future apply phase. |
 | Pricing apply-readiness job reports `NO_WORK` | No latest, unapplied `PROPOSED` decisions match the configured marketplace service/status | Run the decision job first and inspect latest decision state per active listing. |
-| Pricing apply-readiness job reports `NO_READY_DECISIONS` | Selected proposed decisions were skipped by fixed-price, missing-price, currency, reason-code, confidence, comparable-count, or movement guards | Review `BricklinkPricingApplyReadinessResult` counters and the ready-for-apply SQL query. |
+| Pricing apply-readiness job reports `NO_READY_DECISIONS` | Selected proposed decisions were skipped by fixed-price, missing-price, currency, reason-code, confidence, comparable-count, stale-snapshot, absolute movement, percent movement, or max movement guards | Review `BricklinkPricingApplyReadinessResult` counters and the persisted `pricing_apply_readiness` latest-state query. |
 | BrickLink AJAX calls start failing after a fast test run | BrickLink may be throttling or temporarily banning the external IP | Stop the scheduled job, keep `bricklink.ajax.rate-limit.enabled=true`, keep `minimum-delay-ms >= 2000`, and wait before retrying. |
 | Fulfillment sync maps orders but creates no ShipStation orders | `lego.fulfillment.sync.scheduled.apply=false` | This is dry-run mapping mode. Set apply true only after staged payloads and credentials are verified. |
 | Fulfillment sync reports `PAYLOADS_MISSING` | BrickLink order sync has not stored latest `ORDER_RESPONSE` and `ORDER_ITEMS_RESPONSE` payloads for candidates | Run BrickLink order sync with `apply=true` first and confirm `marketplace_order_payload` rows exist. |

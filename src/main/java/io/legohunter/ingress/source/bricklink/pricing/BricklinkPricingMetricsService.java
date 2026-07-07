@@ -1,5 +1,6 @@
 package io.legohunter.ingress.source.bricklink.pricing;
 
+import io.legohunter.data.dao.PricingApplyReadinessDao;
 import io.legohunter.data.dao.PricingCrawlWorkItemDao;
 import io.legohunter.data.dao.PricingDecisionDao;
 import io.micrometer.core.instrument.Counter;
@@ -24,6 +25,7 @@ public class BricklinkPricingMetricsService {
     private final MeterRegistry meterRegistry;
     private final PricingCrawlWorkItemDao pricingCrawlWorkItemDao;
     private final PricingDecisionDao pricingDecisionDao;
+    private final PricingApplyReadinessDao pricingApplyReadinessDao;
     private final BricklinkPricingCrawlProperties crawlProperties;
     private boolean gaugesRegistered;
 
@@ -73,10 +75,12 @@ public class BricklinkPricingMetricsService {
         increment("bricklink_pricing_apply_readiness_decision", "skipped_blocked_reason_code", result.skippedBlockedReasonCode());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_ineligible_reason", result.skippedIneligibleReason());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_delta", result.skippedBelowMinimumDelta());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_delta_percent", result.skippedBelowMinimumDeltaPercent());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_confidence", result.skippedBelowMinimumConfidence());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_below_minimum_comparable_count", result.skippedBelowMinimumComparableCount());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_above_maximum_absolute_delta", result.skippedAboveMaximumAbsoluteDelta());
         increment("bricklink_pricing_apply_readiness_decision", "skipped_above_maximum_percent_delta", result.skippedAboveMaximumPercentDelta());
+        increment("bricklink_pricing_apply_readiness_decision", "skipped_stale_decision", result.skippedStaleDecision());
     }
 
     private synchronized void registerGauges() {
@@ -99,6 +103,12 @@ public class BricklinkPricingMetricsService {
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_FAILED, false);
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_SKIPPED, false);
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_PROPOSED, true);
+        registerApplyReadinessGauge("READY_TO_APPLY");
+        registerApplyReadinessGauge("BLOCKED_FIXED_PRICE");
+        registerApplyReadinessGauge("BLOCKED_BELOW_MINIMUM_DELTA_PERCENT");
+        registerApplyReadinessGauge("BLOCKED_STALE_DECISION");
+        registerApplyReadinessBlockReasonGauge("BELOW_MINIMUM_DELTA_PERCENT");
+        registerApplyReadinessBlockReasonGauge("STALE_DECISION");
         gaugesRegistered = true;
     }
 
@@ -115,6 +125,30 @@ public class BricklinkPricingMetricsService {
                 .description("Current latest BrickLink pricing decision count by status.")
                 .tag(STATUS_TAG, status.toLowerCase())
                 .tag("unapplied_only", Boolean.toString(unappliedOnly))
+                .strongReference(true)
+                .register(meterRegistry);
+    }
+
+    private void registerApplyReadinessGauge(String status) {
+        Gauge.builder(
+                        "bricklink_pricing_apply_readiness_current",
+                        this,
+                        ignored -> pricingApplyReadinessDao.countLatestByReadinessStatusCode(status)
+                )
+                .description("Current latest BrickLink pricing apply-readiness count by status.")
+                .tag(STATUS_TAG, status.toLowerCase())
+                .strongReference(true)
+                .register(meterRegistry);
+    }
+
+    private void registerApplyReadinessBlockReasonGauge(String reason) {
+        Gauge.builder(
+                        "bricklink_pricing_apply_readiness_block_reason_current",
+                        this,
+                        ignored -> pricingApplyReadinessDao.countLatestByBlockReasonCode(reason)
+                )
+                .description("Current latest BrickLink pricing apply-readiness count by block reason.")
+                .tag("reason", reason.toLowerCase())
                 .strongReference(true)
                 .register(meterRegistry);
     }

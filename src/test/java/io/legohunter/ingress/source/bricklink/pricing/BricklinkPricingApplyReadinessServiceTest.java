@@ -1,9 +1,12 @@
 package io.legohunter.ingress.source.bricklink.pricing;
 
+import io.legohunter.data.dao.PricingApplyReadinessDao;
 import io.legohunter.data.dao.PricingDecisionDao;
+import io.legohunter.data.dto.PricingApplyReadiness;
 import io.legohunter.data.dto.PricingDecisionReview;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.util.Set;
@@ -15,17 +18,19 @@ import static org.mockito.Mockito.when;
 
 class BricklinkPricingApplyReadinessServiceTest {
     private PricingDecisionDao pricingDecisionDao;
+    private PricingApplyReadinessDao pricingApplyReadinessDao;
     private BricklinkPricingApplyReadinessProperties properties;
     private BricklinkPricingApplyReadinessService service;
 
     @BeforeEach
     void setUp() {
         pricingDecisionDao = mock(PricingDecisionDao.class);
+        pricingApplyReadinessDao = mock(PricingApplyReadinessDao.class);
         properties = new BricklinkPricingApplyReadinessProperties();
         properties.setEnabled(true);
         properties.setBatchSize(10);
         properties.setMinimumComparableCount(0);
-        service = new BricklinkPricingApplyReadinessService(properties, pricingDecisionDao);
+        service = new BricklinkPricingApplyReadinessService(properties, pricingDecisionDao, pricingApplyReadinessDao);
     }
 
     @Test
@@ -61,6 +66,10 @@ class BricklinkPricingApplyReadinessServiceTest {
         assertThat(result.skippedCurrencyMismatch()).isZero();
         assertThat(result.skippedIneligibleReason()).isZero();
         assertThat(result.skippedBelowMinimumDelta()).isZero();
+        ArgumentCaptor<PricingApplyReadiness> readinessCaptor = ArgumentCaptor.forClass(PricingApplyReadiness.class);
+        verify(pricingApplyReadinessDao).upsert(readinessCaptor.capture());
+        assertThat(readinessCaptor.getValue().getReadinessStatusCode()).isEqualTo("READY_TO_APPLY");
+        assertThat(readinessCaptor.getValue().getDeltaAmount()).isEqualByComparingTo("5.00");
     }
 
     @Test
@@ -89,6 +98,58 @@ class BricklinkPricingApplyReadinessServiceTest {
         assertThat(result.skippedCurrencyMismatch()).isOne();
         assertThat(result.skippedIneligibleReason()).isOne();
         assertThat(result.skippedBelowMinimumDelta()).isOne();
+    }
+
+    @Test
+    void runOnceBlocksWhenPercentMinimumDeltaIsNotMetAndRoundsRequiredDeltaUpToPenny() {
+        properties.getMinimumDelta().setEnabled(true);
+        properties.getMinimumDelta().setPercent(new BigDecimal("0.02"));
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
+                2, "ACTIVE", "PROPOSED", 10
+        )).thenReturn(Set.of(review("4.99", "4.90", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
+
+        BricklinkPricingApplyReadinessResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("NO_READY_DECISIONS");
+        assertThat(result.skippedBelowMinimumDeltaPercent()).isOne();
+        ArgumentCaptor<PricingApplyReadiness> readinessCaptor = ArgumentCaptor.forClass(PricingApplyReadiness.class);
+        verify(pricingApplyReadinessDao).upsert(readinessCaptor.capture());
+        assertThat(readinessCaptor.getValue().getReadinessStatusCode()).isEqualTo("BLOCKED_BELOW_MINIMUM_DELTA_PERCENT");
+        assertThat(readinessCaptor.getValue().getBlockReasonCode()).isEqualTo("BELOW_MINIMUM_DELTA_PERCENT");
+        assertThat(readinessCaptor.getValue().getMinimumRequiredDelta()).isEqualByComparingTo("0.10");
+    }
+
+    @Test
+    void runOnceAllowsPercentMinimumDeltaAtExactThreshold() {
+        properties.getMinimumDelta().setEnabled(true);
+        properties.getMinimumDelta().setPercent(new BigDecimal("0.02"));
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
+                2, "ACTIVE", "PROPOSED", 10
+        )).thenReturn(Set.of(review("586.00", "574.28", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
+
+        BricklinkPricingApplyReadinessResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.readyToApply()).isOne();
+        assertThat(result.skippedBelowMinimumDeltaPercent()).isZero();
+    }
+
+    @Test
+    void runOnceBlocksStaleDecisionWhenNewerSnapshotExists() {
+        PricingDecisionReview stale = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
+        stale.setNewerSnapshotAvailable(true);
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
+                2, "ACTIVE", "PROPOSED", 10
+        )).thenReturn(Set.of(stale));
+
+        BricklinkPricingApplyReadinessResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("NO_READY_DECISIONS");
+        assertThat(result.skippedStaleDecision()).isOne();
+        ArgumentCaptor<PricingApplyReadiness> readinessCaptor = ArgumentCaptor.forClass(PricingApplyReadiness.class);
+        verify(pricingApplyReadinessDao).upsert(readinessCaptor.capture());
+        assertThat(readinessCaptor.getValue().getReadinessStatusCode()).isEqualTo("BLOCKED_STALE_DECISION");
+        assertThat(readinessCaptor.getValue().getBlockReasonCode()).isEqualTo("STALE_DECISION");
     }
 
     @Test

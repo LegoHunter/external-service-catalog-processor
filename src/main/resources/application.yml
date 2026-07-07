@@ -45,6 +45,9 @@ lego:
         proposed-decision-status-code: PROPOSED
         batch-size: 25
         minimum-price-delta: 0.01
+        minimum-delta:
+          enabled: false
+          percent: 0.02
         minimum-confidence: 0.00
         minimum-comparable-count: 1
         maximum-absolute-delta:
