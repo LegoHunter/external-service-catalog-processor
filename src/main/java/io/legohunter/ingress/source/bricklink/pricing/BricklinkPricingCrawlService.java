@@ -216,7 +216,7 @@ public class BricklinkPricingCrawlService {
         }
 
         try {
-            Optional<Item> foundItem = bricklinkAjaxClient.findCatalogItem(itemNumber, properties.effectiveCatalogItemType());
+            Optional<Item> foundItem = bricklinkAjaxClient.findCatalogItem(itemNumber, effectiveCatalogItemType(catalogItem));
             if (foundItem.isEmpty()) {
                 completeWorkItem(workItem, STATUS_FAILED_ITEM_ID_LOOKUP_NO_MATCH, "No exact BrickLink catalog item match for " + itemNumber);
                 counters.catalogItemLookupNoMatches++;
@@ -486,6 +486,14 @@ public class BricklinkPricingCrawlService {
             return null;
         }
         return BricklinkPricingCodeNormalizer.condition(inventory.getNewOrUsed());
+    }
+
+    private String effectiveCatalogItemType(ExternalCatalogItem catalogItem) {
+        String itemTypeCode = clean(catalogItem.getItemTypeCode());
+        if (itemTypeCode == null) {
+            return properties.effectiveCatalogItemType();
+        }
+        return itemTypeCode.toUpperCase();
     }
 
     private Optional<Integer> parseInternalItemId(String externalUniqueKey) {
