@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -94,6 +95,10 @@ class BricklinkPricingMetricsServiceTest {
 
     @Test
     void recordsApplyReadinessMetrics() {
+        when(pricingApplyReadinessDao.countLatestByReadinessStatusCode("READY_TO_APPLY")).thenReturn(7L);
+        when(pricingApplyReadinessDao.countLatestByReadinessStatusCode("BLOCKED_MISSING_CURRENT_PRICE")).thenReturn(1L);
+        when(pricingApplyReadinessDao.countLatestByBlockReasonCode("MISSING_CURRENT_PRICE")).thenReturn(1L);
+
         metricsService.recordApplyReadiness(new BricklinkPricingApplyReadinessResult(
                 "SUCCESS",
                 12,
@@ -126,6 +131,50 @@ class BricklinkPricingMetricsServiceTest {
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_below_minimum_delta_percent")).isEqualTo(1.0d);
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_above_maximum_percent_delta")).isEqualTo(1.0d);
         assertThat(counter("bricklink_pricing_apply_readiness_decision", "result", "skipped_stale_decision")).isEqualTo(1.0d);
+        assertThat(gauge("bricklink_pricing_apply_readiness_current", "status", "ready_to_apply")).isEqualTo(7.0d);
+        assertThat(gauge("bricklink_pricing_apply_readiness_current", "status", "blocked_missing_current_price")).isEqualTo(1.0d);
+        assertThat(gauge("bricklink_pricing_apply_readiness_block_reason_current", "reason", "missing_current_price")).isEqualTo(1.0d);
+
+        List<String> statusTags = List.of(
+                "ready_to_apply",
+                "blocked_fixed_price",
+                "blocked_missing_current_price",
+                "blocked_missing_final_price",
+                "blocked_currency_mismatch",
+                "blocked_unsupported_decision_status",
+                "blocked_reason_code",
+                "blocked_ineligible_reason",
+                "blocked_below_minimum_delta",
+                "blocked_below_minimum_delta_percent",
+                "blocked_below_minimum_confidence",
+                "blocked_below_minimum_comparable_count",
+                "blocked_above_maximum_absolute_delta",
+                "blocked_above_maximum_percent_delta",
+                "blocked_stale_decision"
+        );
+        statusTags.forEach(status -> assertThat(meterRegistry.find("bricklink_pricing_apply_readiness_current")
+                .tag("status", status)
+                .gauge()).as(status).isNotNull());
+
+        List<String> reasonTags = List.of(
+                "fixed_price",
+                "missing_current_price",
+                "missing_final_price",
+                "currency_mismatch",
+                "unsupported_decision_status",
+                "blocked_reason_code",
+                "ineligible_reason",
+                "below_minimum_delta",
+                "below_minimum_delta_percent",
+                "below_minimum_confidence",
+                "below_minimum_comparable_count",
+                "above_maximum_absolute_delta",
+                "above_maximum_percent_delta",
+                "stale_decision"
+        );
+        reasonTags.forEach(reason -> assertThat(meterRegistry.find("bricklink_pricing_apply_readiness_block_reason_current")
+                .tag("reason", reason)
+                .gauge()).as(reason).isNotNull());
     }
 
     private double counter(String metricName, String tag, String value) {

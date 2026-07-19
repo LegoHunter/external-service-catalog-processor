@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -21,6 +22,39 @@ public class BricklinkPricingMetricsService {
     private static final String RESULT_TAG = "result";
     private static final String STATE_TAG = "state";
     private static final String STATUS_TAG = "status";
+    private static final List<String> APPLY_READINESS_STATUS_CODES = List.of(
+            "READY_TO_APPLY",
+            "BLOCKED_FIXED_PRICE",
+            "BLOCKED_MISSING_CURRENT_PRICE",
+            "BLOCKED_MISSING_FINAL_PRICE",
+            "BLOCKED_CURRENCY_MISMATCH",
+            "BLOCKED_UNSUPPORTED_DECISION_STATUS",
+            "BLOCKED_REASON_CODE",
+            "BLOCKED_INELIGIBLE_REASON",
+            "BLOCKED_BELOW_MINIMUM_DELTA",
+            "BLOCKED_BELOW_MINIMUM_DELTA_PERCENT",
+            "BLOCKED_BELOW_MINIMUM_CONFIDENCE",
+            "BLOCKED_BELOW_MINIMUM_COMPARABLE_COUNT",
+            "BLOCKED_ABOVE_MAXIMUM_ABSOLUTE_DELTA",
+            "BLOCKED_ABOVE_MAXIMUM_PERCENT_DELTA",
+            "BLOCKED_STALE_DECISION"
+    );
+    private static final List<String> APPLY_READINESS_BLOCK_REASON_CODES = List.of(
+            "FIXED_PRICE",
+            "MISSING_CURRENT_PRICE",
+            "MISSING_FINAL_PRICE",
+            "CURRENCY_MISMATCH",
+            "UNSUPPORTED_DECISION_STATUS",
+            "BLOCKED_REASON_CODE",
+            "INELIGIBLE_REASON",
+            "BELOW_MINIMUM_DELTA",
+            "BELOW_MINIMUM_DELTA_PERCENT",
+            "BELOW_MINIMUM_CONFIDENCE",
+            "BELOW_MINIMUM_COMPARABLE_COUNT",
+            "ABOVE_MAXIMUM_ABSOLUTE_DELTA",
+            "ABOVE_MAXIMUM_PERCENT_DELTA",
+            "STALE_DECISION"
+    );
 
     private final MeterRegistry meterRegistry;
     private final PricingCrawlWorkItemDao pricingCrawlWorkItemDao;
@@ -103,12 +137,8 @@ public class BricklinkPricingMetricsService {
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_FAILED, false);
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_SKIPPED, false);
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_PROPOSED, true);
-        registerApplyReadinessGauge("READY_TO_APPLY");
-        registerApplyReadinessGauge("BLOCKED_FIXED_PRICE");
-        registerApplyReadinessGauge("BLOCKED_BELOW_MINIMUM_DELTA_PERCENT");
-        registerApplyReadinessGauge("BLOCKED_STALE_DECISION");
-        registerApplyReadinessBlockReasonGauge("BELOW_MINIMUM_DELTA_PERCENT");
-        registerApplyReadinessBlockReasonGauge("STALE_DECISION");
+        APPLY_READINESS_STATUS_CODES.forEach(this::registerApplyReadinessGauge);
+        APPLY_READINESS_BLOCK_REASON_CODES.forEach(this::registerApplyReadinessBlockReasonGauge);
         gaugesRegistered = true;
     }
 
