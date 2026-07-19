@@ -126,6 +126,43 @@ class BricklinkPricingCrawlServiceTest {
     }
 
     @Test
+    void runOnceUsesCatalogItemTypeWhenHydratingMissingInternalItemId() {
+        ExternalCatalogItem catalogItem = catalogItem(null, "KC140", "G");
+        MarketplaceListing listing = listing(catalogItem);
+        givenScheduledAndClaimed(listing);
+        when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("NEW", "SEALED")));
+        when(bricklinkAjaxClient.findCatalogItem("KC140", "G")).thenReturn(Optional.of(searchItem(39975)));
+        when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(39975, "N", 500))
+                .thenReturn(catalogResult(itemForSale(3001, "seller1", "US $3.99")));
+
+        BricklinkPricingCrawlResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.hydratedCatalogItems()).isOne();
+        assertThat(catalogItem.getExternalUniqueKey()).isEqualTo("39975");
+        verify(bricklinkAjaxClient).findCatalogItem("KC140", "G");
+        verify(bricklinkAjaxClient).catalogItemsForSaleByInternalItemId(39975, "N", 500);
+    }
+
+    @Test
+    void runOnceFallsBackToConfiguredCatalogItemTypeWhenCatalogItemTypeIsBlank() {
+        ExternalCatalogItem catalogItem = catalogItem(null, "6390-1", " ");
+        MarketplaceListing listing = listing(catalogItem);
+        givenScheduledAndClaimed(listing);
+        when(itemInventoryDao.findByItemInventoryId(20)).thenReturn(Optional.of(inventory("USED", "COMPLETE")));
+        when(bricklinkAjaxClient.findCatalogItem("6390-1", "S")).thenReturn(Optional.of(searchItem(4997)));
+        when(bricklinkAjaxClient.catalogItemsForSaleByInternalItemId(4997, "U", 500))
+                .thenReturn(catalogResult(itemForSale(3001, "seller1", "US $220.00")));
+
+        BricklinkPricingCrawlResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.hydratedCatalogItems()).isOne();
+        assertThat(catalogItem.getExternalUniqueKey()).isEqualTo("4997");
+        verify(bricklinkAjaxClient).findCatalogItem("6390-1", "S");
+    }
+
+    @Test
     void runOnceSkipsCatalogSearchWhenInternalItemIdAlreadyExists() {
         ExternalCatalogItem catalogItem = catalogItem("4997");
         MarketplaceListing listing = listing(catalogItem);
@@ -347,13 +384,17 @@ class BricklinkPricingCrawlServiceTest {
     }
 
     private ExternalCatalogItem catalogItem(String externalUniqueKey) {
+        return catalogItem(externalUniqueKey, "6390-1", "S");
+    }
+
+    private ExternalCatalogItem catalogItem(String externalUniqueKey, String externalItemKey, String itemTypeCode) {
         return ExternalCatalogItem.builder()
                 .externalCatalogItemId(30)
                 .externalServiceId(2)
-                .externalItemKey("6390-1")
+                .externalItemKey(externalItemKey)
                 .externalUniqueKey(externalUniqueKey)
                 .itemName("Main Street")
-                .itemTypeCode("SET")
+                .itemTypeCode(itemTypeCode)
                 .build();
     }
 

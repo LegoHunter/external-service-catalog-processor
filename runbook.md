@@ -286,7 +286,7 @@ Crawler behavior:
 | Load inventory | Loads `item_inventory` for the listing so condition and completeness can be captured. |
 | Resolve condition | Maps `item_inventory.new_or_used` values `N`/`NEW` to BrickLink `N`, and `U`/`USED` to BrickLink `U`. |
 | Resolve item number | Uses `external_catalog_item.external_item_key`, for example `6390-1`. |
-| Hydrate `idItem` | If `external_catalog_item.external_unique_key` is missing or not parseable as an integer, calls `searchproduct.ajax` through `BricklinkAjaxClient.findCatalogItem(itemNumber, catalogItemType)`. |
+| Hydrate `idItem` | If `external_catalog_item.external_unique_key` is missing or not parseable as an integer, calls `searchproduct.ajax` through `BricklinkAjaxClient.findCatalogItem(itemNumber, itemType)`. The item type comes from `external_catalog_item.item_type_code` when present, falling back to `lego.bricklink.pricing.crawl.catalog-item-type` only when the catalog row has no type. |
 | Persist `idItem` | Stores the returned BrickLink internal catalog id in `external_catalog_item.external_unique_key` so future runs skip search hydration. |
 | Crawl comparables | Calls `catalogifs.ajax` through `BricklinkAjaxClient.catalogItemsForSaleByInternalItemId(itemId, condition, resultsPerPage)`. |
 | Persist snapshot | Inserts one immutable `pricing_snapshot` per successful listing crawl. |
@@ -298,7 +298,7 @@ BrickLink AJAX endpoints used:
 
 | Endpoint | Purpose | Parameters |
 | --- | --- | --- |
-| `/ajax/clone/search/searchproduct.ajax` | Find BrickLink internal `idItem` for a public item number when `external_unique_key` is missing. | `q=<item number>`, `type=<catalog item type>` |
+| `/ajax/clone/search/searchproduct.ajax` | Find BrickLink internal `idItem` for a public item number when `external_unique_key` is missing. | `q=<item number>`, `type=<external_catalog_item.item_type_code or configured fallback>` |
 | `/ajax/clone/catalogifs.ajax` | Fetch active BrickLink listings for one internal item id and condition. | `itemid=<idItem>`, `cond=N|U`, `rpp=<resultsPerPage>`, `iconly=0` |
 
 Condition and completeness semantics:
@@ -952,7 +952,7 @@ Backed by `BricklinkPricingCrawlProperties`.
 | `lego.bricklink.pricing.crawl.enabled` | `false` | `true`, `false` | Creates the BrickLink pricing crawl service bean when true. |
 | `lego.bricklink.pricing.crawl.bricklink-external-service-id` | `2` | Integer external service id | External service id for BrickLink rows in `external_service`, `marketplace_listing`, and `external_catalog_item`. |
 | `lego.bricklink.pricing.crawl.active-listing-status-code` | `ACTIVE` | Non-blank listing status string; code trims and uppercases | Marketplace listing status selected for pricing crawl. |
-| `lego.bricklink.pricing.crawl.catalog-item-type` | `S` | BrickLink catalog item type; code trims and uppercases | Type sent to `searchproduct.ajax`. `S` means LEGO set and is the current supported pricing crawl target. |
+| `lego.bricklink.pricing.crawl.catalog-item-type` | `S` | BrickLink catalog item type; code trims and uppercases | Fallback type sent to `searchproduct.ajax` only when `external_catalog_item.item_type_code` is blank. Normal hydration uses the catalog row type, for example `S` for sets, `G` for gear, or `B` for books. |
 | `lego.bricklink.pricing.crawl.batch-size` | `25` | Integer; effective value at least `1` | Maximum eligible BrickLink marketplace listings considered for work scheduling per run. |
 | `lego.bricklink.pricing.crawl.worker-batch-size` | `1` | Integer; effective value at least `1` | Maximum due work items claimed and processed per run. |
 | `lego.bricklink.pricing.crawl.results-per-page` | `500` | Integer; effective value at least `1` | `rpp` sent to `catalogifs.ajax`. |
@@ -2640,7 +2640,7 @@ order by ai.sort_order;
 | Pricing crawl repeatedly re-crawls the same listings | `crawl-cadence` is too short or terminal work rows have past `next_attempt_at` values | Increase `crawl-cadence` and check recent `pricing_crawl_work_item` rows for the listing. |
 | Pricing crawl leaves rows in `CLAIMED` | JVM stopped or failed after claim and before completion | Rows older than `claim-stale-after` are requeued on a later run if attempts remain. |
 | Pricing crawl writes many `SKIPPED_MISSING_CONDITION` work items | `item_inventory.new_or_used` is null or not `N`/`NEW`/`U`/`USED` | Fix inventory condition data before crawling that listing. |
-| Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the configured `catalog-item-type` | Verify item number and use `catalog-item-type=S` for sets. |
+| Pricing crawl writes `FAILED_ITEM_ID_LOOKUP_NO_MATCH` | BrickLink `searchproduct.ajax` could not match `external_catalog_item.external_item_key` for the selected item type | Verify `external_catalog_item.external_item_key`, `external_catalog_item.item_type_code`, and the configured fallback `catalog-item-type` for rows missing an item type. |
 | Pricing crawl writes snapshots but no listings | BrickLink returned zero comparable listings for that item/condition | Check `pricing_snapshot.comparable_count`, request parameters, and BrickLink site manually if needed. This can be valid sparse-market behavior. |
 | Pricing crawl sees `catalogifs.ajax ... returned []` | BrickLink returned an empty AJAX array for the pricing request | The crawler treats this as a successful zero-comparable snapshot instead of an HTTP failure. Review `zeroComparableSnapshotsWritten` and latest `pricing_snapshot.comparable_count=0` rows. |
 | Pricing crawl returns New/Complete rows for a New/Sealed inventory item | BrickLink pricing AJAX filters by condition only, not completeness | This is expected. Phase 3 pricing should query exact comparables by matching snapshot/listing condition and completeness. |
