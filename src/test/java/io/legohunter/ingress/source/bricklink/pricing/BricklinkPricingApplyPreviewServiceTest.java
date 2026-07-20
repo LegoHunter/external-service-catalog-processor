@@ -28,8 +28,39 @@ class BricklinkPricingApplyPreviewServiceTest {
         assertThat(report.dryRun()).isTrue();
         assertThat(report.readinessStatusCode()).isEqualTo("READY_TO_APPLY");
         assertThat(report.blockReasonCode()).isEqualTo("STALE_DECISION");
+        assertThat(report.summary().returnedCount()).isOne();
+        assertThat(report.summary().readyToApplyCount()).isOne();
+        assertThat(report.summary().blockedCount()).isZero();
+        assertThat(report.summary().readinessStatusCounts()).containsEntry("READY_TO_APPLY", 1);
+        assertThat(report.summary().blockReasonCounts()).isEmpty();
         assertThat(report.readinessReviews()).containsExactly(review);
         verify(pricingApplyReadinessDao).findLatestReviews("READY_TO_APPLY", "STALE_DECISION", 500);
+    }
+
+    @Test
+    void buildPreviewSummarizesBlockedReadinessRows() {
+        PricingApplyReadinessReview lowConfidence = PricingApplyReadinessReview.builder()
+                .readinessStatusCode("BLOCKED_BELOW_MINIMUM_CONFIDENCE")
+                .blockReasonCode("BELOW_MINIMUM_CONFIDENCE")
+                .build();
+        PricingApplyReadinessReview missingPrice = PricingApplyReadinessReview.builder()
+                .readinessStatusCode("BLOCKED_MISSING_CURRENT_PRICE")
+                .blockReasonCode("MISSING_CURRENT_PRICE")
+                .build();
+        when(pricingApplyReadinessDao.findLatestReviews(null, null, 100))
+                .thenReturn(Set.of(lowConfidence, missingPrice));
+
+        BricklinkPricingApplyPreviewReport report = service.buildPreview(null, null, 100);
+
+        assertThat(report.summary().returnedCount()).isEqualTo(2);
+        assertThat(report.summary().readyToApplyCount()).isZero();
+        assertThat(report.summary().blockedCount()).isEqualTo(2);
+        assertThat(report.summary().readinessStatusCounts())
+                .containsEntry("BLOCKED_BELOW_MINIMUM_CONFIDENCE", 1)
+                .containsEntry("BLOCKED_MISSING_CURRENT_PRICE", 1);
+        assertThat(report.summary().blockReasonCounts())
+                .containsEntry("BELOW_MINIMUM_CONFIDENCE", 1)
+                .containsEntry("MISSING_CURRENT_PRICE", 1);
     }
 
     @Test

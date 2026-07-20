@@ -10,6 +10,7 @@ public record BricklinkPricingApplyPreviewReport(
         boolean dryRun,
         String readinessStatusCode,
         String blockReasonCode,
+        BricklinkPricingApplyPreviewSummary summary,
         Set<PricingApplyReadinessReview> readinessReviews
 ) {
 }
