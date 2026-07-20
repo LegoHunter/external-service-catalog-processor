@@ -581,7 +581,7 @@ lego.bricklink.pricing.apply-readiness.scheduled.enabled: true
 
 `lego.bricklink.pricing.apply-readiness.enabled=true` creates the dry-run readiness service. The scheduled job bean is created only when both `enabled` and `scheduled.enabled` are true.
 
-This job is intentionally read-only. It does not update `marketplace_listing.unit_price`, does not mark `pricing_decision.applied_at`, and does not trigger marketplace sync. It writes one durable `pricing_apply_readiness` row per evaluated `pricing_decision`, keyed by decision, so the latest apply state can be reviewed without parsing logs.
+This job is intentionally read-only. It does not update `marketplace_listing.unit_price`, does not mark `pricing_decision.applied_at`, and does not trigger marketplace sync. It writes one durable `pricing_apply_readiness` row per evaluated `pricing_decision`, keyed by decision, so the latest apply state can be reviewed without parsing logs. A readiness row is current only when it belongs to the latest `pricing_decision` for that marketplace listing; older readiness rows remain audit history but are excluded from current gauges, apply previews, and dry-run apply selection.
 
 Schedule and selection settings:
 
@@ -664,7 +664,7 @@ GET /internal/bricklink/pricing/apply-preview?blockReasonCode=BELOW_MINIMUM_DELT
 GET /internal/bricklink/pricing/apply-selection/dry-run?limit=100
 ```
 
-These reports read `pricing_apply_readiness` and select the latest readiness row per marketplace listing. They do not update prices, mark decisions applied, or enqueue marketplace sync. `apply-preview` supports optional `readinessStatusCode` and `blockReasonCode` filters. `apply-selection/dry-run` returns the current `READY_TO_APPLY` rows that a future apply job would consume.
+These reports read `pricing_apply_readiness` and select readiness rows attached to the latest `pricing_decision` per marketplace listing. They do not update prices, mark decisions applied, or enqueue marketplace sync. `apply-preview` supports optional `readinessStatusCode` and `blockReasonCode` filters. `apply-selection/dry-run` returns the current `READY_TO_APPLY` rows that a future apply job would consume. If a newer failed or skipped pricing decision exists after an older ready row, that older readiness row is no longer current and will not appear eligible.
 
 The requested `limit` is bounded to the range `1..500`.
 
@@ -1470,8 +1470,8 @@ Healthy sandbox behavior:
 | `bricklink_pricing_apply_readiness_job` | Counter | `outcome` | One count per apply-readiness dry-run job. |
 | `bricklink_pricing_apply_readiness_job_duration` | Timer | `outcome` | Apply-readiness dry-run duration. |
 | `bricklink_pricing_apply_readiness_decision` | Counter | `result` | Decision review counts by `selected`, `ready_to_apply`, `skipped_fixed_price`, `skipped_missing_current_price`, `skipped_missing_final_price`, `skipped_currency_mismatch`, `skipped_unsupported_decision_status`, `skipped_blocked_reason_code`, `skipped_ineligible_reason`, `skipped_below_minimum_delta`, `skipped_below_minimum_delta_percent`, `skipped_below_minimum_confidence`, `skipped_below_minimum_comparable_count`, `skipped_above_maximum_absolute_delta`, `skipped_above_maximum_percent_delta`, and `skipped_stale_decision`. |
-| `bricklink_pricing_apply_readiness_current` | Gauge | `status` | Current latest apply-readiness count by persisted status, such as `ready_to_apply`, `blocked_below_minimum_delta_percent`, and `blocked_stale_decision`. |
-| `bricklink_pricing_apply_readiness_block_reason_current` | Gauge | `reason` | Current latest apply-readiness count by persisted block reason, such as `below_minimum_delta_percent` and `stale_decision`. |
+| `bricklink_pricing_apply_readiness_current` | Gauge | `status` | Current apply-readiness count by persisted status, limited to readiness rows attached to each listing's latest pricing decision. Registered status tags are `ready_to_apply`, `blocked_fixed_price`, `blocked_missing_current_price`, `blocked_missing_final_price`, `blocked_currency_mismatch`, `blocked_unsupported_decision_status`, `blocked_reason_code`, `blocked_ineligible_reason`, `blocked_below_minimum_delta`, `blocked_below_minimum_delta_percent`, `blocked_below_minimum_confidence`, `blocked_below_minimum_comparable_count`, `blocked_above_maximum_absolute_delta`, `blocked_above_maximum_percent_delta`, and `blocked_stale_decision`. |
+| `bricklink_pricing_apply_readiness_block_reason_current` | Gauge | `reason` | Current apply-readiness count by persisted block reason, limited to readiness rows attached to each listing's latest pricing decision. Registered reason tags are `fixed_price`, `missing_current_price`, `missing_final_price`, `currency_mismatch`, `unsupported_decision_status`, `blocked_reason_code`, `ineligible_reason`, `below_minimum_delta`, `below_minimum_delta_percent`, `below_minimum_confidence`, `below_minimum_comparable_count`, `above_maximum_absolute_delta`, `above_maximum_percent_delta`, and `stale_decision`. |
 
 Prometheus examples:
 
@@ -2325,7 +2325,7 @@ order by abs(pd.final_price - pd.previous_price) desc,
 limit 50;
 ```
 
-Review the current latest persisted apply-readiness state per listing:
+Review the current persisted apply-readiness state per listing. This excludes readiness rows for superseded pricing decisions:
 
 ```sql
 select par.readiness_status_code,
@@ -2334,18 +2334,19 @@ select par.readiness_status_code,
 from pricing_apply_readiness par
 join (
     select marketplace_listing_id,
-           max(pricing_apply_readiness_id) as pricing_apply_readiness_id
-    from pricing_apply_readiness
+           max(pricing_decision_id) as pricing_decision_id
+    from pricing_decision
     group by marketplace_listing_id
-) latest
-  on latest.pricing_apply_readiness_id = par.pricing_apply_readiness_id
+) latest_decision
+  on latest_decision.marketplace_listing_id = par.marketplace_listing_id
+ and latest_decision.pricing_decision_id = par.pricing_decision_id
 group by par.readiness_status_code,
          par.block_reason_code
 order by par.readiness_status_code,
          par.block_reason_code;
 ```
 
-Review latest persisted decisions that the dry-run apply selection skeleton would select. This still does not apply any prices:
+Review latest persisted decisions that the dry-run apply selection skeleton would select. This still does not apply any prices and excludes readiness rows for superseded pricing decisions:
 
 ```sql
 select par.pricing_apply_readiness_id,
@@ -2365,11 +2366,12 @@ select par.pricing_apply_readiness_id,
 from pricing_apply_readiness par
 join (
     select marketplace_listing_id,
-           max(pricing_apply_readiness_id) as pricing_apply_readiness_id
-    from pricing_apply_readiness
+           max(pricing_decision_id) as pricing_decision_id
+    from pricing_decision
     group by marketplace_listing_id
-) latest
-  on latest.pricing_apply_readiness_id = par.pricing_apply_readiness_id
+) latest_decision
+  on latest_decision.marketplace_listing_id = par.marketplace_listing_id
+ and latest_decision.pricing_decision_id = par.pricing_decision_id
 join marketplace_listing ml
   on ml.marketplace_listing_id = par.marketplace_listing_id
 left join external_catalog_item eci
