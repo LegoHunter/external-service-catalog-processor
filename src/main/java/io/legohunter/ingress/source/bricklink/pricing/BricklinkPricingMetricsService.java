@@ -3,6 +3,7 @@ package io.legohunter.ingress.source.bricklink.pricing;
 import io.legohunter.data.dao.PricingApplyReadinessDao;
 import io.legohunter.data.dao.PricingCrawlWorkItemDao;
 import io.legohunter.data.dao.PricingDecisionDao;
+import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -60,6 +61,7 @@ public class BricklinkPricingMetricsService {
     private final PricingCrawlWorkItemDao pricingCrawlWorkItemDao;
     private final PricingDecisionDao pricingDecisionDao;
     private final PricingApplyReadinessDao pricingApplyReadinessDao;
+    private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao;
     private final BricklinkPricingCrawlProperties crawlProperties;
     private boolean gaugesRegistered;
 
@@ -117,6 +119,29 @@ public class BricklinkPricingMetricsService {
         increment("bricklink_pricing_apply_readiness_decision", "skipped_stale_decision", result.skippedStaleDecision());
     }
 
+    public void recordApply(BricklinkPricingApplyResult result) {
+        registerGauges();
+        recordJob("bricklink_pricing_apply_job", "bricklink_pricing_apply_job_duration", result.outcome(), result.elapsedMillis());
+        increment("bricklink_pricing_apply_decision", "selected", result.readinessRowsSelected());
+        increment("bricklink_pricing_apply_decision", "local_price_updated", result.localPricesUpdated());
+        increment("bricklink_pricing_apply_decision", "sync_request_enqueued", result.syncRequestsEnqueued());
+        increment("bricklink_pricing_apply_decision", "dry_run_selected", result.dryRunSelections());
+        increment("bricklink_pricing_apply_decision", "skipped", result.skippedRows());
+        increment("bricklink_pricing_apply_decision", "failed", result.failedRows());
+    }
+
+    public void recordMarketplaceSync(BricklinkMarketplaceSyncResult result) {
+        registerGauges();
+        recordJob("bricklink_marketplace_sync_job", "bricklink_marketplace_sync_job_duration", result.outcome(), result.elapsedMillis());
+        increment("bricklink_marketplace_sync_request", "selected", result.requestsSelected());
+        increment("bricklink_marketplace_sync_request", "claimed", result.requestsClaimed());
+        increment("bricklink_marketplace_sync_request", "remote_verified", result.remoteVerified());
+        increment("bricklink_marketplace_sync_request", "remote_updated", result.remoteUpdated());
+        increment("bricklink_marketplace_sync_request", "dry_run_verified", result.dryRunVerified());
+        increment("bricklink_marketplace_sync_request", "blocked", result.blocked());
+        increment("bricklink_marketplace_sync_request", "failed", result.failed());
+    }
+
     private synchronized void registerGauges() {
         if (gaugesRegistered) {
             return;
@@ -139,6 +164,12 @@ public class BricklinkPricingMetricsService {
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_PROPOSED, true);
         APPLY_READINESS_STATUS_CODES.forEach(this::registerApplyReadinessGauge);
         APPLY_READINESS_BLOCK_REASON_CODES.forEach(this::registerApplyReadinessBlockReasonGauge);
+        registerMarketplaceSyncGauge("pending", BricklinkMarketplaceSyncService.STATUS_PENDING);
+        registerMarketplaceSyncGauge("claimed", BricklinkMarketplaceSyncService.STATUS_CLAIMED);
+        registerMarketplaceSyncGauge("succeeded", BricklinkMarketplaceSyncService.STATUS_SUCCEEDED);
+        registerMarketplaceSyncGauge("blocked", BricklinkMarketplaceSyncService.STATUS_BLOCKED);
+        registerMarketplaceSyncGauge("failed", BricklinkMarketplaceSyncService.STATUS_FAILED);
+        registerMarketplaceSyncDueGauge();
         gaugesRegistered = true;
     }
 
@@ -179,6 +210,30 @@ public class BricklinkPricingMetricsService {
                 )
                 .description("Current latest BrickLink pricing apply-readiness count by block reason.")
                 .tag("reason", reason.toLowerCase())
+                .strongReference(true)
+                .register(meterRegistry);
+    }
+
+    private void registerMarketplaceSyncGauge(String state, String statusCode) {
+        Gauge.builder(
+                        "bricklink_marketplace_sync_request_current",
+                        this,
+                        ignored -> marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(statusCode)
+                )
+                .description("Current BrickLink marketplace listing sync request count by state.")
+                .tag(STATE_TAG, state)
+                .strongReference(true)
+                .register(meterRegistry);
+    }
+
+    private void registerMarketplaceSyncDueGauge() {
+        Gauge.builder(
+                        "bricklink_marketplace_sync_request_current",
+                        this,
+                        ignored -> marketplaceListingSyncRequestDao.countDueBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_PENDING, now())
+                )
+                .description("Current BrickLink marketplace listing sync request count by state.")
+                .tag(STATE_TAG, "due")
                 .strongReference(true)
                 .register(meterRegistry);
     }

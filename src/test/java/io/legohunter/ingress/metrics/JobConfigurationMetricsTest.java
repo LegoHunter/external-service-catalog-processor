@@ -3,6 +3,8 @@ package io.legohunter.ingress.metrics;
 import io.legohunter.egress.fulfillment.FulfillmentSyncProperties;
 import io.legohunter.egress.imagehosting.ImageHostingSyncProperties;
 import io.legohunter.ingress.source.bricklink.orders.BricklinkOrderSyncProperties;
+import io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncProperties;
+import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyProperties;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyReadinessProperties;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingCrawlProperties;
 import io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingDecisionProperties;
@@ -35,6 +37,14 @@ class JobConfigurationMetricsTest {
         BricklinkPricingApplyReadinessProperties applyReadinessProperties = new BricklinkPricingApplyReadinessProperties();
         applyReadinessProperties.setEnabled(true);
         applyReadinessProperties.getScheduled().setEnabled(true);
+        BricklinkPricingApplyProperties applyProperties = new BricklinkPricingApplyProperties();
+        applyProperties.setEnabled(true);
+        applyProperties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        applyProperties.getScheduled().setEnabled(true);
+        BricklinkMarketplaceSyncProperties marketplaceSyncProperties = new BricklinkMarketplaceSyncProperties();
+        marketplaceSyncProperties.setEnabled(true);
+        marketplaceSyncProperties.setMode("DRY_RUN");
+        marketplaceSyncProperties.getScheduled().setEnabled(true);
 
         new JobConfigurationMetrics(
                 meterRegistry,
@@ -43,7 +53,9 @@ class JobConfigurationMetricsTest {
                 fulfillmentProperties,
                 crawlProperties,
                 decisionProperties,
-                applyReadinessProperties
+                applyReadinessProperties,
+                applyProperties,
+                marketplaceSyncProperties
         );
 
         assertThat(meterRegistry.get(METRIC_NAME)
@@ -84,6 +96,20 @@ class JobConfigurationMetricsTest {
         assertThat(meterRegistry.get(METRIC_NAME)
                 .tag("scheduled_job", "bricklink_pricing_apply_readiness")
                 .tag("display_name", "BrickLink Pricing Apply Readiness")
+                .tag("enabled", "true")
+                .tag("apply", "false")
+                .gauge()
+                .value()).isEqualTo(1.0d);
+        assertThat(meterRegistry.get(METRIC_NAME)
+                .tag("scheduled_job", "bricklink_pricing_apply")
+                .tag("display_name", "BrickLink Pricing Apply")
+                .tag("enabled", "true")
+                .tag("apply", "true")
+                .gauge()
+                .value()).isEqualTo(1.0d);
+        assertThat(meterRegistry.get(METRIC_NAME)
+                .tag("scheduled_job", "bricklink_marketplace_sync")
+                .tag("display_name", "BrickLink Marketplace Sync")
                 .tag("enabled", "true")
                 .tag("apply", "false")
                 .gauge()
