@@ -42,6 +42,7 @@ class BricklinkPricingMaintenanceReportControllerTest {
                 true,
                 "READY_TO_APPLY",
                 null,
+                new BricklinkPricingApplyPreviewSummary(0, 0, 0, java.util.Map.of(), java.util.Map.of()),
                 Set.of()
         );
         when(applyPreviewService.buildPreview("ready_to_apply", null, 50)).thenReturn(expected);

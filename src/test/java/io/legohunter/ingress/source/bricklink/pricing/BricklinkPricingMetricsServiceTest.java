@@ -13,6 +13,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class BricklinkPricingMetricsServiceTest {
@@ -32,14 +34,14 @@ class BricklinkPricingMetricsServiceTest {
     @Test
     void recordsPricingCrawlMetricsAndCurrentWorkItemGauges() {
         crawlProperties.setClaimStaleAfter(Duration.ofHours(2));
-        when(pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING)).thenReturn(7L);
-        when(pricingCrawlWorkItemDao.countDueByWorkStatusCode(eq(BricklinkPricingCrawlService.STATUS_PENDING), any())).thenReturn(2L);
-        when(pricingCrawlWorkItemDao.countRetryableByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING)).thenReturn(3L);
-        when(pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_CLAIMED)).thenReturn(1L);
-        when(pricingCrawlWorkItemDao.countStaleClaimed(eq(BricklinkPricingCrawlService.STATUS_CLAIMED), any())).thenReturn(1L);
-        when(pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SUCCEEDED)).thenReturn(11L);
-        when(pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_FAILED_PRICING_HTTP_ERROR)).thenReturn(4L);
-        when(pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SKIPPED_MISSING_CONDITION)).thenReturn(5L);
+        when(pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING)).thenReturn(7L);
+        when(pricingCrawlWorkItemDao.countLatestDueByWorkStatusCode(eq(BricklinkPricingCrawlService.STATUS_PENDING), any())).thenReturn(2L);
+        when(pricingCrawlWorkItemDao.countLatestRetryableByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING)).thenReturn(3L);
+        when(pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_CLAIMED)).thenReturn(1L);
+        when(pricingCrawlWorkItemDao.countLatestStaleClaimed(eq(BricklinkPricingCrawlService.STATUS_CLAIMED), any())).thenReturn(1L);
+        when(pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SUCCEEDED)).thenReturn(11L);
+        when(pricingCrawlWorkItemDao.countLatestByWorkStatusPattern("FAILED%")).thenReturn(4L);
+        when(pricingCrawlWorkItemDao.countLatestByWorkStatusPattern("SKIPPED%")).thenReturn(5L);
 
         metricsService.recordCrawl(new BricklinkPricingCrawlResult(
                 "SUCCESS",
@@ -71,6 +73,7 @@ class BricklinkPricingMetricsServiceTest {
         assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "retryable")).isEqualTo(3.0d);
         assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "failed")).isEqualTo(4.0d);
         assertThat(gauge("bricklink_pricing_crawl_work_item_current", "state", "skipped")).isEqualTo(5.0d);
+        verify(pricingCrawlWorkItemDao, never()).countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_FAILED_PRICING_HTTP_ERROR);
     }
 
     @Test

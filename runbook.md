@@ -668,6 +668,8 @@ These reports read `pricing_apply_readiness` and select readiness rows attached 
 
 The requested `limit` is bounded to the range `1..500`.
 
+`apply-preview` returns a `summary` block with returned row count, ready count, blocked count, readiness-status counts, and block-reason counts. Row details remain in `readinessReviews` and include current price, proposed price, absolute delta, percent delta, minimum required delta, confidence, comparable count, decision reason, algorithm version, and snapshot timing.
+
 Report sections:
 
 | Section | Meaning |
@@ -1411,7 +1413,7 @@ Prometheus uses Micrometer naming conventions. For example, counter `image_hosti
 | `bricklink_pricing_crawl_work_item` | Counter | `result` | Work item counts by `scheduled`, `claimed`, and `stale_requeued`. |
 | `bricklink_pricing_crawl_snapshot` | Counter | `result` | Snapshot write counts by `snapshot`, `zero_comparable_snapshot`, and `snapshot_listing`. |
 | `bricklink_pricing_crawl_catalog_item` | Counter | `result` | Catalog hydration counts by `hydrated`, `no_match`, `ambiguous_match`, and `failed_request`. |
-| `bricklink_pricing_crawl_work_item_current` | Gauge | `state` | Current work item counts. States are `pending`, `due`, `retryable`, `claimed`, `stale_claimed`, `succeeded`, `failed`, and `skipped`. |
+| `bricklink_pricing_crawl_work_item_current` | Gauge | `state` | Current work item counts based on the latest `pricing_crawl_work_item` per marketplace listing. Historical failed/skipped rows that were superseded by a newer successful crawl do not count as current failures. States are `pending`, `due`, `retryable`, `claimed`, `stale_claimed`, `succeeded`, `failed`, and `skipped`. |
 
 Prometheus examples:
 
@@ -1908,6 +1910,26 @@ select work_status_code,
 from pricing_crawl_work_item
 group by work_status_code
 order by row_count desc;
+```
+
+Check current work item outcomes using only the latest work item per marketplace listing. This mirrors `bricklink_pricing_crawl_work_item_current` and avoids counting historical failures that were later superseded:
+
+```sql
+select pcwi.work_status_code,
+       count(*) as latest_listing_count,
+       min(pcwi.updated_at) as oldest_latest_update,
+       max(pcwi.updated_at) as newest_latest_update
+from pricing_crawl_work_item pcwi
+join (
+    select marketplace_listing_id,
+           max(pricing_crawl_work_item_id) as pricing_crawl_work_item_id
+    from pricing_crawl_work_item
+    group by marketplace_listing_id
+) latest
+  on latest.pricing_crawl_work_item_id = pcwi.pricing_crawl_work_item_id
+group by pcwi.work_status_code
+order by latest_listing_count desc,
+         pcwi.work_status_code;
 ```
 
 Check due pending work in the crawl queue:

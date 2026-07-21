@@ -7,7 +7,11 @@ import org.springframework.stereotype.Service;
 
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -29,6 +33,7 @@ public class BricklinkPricingApplyPreviewService {
                 true,
                 effectiveReadinessStatusCode,
                 effectiveBlockReasonCode,
+                summary(reviews),
                 reviews
         );
     }
@@ -45,6 +50,60 @@ public class BricklinkPricingApplyPreviewService {
     private String normalize(String value) {
         if (value == null || value.isBlank()) {
             return null;
+        }
+        return value.trim().toUpperCase();
+    }
+
+    private BricklinkPricingApplyPreviewSummary summary(Set<PricingApplyReadinessReview> reviews) {
+        Map<String, Integer> statusCounts = countByStatus(reviews);
+        Map<String, Integer> blockReasonCounts = countByBlockReason(reviews);
+        return new BricklinkPricingApplyPreviewSummary(
+                reviews.size(),
+                statusCounts.getOrDefault("READY_TO_APPLY", 0),
+                reviews.size() - statusCounts.getOrDefault("READY_TO_APPLY", 0),
+                statusCounts,
+                blockReasonCounts
+        );
+    }
+
+    private Map<String, Integer> countByStatus(Set<PricingApplyReadinessReview> reviews) {
+        return reviews.stream()
+                .collect(Collectors.groupingBy(
+                        review -> valueOrUnknown(review.getReadinessStatusCode()),
+                        TreeMap::new,
+                        Collectors.summingInt(ignored -> 1)
+                ))
+                .entrySet()
+                .stream()
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
+    }
+
+    private Map<String, Integer> countByBlockReason(Set<PricingApplyReadinessReview> reviews) {
+        return reviews.stream()
+                .filter(review -> review.getBlockReasonCode() != null && !review.getBlockReasonCode().isBlank())
+                .collect(Collectors.groupingBy(
+                        review -> valueOrUnknown(review.getBlockReasonCode()),
+                        TreeMap::new,
+                        Collectors.summingInt(ignored -> 1)
+                ))
+                .entrySet()
+                .stream()
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
+    }
+
+    private String valueOrUnknown(String value) {
+        if (value == null || value.isBlank()) {
+            return "UNKNOWN";
         }
         return value.trim().toUpperCase();
     }

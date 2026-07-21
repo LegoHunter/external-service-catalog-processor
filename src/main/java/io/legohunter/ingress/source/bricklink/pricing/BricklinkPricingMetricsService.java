@@ -121,17 +121,17 @@ public class BricklinkPricingMetricsService {
         if (gaugesRegistered) {
             return;
         }
-        registerCrawlGauge("pending", () -> pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING));
-        registerCrawlGauge("due", () -> pricingCrawlWorkItemDao.countDueByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING, now()));
-        registerCrawlGauge("retryable", () -> pricingCrawlWorkItemDao.countRetryableByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING));
-        registerCrawlGauge("claimed", () -> pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_CLAIMED));
-        registerCrawlGauge("stale_claimed", () -> pricingCrawlWorkItemDao.countStaleClaimed(
+        registerCrawlGauge("pending", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING));
+        registerCrawlGauge("due", () -> pricingCrawlWorkItemDao.countLatestDueByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING, now()));
+        registerCrawlGauge("retryable", () -> pricingCrawlWorkItemDao.countLatestRetryableByWorkStatusCode(BricklinkPricingCrawlService.STATUS_PENDING));
+        registerCrawlGauge("claimed", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_CLAIMED));
+        registerCrawlGauge("stale_claimed", () -> pricingCrawlWorkItemDao.countLatestStaleClaimed(
                 BricklinkPricingCrawlService.STATUS_CLAIMED,
                 now().minus(crawlProperties.effectiveClaimStaleAfter())
         ));
-        registerCrawlGauge("succeeded", () -> pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SUCCEEDED));
-        registerCrawlGauge("failed", this::failedCrawlWorkItemCount);
-        registerCrawlGauge("skipped", this::skippedCrawlWorkItemCount);
+        registerCrawlGauge("succeeded", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SUCCEEDED));
+        registerCrawlGauge("failed", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusPattern("FAILED%"));
+        registerCrawlGauge("skipped", () -> pricingCrawlWorkItemDao.countLatestByWorkStatusPattern("SKIPPED%"));
 
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_PROPOSED, false);
         registerDecisionGauge(BricklinkPricingDecisionService.STATUS_FAILED, false);
@@ -188,21 +188,6 @@ public class BricklinkPricingMetricsService {
             return pricingDecisionDao.countLatestUnappliedByDecisionStatusCode(status);
         }
         return pricingDecisionDao.countLatestByDecisionStatusCode(status);
-    }
-
-    private long failedCrawlWorkItemCount() {
-        return pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_FAILED_ITEM_ID_LOOKUP_NO_MATCH)
-                + pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_FAILED_ITEM_ID_LOOKUP_AMBIGUOUS)
-                + pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_FAILED_ITEM_ID_LOOKUP_HTTP_ERROR)
-                + pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_FAILED_PRICING_HTTP_ERROR)
-                + pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_FAILED_PRICING_PARSE_ERROR);
-    }
-
-    private long skippedCrawlWorkItemCount() {
-        return pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SKIPPED_MISSING_ITEM_NUMBER)
-                + pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SKIPPED_MISSING_CONDITION)
-                + pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SKIPPED_MISSING_LISTING)
-                + pricingCrawlWorkItemDao.countByWorkStatusCode(BricklinkPricingCrawlService.STATUS_SKIPPED_MISSING_CATALOG);
     }
 
     private void recordJob(String counterName, String timerName, String outcome, long elapsedMillis) {
