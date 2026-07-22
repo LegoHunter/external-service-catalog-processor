@@ -6,9 +6,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
-import java.util.LinkedHashSet;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 @Getter
 @Setter
@@ -21,7 +18,7 @@ public class BricklinkMarketplaceSyncProperties {
     private int batchSize = 5;
     private Duration retryBackoff = Duration.ofHours(6);
     private String environmentCode = "local";
-    private Set<String> nonProdEnvironmentCodes = new LinkedHashSet<>(Set.of("local", "sandbox", "dev"));
+    private boolean production = false;
     private boolean requireSystemRemarksBlock = true;
     private boolean nonProdRequireStockRoom = true;
     private String nonProdStockRoomId = "A";
@@ -50,15 +47,8 @@ public class BricklinkMarketplaceSyncProperties {
         return environmentCode.trim().toLowerCase();
     }
 
-    public Set<String> effectiveNonProdEnvironmentCodes() {
-        return nonProdEnvironmentCodes == null ? Set.of() : nonProdEnvironmentCodes.stream()
-                .filter(value -> value != null && !value.isBlank())
-                .map(value -> value.trim().toLowerCase())
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
     public boolean nonProdEnvironment() {
-        return effectiveNonProdEnvironmentCodes().contains(effectiveEnvironmentCode());
+        return !production;
     }
 
     public String effectiveNonProdStockRoomId() {

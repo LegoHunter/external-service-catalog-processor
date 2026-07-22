@@ -741,7 +741,8 @@ Non-prod safety contract:
 
 | Requirement | Meaning |
 | --- | --- |
-| Stockroom-only | For `local`, `sandbox`, and `dev`, remote BrickLink inventory must have `is_stock_room=true`. |
+| Production flag | When `lego.bricklink.marketplace-sync.production=false` or the property is omitted, the worker treats the runtime as non-production and applies the non-prod safety requirements. |
+| Stockroom-only | In non-production, remote BrickLink inventory must have `is_stock_room=true`. |
 | Expected stockroom | `stock_room_id` must match `lego.bricklink.marketplace-sync.non-prod-stock-room-id`, default `A`. |
 | System remarks block | Remote `remarks` must contain exactly one valid `[SYSTEM_BEGIN] ... [SYSTEM_END]` block when `require-system-remarks-block=true`. |
 | Managed marker | `LEGOHUNTER_MANAGED=true` must be present in the system block. |
@@ -767,7 +768,7 @@ Settings:
 | `lego.bricklink.marketplace-sync.batch-size` | `5` | Integer; effective value at least `1` | Maximum due sync requests processed per run. |
 | `lego.bricklink.marketplace-sync.retry-backoff` | `6h` | Spring `Duration` | Delay before retrying transient sync failures. |
 | `lego.bricklink.marketplace-sync.environment-code` | `local` | Short environment code | Runtime environment used for safety checks and remarks block generation. |
-| `lego.bricklink.marketplace-sync.non-prod-environment-codes` | `local,sandbox,dev` | Set of strings | Environments that require stockroom-only protection. |
+| `lego.bricklink.marketplace-sync.production` | `false` | `true`, `false` | Explicitly marks the runtime as production. Omitted or `false` means non-production safety checks apply, regardless of the environment name. |
 | `lego.bricklink.marketplace-sync.require-system-remarks-block` | `true` | `true`, `false` | Requires matching system remarks ownership data before remote writes. |
 | `lego.bricklink.marketplace-sync.non-prod-require-stock-room` | `true` | `true`, `false` | Requires stockroom-only inventory in non-prod environments. |
 | `lego.bricklink.marketplace-sync.non-prod-stock-room-id` | `A` | BrickLink stockroom id | Expected non-prod stockroom. |

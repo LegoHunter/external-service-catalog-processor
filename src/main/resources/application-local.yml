@@ -71,6 +71,7 @@ lego:
       enabled: true
       mode: DRY_RUN
       environment-code: local
+      production: false
       non-prod-stock-room-id: A
       scheduled:
         enabled: false
