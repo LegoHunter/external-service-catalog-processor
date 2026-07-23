@@ -113,7 +113,7 @@ public class ImageHostingReadinessService {
         if (flickrProvider == null) {
             missing.add("lego.image-hosting.providers.flickr");
         } else {
-            if (!Boolean.TRUE.equals(flickrProvider.getEnabled())) {
+            if (flickrProvider.getEnabled() == null || Boolean.FALSE.equals(flickrProvider.getEnabled())) {
                 missing.add("lego.image-hosting.providers.flickr.enabled");
             }
             if (flickrProvider.getExternalServiceId() == null) {
