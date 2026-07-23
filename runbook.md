@@ -670,6 +670,165 @@ The requested `limit` is bounded to the range `1..500`.
 
 `apply-preview` returns a `summary` block with returned row count, ready count, blocked count, readiness-status counts, and block-reason counts. Row details remain in `readinessReviews` and include current price, proposed price, absolute delta, percent delta, minimum required delta, confidence, comparable count, decision reason, algorithm version, and snapshot timing.
 
+### `BricklinkPricingApplyJob`
+
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkPricingApplyJob`
+
+Condition:
+
+```yaml
+lego.bricklink.pricing.apply.enabled: true
+lego.bricklink.pricing.apply.scheduled.enabled: true
+```
+
+The apply job is the first Pricing Plane job that can mutate the local marketplace listing gold copy. It consumes only current `READY_TO_APPLY` rows selected from `pricing_apply_readiness`, re-checks the current `marketplace_listing` and `pricing_decision`, and then applies according to `lego.bricklink.pricing.apply.mode`.
+
+Modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `DRY_RUN` | Logs the decisions that would be applied. Does not update `marketplace_listing`, does not mark `pricing_decision.applied_at`, and does not enqueue sync requests. |
+| `APPLY_LOCAL_ONLY` | Updates `marketplace_listing.unit_price` and marks `pricing_decision.applied_at`. Does not enqueue remote marketplace sync. |
+| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Updates the local listing price, marks the pricing decision applied, and upserts a `marketplace_listing_sync_request` row for the BrickLink sync worker. The BrickLink inventory mapping must exist before the local price is changed. |
+
+Settings:
+
+| Setting | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.bricklink.pricing.apply.enabled` | `false` | `true`, `false` | Creates the pricing apply service. |
+| `lego.bricklink.pricing.apply.mode` | `DRY_RUN` | `DRY_RUN`, `APPLY_LOCAL_ONLY`, `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Controls whether the job only reports, mutates local prices, or also queues remote sync. |
+| `lego.bricklink.pricing.apply.batch-size` | `25` | Integer; effective value at least `1` | Maximum latest ready decisions processed per run. |
+| `lego.bricklink.pricing.apply.bricklink-external-service-id` | `2` | Integer external service id | Marketplace id used on enqueued BrickLink sync requests. |
+| `lego.bricklink.pricing.apply.sync-request-max-attempts` | `3` | Integer; effective value at least `1` | Max attempts copied to new sync requests. |
+| `lego.bricklink.pricing.apply.environment-code` | `local` | Short environment code | Stored on sync requests for downstream safety checks. |
+| `lego.bricklink.pricing.apply.scheduled.enabled` | `false` | `true`, `false` | Creates the scheduled job only when `enabled=true`. |
+| `lego.bricklink.pricing.apply.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between apply scans. |
+| `lego.bricklink.pricing.apply.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Startup delay before first apply scan. |
+| `lego.bricklink.pricing.apply.scheduled.lock-at-most-for` | `10m` | ShedLock duration string | Maximum distributed lock time. |
+| `lego.bricklink.pricing.apply.scheduled.lock-at-least-for` | `0s` | ShedLock duration string | Minimum distributed lock time. |
+
+Important logs:
+
+| Event | Meaning |
+| --- | --- |
+| `bricklink.pricing.apply.dry_run` | A ready decision would have changed the local price, but apply mode is `DRY_RUN`. |
+| `bricklink.pricing.apply.local_updated` | Local `marketplace_listing.unit_price` was updated and the pricing decision was marked applied. |
+| `bricklink.pricing.apply.sync_enqueued` | A durable `marketplace_listing_sync_request` row was inserted or refreshed for remote BrickLink sync. |
+| `bricklink.pricing.apply.failed` | One selected readiness row failed defensive re-checks or sync-request preconditions. |
+| `bricklink.pricing.apply.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyResult`. |
+
+### `BricklinkMarketplaceSyncJob`
+
+Class: `io.legohunter.ingress.source.bricklink.pricing.BricklinkMarketplaceSyncJob`
+
+Condition:
+
+```yaml
+lego.bricklink.marketplace-sync.enabled: true
+lego.bricklink.marketplace-sync.scheduled.enabled: true
+```
+
+The marketplace sync job consumes `marketplace_listing_sync_request` rows for BrickLink `PRICE_UPDATE` work. It is intentionally separate from pricing apply so local pricing changes can be reviewed before remote BrickLink writes are enabled. The worker fetches the remote BrickLink inventory before any remote update and verifies the safety contract.
+
+Modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `DRY_RUN` | Selects due pending sync requests and fetches/verifies remote inventory. Does not claim request rows and does not call `updateInventory`. |
+| `APPLY` | Claims due pending rows, verifies remote inventory, calls BrickLink `updateInventory`, records local safety metadata, and completes or blocks/retries the sync request. |
+
+Non-prod safety contract:
+
+| Requirement | Meaning |
+| --- | --- |
+| Production flag | When `lego.bricklink.marketplace-sync.production=false` or the property is omitted, the worker treats the runtime as non-production and applies the non-prod safety requirements. |
+| Stockroom-only | In non-production, remote BrickLink inventory must have `is_stock_room=true`. |
+| Expected stockroom | `stock_room_id` must match `lego.bricklink.marketplace-sync.non-prod-stock-room-id`, default `A`. |
+| System remarks block | Remote `remarks` must contain exactly one valid `[SYSTEM_BEGIN] ... [SYSTEM_END]` block when `require-system-remarks-block=true`. |
+| Managed marker | `LEGOHUNTER_MANAGED=true` must be present in the system block. |
+| Environment match | `LEGOHUNTER_ENV` must match `lego.bricklink.marketplace-sync.environment-code`. |
+| Listing match | `MARKETPLACE_LISTING_ID` must match the local `marketplace_listing.marketplace_listing_id`. |
+| Inventory match | `ITEM_INVENTORY_UUID` must match the local `item_inventory.uuid`. |
+| Remarks length | Generated remarks, including preserved human remarks and the system block, must be at most `lego.bricklink.marketplace-sync.remarks-max-length`, default `1024`. |
+
+System block format:
+
+```text
+[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true; LEGOHUNTER_ENV=sandbox; MARKETPLACE_LISTING_ID=123; ITEM_INVENTORY_UUID=e1dcb9cd5838e81dbb55f28f74ab8069 [SYSTEM_END]
+```
+
+Human remarks outside the system block are preserved. The sync worker parses only the text between the markers and ignores unknown keys. Missing, malformed, duplicated, or mismatched system blocks block non-prod remote writes.
+
+Settings:
+
+| Setting | Default | Valid values | Description |
+| --- | --- | --- | --- |
+| `lego.bricklink.marketplace-sync.enabled` | `false` | `true`, `false` | Creates the BrickLink marketplace sync service and imports the BrickLink REST client. |
+| `lego.bricklink.marketplace-sync.mode` | `DRY_RUN` | `DRY_RUN`, `APPLY` | Controls whether remote inventory is only verified or actually updated. |
+| `lego.bricklink.marketplace-sync.batch-size` | `5` | Integer; effective value at least `1` | Maximum due sync requests processed per run. |
+| `lego.bricklink.marketplace-sync.retry-backoff` | `6h` | Spring `Duration` | Delay before retrying transient sync failures. |
+| `lego.bricklink.marketplace-sync.environment-code` | `local` | Short environment code | Runtime environment used for safety checks and remarks block generation. |
+| `lego.bricklink.marketplace-sync.production` | `false` | `true`, `false` | Explicitly marks the runtime as production. Omitted or `false` means non-production safety checks apply, regardless of the environment name. |
+| `lego.bricklink.marketplace-sync.require-system-remarks-block` | `true` | `true`, `false` | Requires matching system remarks ownership data before remote writes. |
+| `lego.bricklink.marketplace-sync.non-prod-require-stock-room` | `true` | `true`, `false` | Requires stockroom-only inventory in non-prod environments. |
+| `lego.bricklink.marketplace-sync.non-prod-stock-room-id` | `A` | BrickLink stockroom id | Expected non-prod stockroom. |
+| `lego.bricklink.marketplace-sync.remarks-max-length` | `1024` | Integer; effective value at least `1` | Local maximum generated BrickLink remarks length. |
+| `lego.bricklink.marketplace-sync.scheduled.enabled` | `false` | `true`, `false` | Creates the scheduled sync worker only when `enabled=true`. |
+| `lego.bricklink.marketplace-sync.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between sync scans. |
+| `lego.bricklink.marketplace-sync.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Startup delay before first sync scan. |
+| `lego.bricklink.marketplace-sync.scheduled.lock-at-most-for` | `10m` | ShedLock duration string | Maximum distributed lock time. |
+| `lego.bricklink.marketplace-sync.scheduled.lock-at-least-for` | `0s` | ShedLock duration string | Minimum distributed lock time. |
+
+Important logs:
+
+| Event | Meaning |
+| --- | --- |
+| `bricklink.marketplace_sync.dry_run_verified` | A due request passed remote safety verification, but sync mode is `DRY_RUN`. |
+| `bricklink.marketplace_sync.remote_updated` | BrickLink `updateInventory` was called for a price update. |
+| `bricklink.marketplace_sync.blocked` | A request failed safety checks and was marked blocked in apply mode. |
+| `bricklink.marketplace_sync.failed` | A transient or unexpected failure occurred. In apply mode, the request retries with backoff until max attempts is reached. |
+| `bricklink.marketplace_sync.job.completed` | Scheduled run completed and logs `BricklinkMarketplaceSyncResult`. |
+
+Final-phase smoke queries:
+
+```sql
+select sync_request_status_code, count(*) as request_count
+from marketplace_listing_sync_request
+group by sync_request_status_code
+order by sync_request_status_code;
+
+select marketplace_listing_sync_request_id,
+       marketplace_listing_id,
+       pricing_decision_id,
+       sync_request_status_code,
+       requested_unit_price,
+       remote_inventory_id,
+       remote_visibility_scope_code,
+       remote_visibility_container_id,
+       remote_is_publicly_available,
+       environment_code,
+       attempt_count,
+       max_attempts,
+       next_attempt_at,
+       last_error_message
+from marketplace_listing_sync_request
+order by marketplace_listing_sync_request_id desc
+limit 50;
+
+select marketplace_listing_id,
+       bricklink_inventory_id,
+       is_stock_room,
+       stock_room_id,
+       environment_code,
+       last_remote_verified_at,
+       last_remote_safety_status_code,
+       last_remote_safety_message
+from bricklink_marketplace_listing
+where last_remote_verified_at is not null
+order by last_remote_verified_at desc
+limit 50;
+```
+
 Report sections:
 
 | Section | Meaning |
@@ -1493,6 +1652,37 @@ Healthy sandbox behavior:
 | Skipped fixed price | Expected for fixed-price listings. These are intentionally protected. |
 | Skipped below minimum delta | Expected when proposed and current prices are effectively the same. |
 | Skipped ineligible reason | Review if unexpectedly high. It means the proposed decision reason code is not configured as apply-eligible. |
+
+### BrickLink Pricing Apply And Marketplace Sync Metrics
+
+| Meter | Type | Tags | Description |
+| --- | --- | --- | --- |
+| `bricklink_pricing_apply_job` | Counter | `outcome` | One count per pricing apply job run. |
+| `bricklink_pricing_apply_job_duration` | Timer | `outcome` | Pricing apply job duration. |
+| `bricklink_pricing_apply_decision` | Counter | `result` | Apply counts by `selected`, `local_price_updated`, `sync_request_enqueued`, `dry_run_selected`, `skipped`, and `failed`. |
+| `bricklink_marketplace_sync_job` | Counter | `outcome` | One count per BrickLink marketplace sync job run. |
+| `bricklink_marketplace_sync_job_duration` | Timer | `outcome` | BrickLink marketplace sync job duration. |
+| `bricklink_marketplace_sync_request` | Counter | `result` | Sync worker counts by `selected`, `claimed`, `remote_verified`, `remote_updated`, `dry_run_verified`, `blocked`, and `failed`. |
+| `bricklink_marketplace_sync_request_current` | Gauge | `state` | Current sync request counts by persisted state. Registered states are `pending`, `due`, `claimed`, `succeeded`, `blocked`, and `failed`. |
+
+Prometheus examples:
+
+```promql
+sum by (outcome) (increase(bricklink_pricing_apply_job_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (result) (increase(bricklink_pricing_apply_decision_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (outcome) (increase(bricklink_marketplace_sync_job_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (result) (increase(bricklink_marketplace_sync_request_total{namespace="$namespace",service="$service"}[$__range]))
+sum by (state) (bricklink_marketplace_sync_request_current{namespace="$namespace",service="$service"})
+```
+
+Healthy sandbox behavior:
+
+| Signal | Expected behavior |
+| --- | --- |
+| Apply dry-run selections | In sandbox default dry-run mode, `dry_run_selected` can increase while `local_price_updated` remains zero. |
+| Sync dry-run verified | In sandbox default dry-run mode, `dry_run_verified` can increase if pending sync requests exist, while `remote_updated` remains zero. |
+| Sync blocked | Nonzero means the safety contract prevented a remote write. Review `last_error_message` and `bricklink_marketplace_listing.last_remote_safety_*`. |
+| Sync failed | Nonzero means a transient or unexpected failure happened. Pending retry rows should have future `next_attempt_at`; terminal rows use status `FAILED`. |
 
 ### Fulfillment Sync Metrics
 

@@ -1,5 +1,6 @@
 package io.legohunter.ingress.source.bricklink.pricing;
 
+import io.legohunter.data.dao.MarketplaceListingSyncRequestDao;
 import io.legohunter.data.dao.PricingApplyReadinessDao;
 import io.legohunter.data.dao.PricingCrawlWorkItemDao;
 import io.legohunter.data.dao.PricingDecisionDao;
@@ -22,12 +23,14 @@ class BricklinkPricingMetricsServiceTest {
     private final PricingCrawlWorkItemDao pricingCrawlWorkItemDao = mock(PricingCrawlWorkItemDao.class);
     private final PricingDecisionDao pricingDecisionDao = mock(PricingDecisionDao.class);
     private final PricingApplyReadinessDao pricingApplyReadinessDao = mock(PricingApplyReadinessDao.class);
+    private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao = mock(MarketplaceListingSyncRequestDao.class);
     private final BricklinkPricingCrawlProperties crawlProperties = new BricklinkPricingCrawlProperties();
     private final BricklinkPricingMetricsService metricsService = new BricklinkPricingMetricsService(
             meterRegistry,
             pricingCrawlWorkItemDao,
             pricingDecisionDao,
             pricingApplyReadinessDao,
+            marketplaceListingSyncRequestDao,
             crawlProperties
     );
 
@@ -178,6 +181,59 @@ class BricklinkPricingMetricsServiceTest {
         reasonTags.forEach(reason -> assertThat(meterRegistry.find("bricklink_pricing_apply_readiness_block_reason_current")
                 .tag("reason", reason)
                 .gauge()).as(reason).isNotNull());
+    }
+
+    @Test
+    void recordsPricingApplyAndMarketplaceSyncMetrics() {
+        when(marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_PENDING)).thenReturn(4L);
+        when(marketplaceListingSyncRequestDao.countDueBySyncRequestStatusCode(eq(BricklinkMarketplaceSyncService.STATUS_PENDING), any())).thenReturn(2L);
+        when(marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_CLAIMED)).thenReturn(1L);
+        when(marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_SUCCEEDED)).thenReturn(8L);
+        when(marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_BLOCKED)).thenReturn(3L);
+        when(marketplaceListingSyncRequestDao.countBySyncRequestStatusCode(BricklinkMarketplaceSyncService.STATUS_FAILED)).thenReturn(1L);
+
+        metricsService.recordApply(new BricklinkPricingApplyResult(
+                "SUCCESS",
+                true,
+                BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC,
+                5,
+                4,
+                4,
+                0,
+                1,
+                0,
+                100
+        ));
+        metricsService.recordMarketplaceSync(new BricklinkMarketplaceSyncResult(
+                "PARTIAL_SUCCESS",
+                BricklinkMarketplaceSyncMode.APPLY,
+                5,
+                5,
+                3,
+                3,
+                0,
+                1,
+                1,
+                125
+        ));
+
+        assertThat(counter("bricklink_pricing_apply_job", "outcome", "success")).isEqualTo(1.0d);
+        assertThat(timerCount("bricklink_pricing_apply_job_duration", "outcome", "success")).isOne();
+        assertThat(counter("bricklink_pricing_apply_decision", "result", "selected")).isEqualTo(5.0d);
+        assertThat(counter("bricklink_pricing_apply_decision", "result", "local_price_updated")).isEqualTo(4.0d);
+        assertThat(counter("bricklink_pricing_apply_decision", "result", "sync_request_enqueued")).isEqualTo(4.0d);
+        assertThat(counter("bricklink_marketplace_sync_job", "outcome", "partial_success")).isEqualTo(1.0d);
+        assertThat(timerCount("bricklink_marketplace_sync_job_duration", "outcome", "partial_success")).isOne();
+        assertThat(counter("bricklink_marketplace_sync_request", "result", "selected")).isEqualTo(5.0d);
+        assertThat(counter("bricklink_marketplace_sync_request", "result", "remote_updated")).isEqualTo(3.0d);
+        assertThat(counter("bricklink_marketplace_sync_request", "result", "blocked")).isEqualTo(1.0d);
+        assertThat(counter("bricklink_marketplace_sync_request", "result", "failed")).isEqualTo(1.0d);
+        assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "pending")).isEqualTo(4.0d);
+        assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "due")).isEqualTo(2.0d);
+        assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "claimed")).isEqualTo(1.0d);
+        assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "succeeded")).isEqualTo(8.0d);
+        assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "blocked")).isEqualTo(3.0d);
+        assertThat(gauge("bricklink_marketplace_sync_request_current", "state", "failed")).isEqualTo(1.0d);
     }
 
     private double counter(String metricName, String tag, String value) {

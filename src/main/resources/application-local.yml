@@ -58,6 +58,23 @@ lego:
           enabled: true
           initial-delay-ms: 10000
           fixed-delay-ms: 600000
+      apply:
+        enabled: true
+        batch-size: 25
+        mode: DRY_RUN
+        environment-code: local
+        scheduled:
+          enabled: false
+          initial-delay-ms: 30000
+          fixed-delay-ms: 600000
+    marketplace-sync:
+      enabled: true
+      mode: DRY_RUN
+      environment-code: local
+      production: false
+      non-prod-stock-room-id: A
+      scheduled:
+        enabled: false
   fulfillment:
     sync:
       scheduled:
