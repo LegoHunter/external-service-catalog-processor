@@ -178,7 +178,7 @@ public class BricklinkPricingApplyService {
                 .remoteInventoryId(bricklinkInventoryId.toString())
                 .remoteVisibilityScopeCode(Boolean.TRUE.equals(bricklinkListing.getIsStockRoom()) ? REMOTE_SCOPE_STOCKROOM : REMOTE_SCOPE_PUBLIC)
                 .remoteVisibilityContainerId(bricklinkListing.getStockRoomId())
-                .remoteIsPubliclyAvailable(bricklinkListing.getIsStockRoom() == null || Boolean.FALSE.equals(bricklinkListing.getIsStockRoom()))
+                .remoteIsPubliclyAvailable(!Boolean.TRUE.equals(bricklinkListing.getIsStockRoom()))
                 .environmentCode(properties.effectiveEnvironmentCode())
                 .createdByJobName(JOB_NAME)
                 .attemptCount(0)

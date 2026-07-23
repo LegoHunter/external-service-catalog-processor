@@ -242,7 +242,7 @@ public class FulfillmentSyncService {
         ShipmentsList shipmentsList = shipStationRestClient.getShipments(Map.of("orderId", orderId));
         List<Shipment> shipments = shipmentsList == null || shipmentsList.getShipments() == null ? List.of() : shipmentsList.getShipments();
         return shipments.stream()
-                .filter(shipment -> shipment.getVoided() == null || Boolean.FALSE.equals(shipment.getVoided()))
+                .filter(shipment -> !Boolean.TRUE.equals(shipment.getVoided()))
                 .filter(shipment -> present(shipment.getTrackingNumber()))
                 .map(shipment -> new TrackingDetails(
                         shipment.getTrackingNumber(),

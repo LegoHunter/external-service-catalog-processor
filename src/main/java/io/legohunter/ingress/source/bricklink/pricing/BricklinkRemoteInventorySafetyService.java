@@ -27,7 +27,7 @@ public class BricklinkRemoteInventorySafetyService {
             return BricklinkRemoteInventorySafetyResult.blocked("REMOTE_INVENTORY_ID_MISMATCH", "Remote inventory id does not match local BrickLink listing mapping");
         }
         if (properties.nonProdEnvironment() && properties.isNonProdRequireStockRoom()) {
-            if (remoteInventory.getIs_stock_room() == null || Boolean.FALSE.equals(remoteInventory.getIs_stock_room())) {
+            if (!Boolean.TRUE.equals(remoteInventory.getIs_stock_room())) {
                 return BricklinkRemoteInventorySafetyResult.blocked("REMOTE_NOT_STOCKROOM", "Non-prod BrickLink inventory must be stockroom-only");
             }
             if (!properties.effectiveNonProdStockRoomId().equalsIgnoreCase(nullToBlank(remoteInventory.getStock_room_id()))) {

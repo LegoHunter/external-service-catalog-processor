@@ -113,7 +113,7 @@ class DefaultImageHostingDbRepairPlanExecutorTest {
                 membership.getExternalImageAlbumId().equals(301L)
                         && membership.getExternalImageId().equals(202L)
                         && membership.getSortOrder().equals(2)
-                        && (membership.getPrimary() == null || Boolean.FALSE.equals(membership.getPrimary()))
+                        && !Boolean.TRUE.equals(membership.getPrimary())
         ));
     }
 
