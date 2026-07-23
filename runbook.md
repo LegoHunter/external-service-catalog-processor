@@ -36,6 +36,34 @@ The service defaults to the `local,sandbox` profiles unless overridden by `sprin
 | BrickLink order sync | Scheduled job | Poll BrickLink open orders and, when apply mode is enabled, sync marketplace order staging tables. |
 | Fulfillment sync | Scheduled job | Map staged BrickLink marketplace orders to ShipStation orders, then reconcile shipped ShipStation orders back to BrickLink when apply mode is enabled. |
 
+## Core Data Semantics
+
+### `item_inventory.sale_intent_code`
+
+The inventory model separates physical inventory state from the owner's intent for that inventory item. `item_inventory.inventory_state_code` answers "what happened to this owned item operationally?", while `item_inventory.sale_intent_code` answers "is this owned item intended to be sold?".
+
+`sale_intent_code` is stored on `item_inventory` and references the `item_inventory_sale_intent` lookup table. In the Java model this is exposed as `ItemInventory.saleIntentCode`. The mappers default missing values to `UNDECIDED` on insert/upsert, and `ItemInventoryDao.updateSaleIntent(...)` updates the code, update timestamp, and optional note together.
+
+Valid values:
+
+| Value | Lookup name | Meaning | Operational effect |
+| --- | --- | --- | --- |
+| `SELLABLE` | Sellable | The owned item may be listed for sale when its inventory state also allows normal inventory workflows. | This is the positive sale-intent signal. A listing workflow may consider the item eligible only when this is paired with an available inventory state, usually `inventory_state_code='AVAILABLE'`. |
+| `KEEP` | Keep | The owned item is part of the personal collection and should not be listed for sale. | Listing automation should treat this as a hard "do not list" signal. Existing listings should be reviewed because the owner's intent says the item should stay in the collection. |
+| `UNDECIDED` | Undecided | The owned item has not been classified for sale intent. This is the default when no explicit value is supplied. | Automation should not list the item automatically. This protects newly migrated or newly entered inventory until the owner explicitly marks it sellable. |
+
+Related columns:
+
+| Column | Meaning |
+| --- | --- |
+| `item_inventory.sale_intent_code` | Current sale-intent classification. Defaults to `UNDECIDED` when omitted by insert/upsert mapper paths. |
+| `item_inventory.sale_intent_updated_at` | Timestamp of the latest sale-intent update. Defaults to the current timestamp when omitted. |
+| `item_inventory.sale_intent_note` | Optional human note explaining why the item is sellable, being kept, or undecided. |
+
+Sale intent should not be confused with marketplace listing status. `sale_intent_code='SELLABLE'` means the owned inventory item is allowed to be listed; it does not mean there is already an active marketplace listing. Active sale exposure is represented by marketplace listing rows such as `marketplace_listing.listing_status_code='ACTIVE'`.
+
+Pricing Plane jobs currently operate from active `marketplace_listing` rows. Once an item has an active listing, pricing crawl, decision, readiness, apply, and sync behavior is driven mainly by listing state, condition/completeness, fixed-price settings, and Pricing Plane configuration. Sale intent remains important upstream because it should prevent non-sellable inventory from becoming listed in the first place.
+
 ## Profiles And External Config
 
 ### Default Profiles
