@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Configuration;
 import java.time.Duration;
 import java.time.LocalTime;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Getter
 @Setter
@@ -16,6 +17,7 @@ import java.util.Set;
 public class BricklinkPricingCrawlProperties {
     private boolean enabled = false;
     private Integer bricklinkExternalServiceId = 2;
+    private Set<String> priceableListingStatusCodes = Set.of("ACTIVE", "DRAFT");
     private String activeListingStatusCode = "ACTIVE";
     private String catalogItemType = "S";
     private int batchSize = 25;
@@ -36,6 +38,17 @@ public class BricklinkPricingCrawlProperties {
             return "ACTIVE";
         }
         return activeListingStatusCode.trim().toUpperCase();
+    }
+
+    public Set<String> effectivePriceableListingStatusCodes() {
+        if (priceableListingStatusCodes == null || priceableListingStatusCodes.isEmpty()) {
+            return Set.of(effectiveActiveListingStatusCode());
+        }
+        Set<String> normalizedStatusCodes = priceableListingStatusCodes.stream()
+                .filter(statusCode -> statusCode != null && !statusCode.isBlank())
+                .map(statusCode -> statusCode.trim().toUpperCase())
+                .collect(Collectors.toUnmodifiableSet());
+        return normalizedStatusCodes.isEmpty() ? Set.of(effectiveActiveListingStatusCode()) : normalizedStatusCodes;
     }
 
     public String effectiveCatalogItemType() {

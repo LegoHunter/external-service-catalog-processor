@@ -317,7 +317,7 @@ class BricklinkPricingCrawlServiceTest {
     void runOnceSchedulesButDoesNotProcessWhenNoWorkIsDue() {
         ExternalCatalogItem catalogItem = catalogItem("4997");
         MarketplaceListing listing = listing(catalogItem);
-        when(marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCode(
+        when(marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCodes(
                 any(), any(), any(), any(), any(), any(Integer.class)
         )).thenReturn(Set.of(listing));
         when(pricingCrawlWorkItemDao.claimDueWorkItems(any(), any(), any(), any(), any(Integer.class)))
@@ -336,7 +336,7 @@ class BricklinkPricingCrawlServiceTest {
         properties.setMarketplaceListingAllowlist(Set.of(999));
         ExternalCatalogItem catalogItem = catalogItem("4997");
         MarketplaceListing listing = listing(catalogItem);
-        when(marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCode(
+        when(marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCodes(
                 any(), any(), any(), any(), any(), any(Integer.class)
         )).thenReturn(Set.of(listing));
 
@@ -348,7 +348,7 @@ class BricklinkPricingCrawlServiceTest {
     }
 
     private void givenScheduledAndClaimed(MarketplaceListing listing) {
-        when(marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCode(
+        when(marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCodes(
                 any(), any(), any(), any(), any(), any(Integer.class)
         )).thenReturn(Set.of(listing));
         when(pricingCrawlWorkItemDao.claimDueWorkItems(any(), any(), any(), any(), any(Integer.class)))

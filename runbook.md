@@ -285,6 +285,7 @@ Schedule and selection settings:
 | `lego.bricklink.pricing.crawl.schedule-jitter` | `0s` | Spring `Duration`, zero or positive | Optional random positive jitter added to newly scheduled work item due times. |
 | `lego.bricklink.pricing.crawl.retry-backoff` | `6h` | Spring `Duration`, positive | Delay before retrying a retryable failed work item. |
 | `lego.bricklink.pricing.crawl.claim-stale-after` | `2h` | Spring `Duration`, positive | Age after which abandoned `CLAIMED` work is requeued to `PENDING`. |
+| `lego.bricklink.pricing.crawl.priceable-listing-status-codes` | `ACTIVE,DRAFT` | Set of listing status codes | Listing statuses eligible for pricing crawl onboarding. This allows newly created local drafts to get crawl work before marketplace sync. If blank/empty, the legacy `active-listing-status-code` fallback is used. |
 | `lego.bricklink.pricing.crawl.marketplace-listing-allowlist` | empty | Set of integer `marketplace_listing_id` values | Optional sandbox guard. When populated, only those listings are scheduled. |
 | `lego.bricklink.pricing.crawl.blackout.enabled` | `false` | `true`, `false` | When true, scheduled due times and retry due times are moved out of the configured local blackout period. |
 | `lego.bricklink.pricing.crawl.blackout.zone-id` | `America/New_York` | Java time zone id | Time zone used to evaluate blackout windows. |
@@ -297,7 +298,7 @@ Candidate selection:
 | Requirement | Detail |
 | --- | --- |
 | Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.crawl.bricklink-external-service-id`. |
-| Marketplace listing status | `marketplace_listing.listing_status_code` must equal `lego.bricklink.pricing.crawl.active-listing-status-code` after trimming/uppercasing. |
+| Marketplace listing status | `marketplace_listing.listing_status_code` must be in `lego.bricklink.pricing.crawl.priceable-listing-status-codes`, defaulting to `ACTIVE` and `DRAFT`. |
 | Catalog link | `marketplace_listing.external_catalog_item_id` must be populated. |
 | Already queued work | Listings with `PENDING` or `CLAIMED` work are not scheduled again. |
 | Cooling period | Listings with any work item whose `next_attempt_at` is still in the future are not scheduled again. |
@@ -518,6 +519,7 @@ Schedule and selection settings:
 | `lego.bricklink.pricing.decision.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
 | `lego.bricklink.pricing.decision.batch-size` | `25` | Integer; effective value is at least `1` | Maximum pricing decision candidates selected per run after eligibility filtering. |
 | `lego.bricklink.pricing.decision.require-current-snapshot` | `false` | `true`, `false` | When true, non-fixed candidates must already have a matching pricing snapshot for their normalized condition/completeness before they are selected. Fixed-price listings remain eligible. |
+| `lego.bricklink.pricing.decision.priceable-listing-status-codes` | `ACTIVE,DRAFT` | Set of listing status codes | Listing statuses eligible for pricing decisions. This lets unpriced local drafts receive a Pricing Plane decision before any marketplace sync. If blank/empty, the legacy `active-listing-status-code` fallback is used. |
 | `lego.bricklink.pricing.decision.algorithm-version` | `bricklink-competitive-v1` | Non-blank string | Stored on each `pricing_decision` row for algorithm traceability. |
 | `lego.bricklink.pricing.decision.strategy-code` | `LEGACY_COMPETITIVE` | Non-blank string; code trims and uppercases | Stored on each `pricing_decision` row. |
 | `lego.bricklink.pricing.decision.minimum-price` | null | Decimal money amount or null | Optional lower bound. If computed price is below this value, final price is clamped and reason is `BELOW_MIN_PRICE_CLAMPED`. |
@@ -528,7 +530,7 @@ Candidate selection:
 | Requirement | Detail |
 | --- | --- |
 | Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.decision.bricklink-external-service-id`. |
-| Marketplace listing status | `marketplace_listing.listing_status_code` must equal `lego.bricklink.pricing.decision.active-listing-status-code` after trimming/uppercasing. |
+| Marketplace listing status | `marketplace_listing.listing_status_code` must be in `lego.bricklink.pricing.decision.priceable-listing-status-codes`, defaulting to `ACTIVE` and `DRAFT`. |
 | Catalog mapping | `marketplace_listing.external_catalog_item_id` must be populated. |
 | Fixed-price eligibility | `marketplace_listing.fixed_price=true` listings are candidates even when condition/completeness are missing because fixed price is authoritative. |
 | Non-fixed eligibility | Non-fixed listings must have non-blank `item_inventory.new_or_used` and non-blank `item_inventory.completeness`. |
@@ -717,7 +719,7 @@ Modes:
 | --- | --- |
 | `DRY_RUN` | Logs the decisions that would be applied. Does not update `marketplace_listing`, does not mark `pricing_decision.applied_at`, and does not enqueue sync requests. |
 | `APPLY_LOCAL_ONLY` | Updates `marketplace_listing.unit_price` and marks `pricing_decision.applied_at`. Does not enqueue remote marketplace sync. |
-| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Updates the local listing price, marks the pricing decision applied, and upserts a `marketplace_listing_sync_request` row for the BrickLink sync worker. The BrickLink inventory mapping must exist before the local price is changed. |
+| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Updates the local listing price and marks the pricing decision applied. For listings with an existing BrickLink inventory id, it also upserts a `PRICE_UPDATE` sync request. For local drafts with no remote inventory id, it skips `PRICE_UPDATE` enqueue so the draft can later create a separate `LISTING_CREATE` request. |
 
 Settings:
 
@@ -742,6 +744,7 @@ Important logs:
 | `bricklink.pricing.apply.dry_run` | A ready decision would have changed the local price, but apply mode is `DRY_RUN`. |
 | `bricklink.pricing.apply.local_updated` | Local `marketplace_listing.unit_price` was updated and the pricing decision was marked applied. |
 | `bricklink.pricing.apply.sync_enqueued` | A durable `marketplace_listing_sync_request` row was inserted or refreshed for remote BrickLink sync. |
+| `bricklink.pricing.apply.sync_skipped` | Local price was applied but remote `PRICE_UPDATE` enqueue was skipped, typically because the listing is still a local draft with no BrickLink inventory id. |
 | `bricklink.pricing.apply.failed` | One selected readiness row failed defensive re-checks or sync-request preconditions. |
 | `bricklink.pricing.apply.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyResult`. |
 
@@ -756,7 +759,7 @@ lego.bricklink.marketplace-sync.enabled: true
 lego.bricklink.marketplace-sync.scheduled.enabled: true
 ```
 
-The marketplace sync job consumes `marketplace_listing_sync_request` rows for BrickLink `PRICE_UPDATE` work. It is intentionally separate from pricing apply so local pricing changes can be reviewed before remote BrickLink writes are enabled. The worker fetches the remote BrickLink inventory before any remote update and verifies the safety contract.
+The marketplace sync job consumes `marketplace_listing_sync_request` rows for BrickLink `PRICE_UPDATE` work only. It intentionally does not claim or mutate pending `LISTING_CREATE` rows; those are created by `lego-data-service` in Inventory Intake Phase 4 and are reserved for a future listing-create worker. The worker fetches the remote BrickLink inventory before any remote update and verifies the safety contract.
 
 Modes:
 

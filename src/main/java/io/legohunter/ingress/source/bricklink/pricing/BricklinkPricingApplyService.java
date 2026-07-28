@@ -80,15 +80,22 @@ public class BricklinkPricingApplyService {
                     continue;
                 }
 
-                if (mode == BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC) {
-                    validateSyncMapping(candidate);
-                }
+                boolean enqueueRemotePriceUpdate = mode == BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC
+                        && hasRemoteInventoryMapping(candidate);
                 applyLocalPrice(candidate, review);
                 counters.localPricesUpdated++;
 
                 if (mode == BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC) {
-                    enqueueSyncRequest(candidate, review);
-                    counters.syncRequestsEnqueued++;
+                    if (enqueueRemotePriceUpdate) {
+                        enqueueSyncRequest(candidate, review);
+                        counters.syncRequestsEnqueued++;
+                    } else {
+                        log.info(
+                                "bricklink.pricing.apply.sync_skipped marketplaceListingId={} pricingDecisionId={} reason=MISSING_REMOTE_INVENTORY_ID_FOR_LOCAL_DRAFT",
+                                candidate.listing().getMarketplaceListingId(),
+                                candidate.decision().getPricingDecisionId()
+                        );
+                    }
                 }
             } catch (RuntimeException e) {
                 counters.failedRows++;
@@ -197,13 +204,11 @@ public class BricklinkPricingApplyService {
         );
     }
 
-    private void validateSyncMapping(ApplyCandidate candidate) {
-        BricklinkMarketplaceListing bricklinkListing = bricklinkMarketplaceListingDao
+    private boolean hasRemoteInventoryMapping(ApplyCandidate candidate) {
+        return bricklinkMarketplaceListingDao
                 .findByMarketplaceListingId(candidate.listing().getMarketplaceListingId())
-                .orElseThrow(() -> new IllegalStateException("BrickLink marketplace listing mapping not found"));
-        if (bricklinkListing.getBricklinkInventoryId() == null) {
-            throw new IllegalStateException("BrickLink inventory id is missing");
-        }
+                .map(BricklinkMarketplaceListing::getBricklinkInventoryId)
+                .isPresent();
     }
 
     private boolean sameCurrency(String left, String right) {

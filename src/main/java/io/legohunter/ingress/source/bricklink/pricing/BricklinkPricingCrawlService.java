@@ -123,9 +123,9 @@ public class BricklinkPricingCrawlService {
     }
 
     private void scheduleWork(ZonedDateTime runAt, CrawlCounters counters) {
-        Set<MarketplaceListing> candidates = marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCode(
+        Set<MarketplaceListing> candidates = marketplaceListingDao.findPricingCrawlSchedulingCandidatesByListingExternalServiceIdAndListingStatusCodes(
                 properties.getBricklinkExternalServiceId(),
-                properties.effectiveActiveListingStatusCode(),
+                properties.effectivePriceableListingStatusCodes(),
                 STATUS_PENDING,
                 STATUS_CLAIMED,
                 runAt,

@@ -97,7 +97,12 @@ class BricklinkMarketplaceSyncServiceTest {
     }
 
     private void arrangeRequestAndContext(Inventory remoteInventory) {
-        when(marketplaceListingSyncRequestDao.findClaimableByStatusCode(eq("PENDING"), any(ZonedDateTime.class), eq(5)))
+        when(marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
+                eq("PENDING"),
+                eq(Set.of("PRICE_UPDATE")),
+                any(ZonedDateTime.class),
+                eq(5)
+        ))
                 .thenReturn(Set.of(request()));
         when(marketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(listing()));
         when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkListing()));
