@@ -79,17 +79,21 @@ class BricklinkPricingApplyServiceTest {
     }
 
     @Test
-    void applyLocalAndEnqueueSyncFailsBeforeLocalMutationWhenBricklinkMappingIsMissing() {
+    void applyLocalAndEnqueueSyncUpdatesLocalDraftWithoutRemoteSyncWhenBricklinkMappingIsMissing() {
         properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
         arrangeReadyCandidate();
         when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.empty());
+        when(marketplaceListingDao.updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(listing()));
+        when(pricingDecisionDao.markApplied(eq(500L), any(ZonedDateTime.class))).thenReturn(Optional.of(decision()));
 
         BricklinkPricingApplyResult result = service.runOnce();
 
-        assertThat(result.failedRows()).isOne();
-        assertThat(result.localPricesUpdated()).isZero();
-        verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
-        verify(pricingDecisionDao, never()).markApplied(any(), any());
+        assertThat(result.failedRows()).isZero();
+        assertThat(result.localPricesUpdated()).isOne();
+        assertThat(result.syncRequestsEnqueued()).isZero();
+        verify(marketplaceListingDao).updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class));
+        verify(pricingDecisionDao).markApplied(eq(500L), any(ZonedDateTime.class));
         verify(marketplaceListingSyncRequestDao, never()).upsert(any());
     }
 

@@ -6,6 +6,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
 import java.math.BigDecimal;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Getter
 @Setter
@@ -14,6 +16,7 @@ import java.math.BigDecimal;
 public class BricklinkPricingDecisionProperties {
     private boolean enabled = false;
     private Integer bricklinkExternalServiceId = 2;
+    private Set<String> priceableListingStatusCodes = Set.of("ACTIVE", "DRAFT");
     private String activeListingStatusCode = "ACTIVE";
     private int batchSize = 25;
     private boolean requireCurrentSnapshot = false;
@@ -28,6 +31,17 @@ public class BricklinkPricingDecisionProperties {
             return "ACTIVE";
         }
         return activeListingStatusCode.trim().toUpperCase();
+    }
+
+    public Set<String> effectivePriceableListingStatusCodes() {
+        if (priceableListingStatusCodes == null || priceableListingStatusCodes.isEmpty()) {
+            return Set.of(effectiveActiveListingStatusCode());
+        }
+        Set<String> normalizedStatusCodes = priceableListingStatusCodes.stream()
+                .filter(statusCode -> statusCode != null && !statusCode.isBlank())
+                .map(statusCode -> statusCode.trim().toUpperCase())
+                .collect(Collectors.toUnmodifiableSet());
+        return normalizedStatusCodes.isEmpty() ? Set.of(effectiveActiveListingStatusCode()) : normalizedStatusCodes;
     }
 
     public int effectiveBatchSize() {

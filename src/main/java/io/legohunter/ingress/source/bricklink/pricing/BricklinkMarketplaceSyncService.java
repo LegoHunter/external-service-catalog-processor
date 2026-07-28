@@ -44,8 +44,9 @@ public class BricklinkMarketplaceSyncService {
     public BricklinkMarketplaceSyncResult runOnce() {
         long start = System.currentTimeMillis();
         BricklinkMarketplaceSyncMode mode = properties.effectiveMode();
-        Set<MarketplaceListingSyncRequest> requests = marketplaceListingSyncRequestDao.findClaimableByStatusCode(
+        Set<MarketplaceListingSyncRequest> requests = marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 STATUS_PENDING,
+                Set.of(TYPE_PRICE_UPDATE),
                 now(),
                 properties.effectiveBatchSize()
         );
