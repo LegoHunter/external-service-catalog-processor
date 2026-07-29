@@ -17,6 +17,7 @@ import java.util.stream.Collectors;
 public class BricklinkPricingApplyReadinessProperties {
     private boolean enabled = false;
     private Integer bricklinkExternalServiceId = 2;
+    private Set<String> priceableListingStatusCodes = Set.of("ACTIVE", "DRAFT");
     private String activeListingStatusCode = "ACTIVE";
     private String proposedDecisionStatusCode = BricklinkPricingDecisionService.STATUS_PROPOSED;
     private int batchSize = 25;
@@ -42,6 +43,17 @@ public class BricklinkPricingApplyReadinessProperties {
             return "ACTIVE";
         }
         return activeListingStatusCode.trim().toUpperCase();
+    }
+
+    public Set<String> effectivePriceableListingStatusCodes() {
+        if (priceableListingStatusCodes == null || priceableListingStatusCodes.isEmpty()) {
+            return Set.of(effectiveActiveListingStatusCode());
+        }
+        Set<String> normalizedStatusCodes = priceableListingStatusCodes.stream()
+                .filter(statusCode -> statusCode != null && !statusCode.isBlank())
+                .map(statusCode -> statusCode.trim().toUpperCase())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return normalizedStatusCodes.isEmpty() ? Set.of(effectiveActiveListingStatusCode()) : normalizedStatusCodes;
     }
 
     public String effectiveProposedDecisionStatusCode() {

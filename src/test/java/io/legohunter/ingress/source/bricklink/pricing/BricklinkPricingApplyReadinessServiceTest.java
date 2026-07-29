@@ -38,21 +38,24 @@ class BricklinkPricingApplyReadinessServiceTest {
         when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
                 2, "ACTIVE", "PROPOSED", 10
         )).thenReturn(Set.of());
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
+        )).thenReturn(Set.of());
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
 
         assertThat(result.outcome()).isEqualTo("NO_WORK");
         assertThat(result.decisionsSelected()).isZero();
         assertThat(result.readyToApply()).isZero();
-        verify(pricingDecisionDao).findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
-                2, "ACTIVE", "PROPOSED", 10
+        verify(pricingDecisionDao).findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
         );
     }
 
     @Test
     void runOnceCountsReadyDecisionWhenPriceDeltaMeetsThreshold() {
-        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
-                2, "ACTIVE", "PROPOSED", 10
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
         )).thenReturn(Set.of(review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
@@ -83,8 +86,8 @@ class BricklinkPricingApplyReadinessServiceTest {
         PricingDecisionReview ineligibleReason = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_OUTLIER_SPREAD_TOO_HIGH);
         PricingDecisionReview belowMinimumDelta = review("100.00", "100.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
 
-        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
-                2, "ACTIVE", "PROPOSED", 10
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
         )).thenReturn(Set.of(fixedPrice, missingCurrentPrice, missingFinalPrice, currencyMismatch, ineligibleReason, belowMinimumDelta));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
@@ -104,8 +107,8 @@ class BricklinkPricingApplyReadinessServiceTest {
     void runOnceBlocksWhenPercentMinimumDeltaIsNotMetAndRoundsRequiredDeltaUpToPenny() {
         properties.getMinimumDelta().setEnabled(true);
         properties.getMinimumDelta().setPercent(new BigDecimal("0.02"));
-        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
-                2, "ACTIVE", "PROPOSED", 10
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
         )).thenReturn(Set.of(review("4.99", "4.90", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
@@ -123,8 +126,8 @@ class BricklinkPricingApplyReadinessServiceTest {
     void runOnceAllowsPercentMinimumDeltaAtExactThreshold() {
         properties.getMinimumDelta().setEnabled(true);
         properties.getMinimumDelta().setPercent(new BigDecimal("0.02"));
-        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
-                2, "ACTIVE", "PROPOSED", 10
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
         )).thenReturn(Set.of(review("586.00", "574.28", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
@@ -138,8 +141,8 @@ class BricklinkPricingApplyReadinessServiceTest {
     void runOnceBlocksStaleDecisionWhenNewerSnapshotExists() {
         PricingDecisionReview stale = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
         stale.setNewerSnapshotAvailable(true);
-        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
-                2, "ACTIVE", "PROPOSED", 10
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
         )).thenReturn(Set.of(stale));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
@@ -159,16 +162,16 @@ class BricklinkPricingApplyReadinessServiceTest {
         properties.setProposedDecisionStatusCode("proposed");
         properties.setBatchSize(0);
         properties.setMinimumPriceDelta(new BigDecimal("10.00"));
-        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
-                7, "ACTIVE", "PROPOSED", 1
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                7, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 1
         )).thenReturn(Set.of(review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV)));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();
 
         assertThat(result.outcome()).isEqualTo("NO_READY_DECISIONS");
         assertThat(result.skippedBelowMinimumDelta()).isOne();
-        verify(pricingDecisionDao).findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
-                7, "ACTIVE", "PROPOSED", 1
+        verify(pricingDecisionDao).findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                7, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 1
         );
     }
 
@@ -191,8 +194,8 @@ class BricklinkPricingApplyReadinessServiceTest {
         PricingDecisionReview abovePercentDelta = review("100.00", "40.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
         properties.setMaximumAbsoluteDelta(new BigDecimal("100.00"));
 
-        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
-                2, "ACTIVE", "PROPOSED", 10
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
         )).thenReturn(Set.of(unsupportedStatus, blockedReason, lowConfidence, lowComparableCount, aboveAbsoluteDelta, abovePercentDelta));
 
         BricklinkPricingApplyReadinessResult result = service.runOnce();

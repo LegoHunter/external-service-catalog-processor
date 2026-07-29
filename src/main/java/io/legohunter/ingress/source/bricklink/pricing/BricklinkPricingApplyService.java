@@ -27,11 +27,13 @@ import java.util.Set;
 @ConditionalOnProperty(prefix = "lego.bricklink.pricing.apply", name = "enabled", havingValue = "true")
 public class BricklinkPricingApplyService {
     static final String READY_TO_APPLY = "READY_TO_APPLY";
+    static final String SYNC_TYPE_LISTING_CREATE = "LISTING_CREATE";
     static final String SYNC_TYPE_PRICE_UPDATE = "PRICE_UPDATE";
     static final String SYNC_STATUS_PENDING = "PENDING";
     static final String SYNC_REASON_PRICING_DECISION_APPLIED = "PRICING_DECISION_APPLIED";
     static final String REMOTE_SCOPE_STOCKROOM = "STOCKROOM";
     static final String REMOTE_SCOPE_PUBLIC = "PUBLIC";
+    static final String LISTING_STATUS_DRAFT = "DRAFT";
     private static final String JOB_NAME = "BricklinkPricingApplyJob";
 
     private final BricklinkPricingApplyProperties properties;
@@ -40,6 +42,7 @@ public class BricklinkPricingApplyService {
     private final MarketplaceListingDao marketplaceListingDao;
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao;
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao;
+    private final BricklinkMarketplaceSyncProperties marketplaceSyncProperties;
 
     public BricklinkPricingApplyResult runOnce() {
         long start = System.currentTimeMillis();
@@ -80,18 +83,22 @@ public class BricklinkPricingApplyService {
                     continue;
                 }
 
-                boolean enqueueRemotePriceUpdate = mode == BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC
-                        && hasRemoteInventoryMapping(candidate);
+                BricklinkMarketplaceListing bricklinkListing = mode == BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC
+                        ? bricklinkMarketplaceListingDao.findByMarketplaceListingId(candidate.listing().getMarketplaceListingId()).orElse(null)
+                        : null;
                 applyLocalPrice(candidate, review);
                 counters.localPricesUpdated++;
 
                 if (mode == BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC) {
-                    if (enqueueRemotePriceUpdate) {
-                        enqueueSyncRequest(candidate, review);
+                    if (hasRemoteInventoryMapping(bricklinkListing)) {
+                        enqueuePriceUpdateSyncRequest(candidate, review, bricklinkListing);
+                        counters.syncRequestsEnqueued++;
+                    } else if (LISTING_STATUS_DRAFT.equals(normalize(candidate.listing().getListingStatusCode()))) {
+                        enqueueListingCreateSyncRequest(candidate, review, bricklinkListing);
                         counters.syncRequestsEnqueued++;
                     } else {
                         log.info(
-                                "bricklink.pricing.apply.sync_skipped marketplaceListingId={} pricingDecisionId={} reason=MISSING_REMOTE_INVENTORY_ID_FOR_LOCAL_DRAFT",
+                                "bricklink.pricing.apply.sync_skipped marketplaceListingId={} pricingDecisionId={} reason=MISSING_REMOTE_INVENTORY_ID_FOR_NON_DRAFT",
                                 candidate.listing().getMarketplaceListingId(),
                                 candidate.decision().getPricingDecisionId()
                         );
@@ -163,10 +170,11 @@ public class BricklinkPricingApplyService {
         );
     }
 
-    private void enqueueSyncRequest(ApplyCandidate candidate, PricingApplyReadinessReview review) {
-        BricklinkMarketplaceListing bricklinkListing = bricklinkMarketplaceListingDao
-                .findByMarketplaceListingId(candidate.listing().getMarketplaceListingId())
-                .orElseThrow(() -> new IllegalStateException("BrickLink marketplace listing mapping not found"));
+    private void enqueuePriceUpdateSyncRequest(
+            ApplyCandidate candidate,
+            PricingApplyReadinessReview review,
+            BricklinkMarketplaceListing bricklinkListing
+    ) {
         Integer bricklinkInventoryId = bricklinkListing.getBricklinkInventoryId();
         if (bricklinkInventoryId == null) {
             throw new IllegalStateException("BrickLink inventory id is missing");
@@ -204,11 +212,58 @@ public class BricklinkPricingApplyService {
         );
     }
 
-    private boolean hasRemoteInventoryMapping(ApplyCandidate candidate) {
-        return bricklinkMarketplaceListingDao
-                .findByMarketplaceListingId(candidate.listing().getMarketplaceListingId())
-                .map(BricklinkMarketplaceListing::getBricklinkInventoryId)
-                .isPresent();
+    private void enqueueListingCreateSyncRequest(
+            ApplyCandidate candidate,
+            PricingApplyReadinessReview review,
+            BricklinkMarketplaceListing bricklinkListing
+    ) {
+        boolean nonProd = marketplaceSyncProperties.nonProdEnvironment();
+        MarketplaceListingSyncRequest request = MarketplaceListingSyncRequest.builder()
+                .marketplaceListingId(candidate.listing().getMarketplaceListingId())
+                .listingExternalServiceId(properties.getBricklinkExternalServiceId())
+                .pricingDecisionId(candidate.decision().getPricingDecisionId())
+                .pricingApplyReadinessId(review.getPricingApplyReadinessId())
+                .syncRequestTypeCode(SYNC_TYPE_LISTING_CREATE)
+                .syncRequestStatusCode(SYNC_STATUS_PENDING)
+                .syncReasonCode(SYNC_REASON_PRICING_DECISION_APPLIED)
+                .previousUnitPrice(money(candidate.listing().getUnitPrice()))
+                .requestedUnitPrice(money(review.getProposedPrice()))
+                .currencyCode(review.getCurrencyCode())
+                .remoteInventoryId(null)
+                .remoteVisibilityScopeCode(nonProd ? REMOTE_SCOPE_STOCKROOM : requestedVisibilityScope(bricklinkListing))
+                .remoteVisibilityContainerId(nonProd ? marketplaceSyncProperties.effectiveNonProdStockRoomId() : requestedVisibilityContainerId(bricklinkListing))
+                .remoteIsPubliclyAvailable(nonProd ? false : !REMOTE_SCOPE_STOCKROOM.equals(requestedVisibilityScope(bricklinkListing)))
+                .environmentCode(marketplaceSyncProperties.effectiveEnvironmentCode())
+                .createdByJobName(JOB_NAME)
+                .attemptCount(0)
+                .maxAttempts(properties.effectiveSyncRequestMaxAttempts())
+                .nextAttemptAt(now())
+                .appliedLocalAt(now())
+                .build();
+        marketplaceListingSyncRequestDao.upsert(request);
+        log.info(
+                "bricklink.pricing.apply.listing_create_sync_enqueued marketplaceListingId={} pricingDecisionId={} requestedPrice={} currencyCode={} remoteVisibilityScopeCode={} environmentCode={}",
+                candidate.listing().getMarketplaceListingId(),
+                candidate.decision().getPricingDecisionId(),
+                money(review.getProposedPrice()),
+                review.getCurrencyCode(),
+                request.getRemoteVisibilityScopeCode(),
+                request.getEnvironmentCode()
+        );
+    }
+
+    private boolean hasRemoteInventoryMapping(BricklinkMarketplaceListing bricklinkListing) {
+        return bricklinkListing != null && bricklinkListing.getBricklinkInventoryId() != null;
+    }
+
+    private String requestedVisibilityScope(BricklinkMarketplaceListing bricklinkListing) {
+        return bricklinkListing != null && Boolean.TRUE.equals(bricklinkListing.getIsStockRoom())
+                ? REMOTE_SCOPE_STOCKROOM
+                : REMOTE_SCOPE_PUBLIC;
+    }
+
+    private String requestedVisibilityContainerId(BricklinkMarketplaceListing bricklinkListing) {
+        return bricklinkListing == null ? null : bricklinkListing.getStockRoomId();
     }
 
     private boolean sameCurrency(String left, String right) {

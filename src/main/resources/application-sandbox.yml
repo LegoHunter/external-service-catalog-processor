@@ -118,7 +118,7 @@ lego:
           lock-at-least-for: 0s
     marketplace-sync:
       enabled: true
-      mode: DRY_RUN
+      mode: APPLY
       bricklink-external-service-id: 2
       batch-size: 5
       retry-backoff: 6h

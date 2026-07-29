@@ -42,4 +42,13 @@ class BricklinkMarketplaceSyncPropertiesTest {
         assertThat(properties.effectiveNonProdStockRoomId()).isEqualTo("B");
         assertThat(properties.effectiveRemarksMaxLength()).isOne();
     }
+
+    @Test
+    void forcesLocalMarketplaceSyncToDryRunEvenWhenApplyIsConfigured() {
+        BricklinkMarketplaceSyncProperties properties = new BricklinkMarketplaceSyncProperties();
+        properties.setEnvironmentCode("local");
+        properties.setMode("APPLY");
+
+        assertThat(properties.effectiveMode()).isEqualTo(BricklinkMarketplaceSyncMode.DRY_RUN);
+    }
 }
