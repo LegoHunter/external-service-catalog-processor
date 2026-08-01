@@ -26,6 +26,9 @@ public class BricklinkMarketplaceSyncProperties {
     private Scheduled scheduled = new Scheduled();
 
     public BricklinkMarketplaceSyncMode effectiveMode() {
+        if ("local".equals(effectiveEnvironmentCode())) {
+            return BricklinkMarketplaceSyncMode.DRY_RUN;
+        }
         if (mode == null || mode.isBlank()) {
             return BricklinkMarketplaceSyncMode.DRY_RUN;
         }

@@ -27,9 +27,9 @@ public class BricklinkPricingApplyReadinessService {
     public BricklinkPricingApplyReadinessResult runOnce() {
         long start = System.currentTimeMillis();
         Set<PricingDecisionReview> reviews = pricingDecisionDao
-                .findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodeAndDecisionStatusCode(
+                .findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
                         properties.getBricklinkExternalServiceId(),
-                        properties.effectiveActiveListingStatusCode(),
+                        properties.effectivePriceableListingStatusCodes(),
                         properties.effectiveProposedDecisionStatusCode(),
                         properties.effectiveBatchSize()
                 );

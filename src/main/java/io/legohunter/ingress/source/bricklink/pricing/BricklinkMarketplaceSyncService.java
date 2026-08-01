@@ -17,6 +17,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Set;
@@ -31,7 +32,9 @@ public class BricklinkMarketplaceSyncService {
     static final String STATUS_SUCCEEDED = "SUCCEEDED";
     static final String STATUS_FAILED = "FAILED";
     static final String STATUS_BLOCKED = "BLOCKED";
+    private static final String TYPE_LISTING_CREATE = "LISTING_CREATE";
     private static final String TYPE_PRICE_UPDATE = "PRICE_UPDATE";
+    private static final String LISTING_STATUS_ACTIVE = "ACTIVE";
 
     private final BricklinkMarketplaceSyncProperties properties;
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao;
@@ -40,13 +43,15 @@ public class BricklinkMarketplaceSyncService {
     private final ItemInventoryDao itemInventoryDao;
     private final BricklinkRestClient bricklinkRestClient;
     private final BricklinkRemoteInventorySafetyService safetyService;
+    private final BricklinkListingCreateSafetyService listingCreateSafetyService;
+    private final BricklinkListingCreateInventoryMapper listingCreateInventoryMapper;
 
     public BricklinkMarketplaceSyncResult runOnce() {
         long start = System.currentTimeMillis();
         BricklinkMarketplaceSyncMode mode = properties.effectiveMode();
         Set<MarketplaceListingSyncRequest> requests = marketplaceListingSyncRequestDao.findClaimableByStatusCodeAndSyncRequestTypeCodes(
                 STATUS_PENDING,
-                Set.of(TYPE_PRICE_UPDATE),
+                Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE),
                 now(),
                 properties.effectiveBatchSize()
         );
@@ -58,7 +63,8 @@ public class BricklinkMarketplaceSyncService {
         for (MarketplaceListingSyncRequest request : requests) {
             MarketplaceListingSyncRequest effectiveRequest = request;
             try {
-                if (!TYPE_PRICE_UPDATE.equals(normalize(request.getSyncRequestTypeCode()))) {
+                String syncRequestType = normalize(request.getSyncRequestTypeCode());
+                if (!Set.of(TYPE_PRICE_UPDATE, TYPE_LISTING_CREATE).contains(syncRequestType)) {
                     counters.blocked++;
                     markBlocked(request, "UNSUPPORTED_SYNC_TYPE", "Unsupported sync request type: " + request.getSyncRequestTypeCode());
                     continue;
@@ -76,50 +82,11 @@ public class BricklinkMarketplaceSyncService {
                     counters.requestsClaimed++;
                 }
 
-                SyncContext context = context(effectiveRequest);
-                Inventory remoteInventory = data(bricklinkRestClient.getInventories(context.bricklinkInventoryId().longValue()));
-                BricklinkRemoteInventorySafetyResult safety = safetyService.verify(
-                        properties,
-                        context.listing(),
-                        context.bricklinkListing(),
-                        context.itemInventory(),
-                        remoteInventory
-                );
-                if (!safety.allowed()) {
-                    counters.blocked++;
-                    if (mode == BricklinkMarketplaceSyncMode.APPLY) {
-                        markBlocked(effectiveRequest, safety.statusCode(), safety.message());
-                        updateSafetyMetadata(context.bricklinkListing(), safety, remoteInventory);
-                    }
-                    log.warn(
-                            "bricklink.marketplace_sync.blocked marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} statusCode={} message={}",
-                            effectiveRequest.getMarketplaceListingSyncRequestId(),
-                            effectiveRequest.getMarketplaceListingId(),
-                            context.bricklinkInventoryId(),
-                            safety.statusCode(),
-                            safety.message()
-                    );
-                    continue;
+                if (TYPE_LISTING_CREATE.equals(syncRequestType)) {
+                    processListingCreate(effectiveRequest, mode, counters);
+                } else {
+                    processPriceUpdate(effectiveRequest, mode, counters);
                 }
-
-                if (mode == BricklinkMarketplaceSyncMode.DRY_RUN) {
-                    counters.dryRunVerified++;
-                    log.info(
-                            "bricklink.marketplace_sync.dry_run_verified marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} requestedPrice={} currencyCode={}",
-                            effectiveRequest.getMarketplaceListingSyncRequestId(),
-                            effectiveRequest.getMarketplaceListingId(),
-                            context.bricklinkInventoryId(),
-                            price(effectiveRequest.getRequestedUnitPrice()),
-                            effectiveRequest.getCurrencyCode()
-                    );
-                    continue;
-                }
-
-                updateRemoteInventory(context, effectiveRequest, safety);
-                updateSafetyMetadata(context.bricklinkListing(), safety, remoteInventory);
-                markSucceeded(effectiveRequest, safety);
-                counters.remoteVerified++;
-                counters.remoteUpdated++;
             } catch (RuntimeException e) {
                 counters.failed++;
                 if (mode == BricklinkMarketplaceSyncMode.APPLY) {
@@ -138,7 +105,174 @@ public class BricklinkMarketplaceSyncService {
         return counters.result(mode, elapsedMillis(start));
     }
 
-    private SyncContext context(MarketplaceListingSyncRequest request) {
+    private void processPriceUpdate(
+            MarketplaceListingSyncRequest request,
+            BricklinkMarketplaceSyncMode mode,
+            Counters counters
+    ) {
+        SyncContext context = context(request, true);
+        Inventory remoteInventory = data(bricklinkRestClient.getInventories(context.bricklinkInventoryId().longValue()));
+        BricklinkRemoteInventorySafetyResult safety = safetyService.verify(
+                properties,
+                context.listing(),
+                context.bricklinkListing(),
+                context.itemInventory(),
+                remoteInventory
+        );
+        if (!safety.allowed()) {
+            counters.blocked++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                markBlocked(request, safety.statusCode(), safety.message());
+                updateSafetyMetadata(context.bricklinkListing(), safety, remoteInventory);
+            }
+            log.warn(
+                    "bricklink.marketplace_sync.blocked marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} statusCode={} message={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    context.bricklinkInventoryId(),
+                    safety.statusCode(),
+                    safety.message()
+            );
+            return;
+        }
+
+        if (mode == BricklinkMarketplaceSyncMode.DRY_RUN) {
+            counters.dryRunVerified++;
+            log.info(
+                    "bricklink.marketplace_sync.dry_run_verified marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} requestedPrice={} currencyCode={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    context.bricklinkInventoryId(),
+                    price(request.getRequestedUnitPrice()),
+                    request.getCurrencyCode()
+            );
+            return;
+        }
+
+        updateRemoteInventory(context, request, safety);
+        updateSafetyMetadata(context.bricklinkListing(), safety, remoteInventory);
+        markSucceeded(request, safety);
+        counters.remoteVerified++;
+        counters.remoteUpdated++;
+    }
+
+    private void processListingCreate(
+            MarketplaceListingSyncRequest request,
+            BricklinkMarketplaceSyncMode mode,
+            Counters counters
+    ) {
+        SyncContext context = context(request, false);
+        BricklinkListingCreateSafetyResult safety = listingCreateSafetyService.verify(
+                properties,
+                context.listing(),
+                context.bricklinkListing(),
+                context.itemInventory(),
+                request
+        );
+        if (!safety.allowed()) {
+            counters.blocked++;
+            if (mode == BricklinkMarketplaceSyncMode.APPLY) {
+                markBlocked(request, safety.statusCode(), safety.message());
+                updateCreateSafetyMetadata(context.bricklinkListing(), safety, null);
+            }
+            log.warn(
+                    "bricklink.marketplace_sync.listing_create_blocked marketplaceListingSyncRequestId={} marketplaceListingId={} statusCode={} message={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    safety.statusCode(),
+                    safety.message()
+            );
+            return;
+        }
+
+        Inventory createPayload = listingCreateInventoryMapper.map(
+                context.listing(),
+                context.bricklinkListing(),
+                context.itemInventory(),
+                request,
+                safety
+        );
+        if (mode == BricklinkMarketplaceSyncMode.DRY_RUN) {
+            counters.dryRunVerified++;
+            log.info(
+                    "bricklink.marketplace_sync.listing_create_dry_run marketplaceListingSyncRequestId={} marketplaceListingId={} itemNumber={} itemType={} requestedPrice={} stockRoom={} stockRoomId={} environmentCode={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    createPayload.getItem().getNo(),
+                    createPayload.getItem().getType(),
+                    price(request.getRequestedUnitPrice()),
+                    createPayload.getIs_stock_room(),
+                    createPayload.getStock_room_id(),
+                    properties.effectiveEnvironmentCode()
+            );
+            return;
+        }
+
+        Inventory createdInventory = data(bricklinkRestClient.createInventory(createPayload));
+        Long remoteInventoryId = createdInventory == null ? null : createdInventory.getInventory_id();
+        if (remoteInventoryId == null) {
+            throw new IllegalStateException("BrickLink createInventory response did not include inventory_id");
+        }
+
+        context.bricklinkListing().setBricklinkInventoryId(remoteInventoryId.intValue());
+        Inventory verifiedRemoteInventory = data(bricklinkRestClient.getInventories(remoteInventoryId));
+        BricklinkRemoteInventorySafetyResult remoteSafety = safetyService.verify(
+                properties,
+                context.listing(),
+                context.bricklinkListing(),
+                context.itemInventory(),
+                verifiedRemoteInventory
+        );
+        if (!remoteSafety.allowed()) {
+            updateCreatedRemoteIdentity(context, request, verifiedRemoteInventory, remoteInventoryId);
+            updateSafetyMetadata(context.bricklinkListing(), remoteSafety, verifiedRemoteInventory);
+            markBlocked(request, remoteSafety.statusCode(), remoteSafety.message());
+            counters.blocked++;
+            log.warn(
+                    "bricklink.marketplace_sync.listing_create_remote_verification_blocked marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} statusCode={} message={}",
+                    request.getMarketplaceListingSyncRequestId(),
+                    request.getMarketplaceListingId(),
+                    remoteInventoryId,
+                    remoteSafety.statusCode(),
+                    remoteSafety.message()
+            );
+            return;
+        }
+        updateCreateSuccessLocalState(context, request, safety, verifiedRemoteInventory, remoteInventoryId);
+        markSucceeded(request, remoteSafety);
+        counters.remoteVerified++;
+        counters.remoteUpdated++;
+        log.info(
+                "bricklink.marketplace_sync.listing_created marketplaceListingSyncRequestId={} marketplaceListingId={} bricklinkInventoryId={} stockRoom={} stockRoomId={} requestedPrice={}",
+                request.getMarketplaceListingSyncRequestId(),
+                request.getMarketplaceListingId(),
+                remoteInventoryId,
+                safety.stockRoom(),
+                safety.stockRoomId(),
+                price(request.getRequestedUnitPrice())
+        );
+    }
+
+    private void updateCreatedRemoteIdentity(
+            SyncContext context,
+            MarketplaceListingSyncRequest request,
+            Inventory verifiedRemoteInventory,
+            Long remoteInventoryId
+    ) {
+        MarketplaceListing listing = context.listing();
+        listing.setExternalListingId(remoteInventoryId.toString());
+        listing.setLastSynchronizedAt(now());
+        marketplaceListingDao.update(listing);
+
+        context.bricklinkListing().setBricklinkInventoryId(remoteInventoryId.intValue());
+        if (verifiedRemoteInventory != null) {
+            context.bricklinkListing().setBricklinkDateCreated(zonedDateTime(verifiedRemoteInventory.getDate_created()));
+            context.bricklinkListing().setLastRemoteQuantity(verifiedRemoteInventory.getQuantity());
+        }
+        request.setRemoteInventoryId(remoteInventoryId.toString());
+    }
+
+    private SyncContext context(MarketplaceListingSyncRequest request, boolean requireBricklinkInventoryId) {
         MarketplaceListing listing = marketplaceListingDao.findByMarketplaceListingId(request.getMarketplaceListingId())
                 .orElseThrow(() -> new IllegalStateException("Marketplace listing not found"));
         if (!properties.getBricklinkExternalServiceId().equals(listing.getListingExternalServiceId())) {
@@ -149,10 +283,10 @@ public class BricklinkMarketplaceSyncService {
         ItemInventory itemInventory = itemInventoryDao.findByItemInventoryId(listing.getItemInventoryId())
                 .orElseThrow(() -> new IllegalStateException("Item inventory not found"));
         Integer bricklinkInventoryId = bricklinkListing.getBricklinkInventoryId();
-        if (bricklinkInventoryId == null) {
+        if (requireBricklinkInventoryId && bricklinkInventoryId == null) {
             throw new IllegalStateException("BrickLink inventory id is missing");
         }
-        if (request.getRemoteInventoryId() != null && !request.getRemoteInventoryId().equals(bricklinkInventoryId.toString())) {
+        if (bricklinkInventoryId != null && request.getRemoteInventoryId() != null && !request.getRemoteInventoryId().equals(bricklinkInventoryId.toString())) {
             throw new IllegalStateException("Sync request remote inventory id does not match BrickLink listing mapping");
         }
         return new SyncContext(listing, bricklinkListing, itemInventory, bricklinkInventoryId);
@@ -174,6 +308,52 @@ public class BricklinkMarketplaceSyncService {
                 context.bricklinkInventoryId(),
                 price(request.getRequestedUnitPrice())
         );
+    }
+
+    private void updateCreateSuccessLocalState(
+            SyncContext context,
+            MarketplaceListingSyncRequest request,
+            BricklinkListingCreateSafetyResult safety,
+            Inventory verifiedRemoteInventory,
+            Long remoteInventoryId
+    ) {
+        ZonedDateTime synchronizedAt = now();
+        MarketplaceListing listing = context.listing();
+        listing.setExternalListingId(remoteInventoryId.toString());
+        listing.setListingStatusCode(LISTING_STATUS_ACTIVE);
+        listing.setPublishedAt(synchronizedAt);
+        listing.setLastSynchronizedAt(synchronizedAt);
+        marketplaceListingDao.update(listing);
+
+        updateCreateSafetyMetadata(context.bricklinkListing(), safety, verifiedRemoteInventory);
+        request.setRemoteInventoryId(remoteInventoryId.toString());
+        request.setRemoteVisibilityScopeCode(safety.stockRoom() ? BricklinkPricingApplyService.REMOTE_SCOPE_STOCKROOM : BricklinkPricingApplyService.REMOTE_SCOPE_PUBLIC);
+        request.setRemoteVisibilityContainerId(safety.stockRoomId());
+        request.setRemoteIsPubliclyAvailable(safety.publiclyAvailable());
+    }
+
+    private void updateCreateSafetyMetadata(
+            BricklinkMarketplaceListing bricklinkListing,
+            BricklinkListingCreateSafetyResult safety,
+            Inventory remoteInventory
+    ) {
+        bricklinkListing.setEnvironmentCode(properties.effectiveEnvironmentCode());
+        bricklinkListing.setSystemRemarksHash(safety.desiredRemarksHash());
+        bricklinkListing.setLastRemoteVerifiedAt(now());
+        bricklinkListing.setLastRemoteSafetyStatusCode(safety.statusCode());
+        bricklinkListing.setLastRemoteSafetyMessage(safety.message());
+        bricklinkListing.setRemarks(safety.desiredRemarks());
+        bricklinkListing.setIsStockRoom(safety.stockRoom());
+        bricklinkListing.setStockRoomId(safety.stockRoomId());
+        if (remoteInventory != null) {
+            bricklinkListing.setBricklinkInventoryId(remoteInventory.getInventory_id() == null ? null : remoteInventory.getInventory_id().intValue());
+            bricklinkListing.setBricklinkDateCreated(zonedDateTime(remoteInventory.getDate_created()));
+            bricklinkListing.setLastRemoteQuantity(remoteInventory.getQuantity());
+            bricklinkListing.setIsStockRoom(remoteInventory.getIs_stock_room());
+            bricklinkListing.setStockRoomId(remoteInventory.getStock_room_id());
+            bricklinkListing.setRemarks(remoteInventory.getRemarks());
+        }
+        bricklinkMarketplaceListingDao.update(bricklinkListing);
     }
 
     private void updateSafetyMetadata(
@@ -239,6 +419,10 @@ public class BricklinkMarketplaceSyncService {
 
     private String normalize(String value) {
         return value == null || value.isBlank() ? "" : value.trim().toUpperCase();
+    }
+
+    private ZonedDateTime zonedDateTime(LocalDateTime value) {
+        return value == null ? null : value.atZone(ZoneOffset.UTC);
     }
 
     private ZonedDateTime now() {

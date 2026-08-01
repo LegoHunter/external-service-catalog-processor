@@ -719,7 +719,7 @@ Modes:
 | --- | --- |
 | `DRY_RUN` | Logs the decisions that would be applied. Does not update `marketplace_listing`, does not mark `pricing_decision.applied_at`, and does not enqueue sync requests. |
 | `APPLY_LOCAL_ONLY` | Updates `marketplace_listing.unit_price` and marks `pricing_decision.applied_at`. Does not enqueue remote marketplace sync. |
-| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Updates the local listing price and marks the pricing decision applied. For listings with an existing BrickLink inventory id, it also upserts a `PRICE_UPDATE` sync request. For local drafts with no remote inventory id, it skips `PRICE_UPDATE` enqueue so the draft can later create a separate `LISTING_CREATE` request. |
+| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Updates the local listing price and marks the pricing decision applied. For listings with an existing BrickLink inventory id, it upserts a `PRICE_UPDATE` sync request. For priced local `DRAFT` listings without a BrickLink inventory id, it upserts a `LISTING_CREATE` sync request so the marketplace sync worker can create the stockroom/public listing according to environment guardrails. |
 
 Settings:
 
@@ -743,8 +743,9 @@ Important logs:
 | --- | --- |
 | `bricklink.pricing.apply.dry_run` | A ready decision would have changed the local price, but apply mode is `DRY_RUN`. |
 | `bricklink.pricing.apply.local_updated` | Local `marketplace_listing.unit_price` was updated and the pricing decision was marked applied. |
-| `bricklink.pricing.apply.sync_enqueued` | A durable `marketplace_listing_sync_request` row was inserted or refreshed for remote BrickLink sync. |
-| `bricklink.pricing.apply.sync_skipped` | Local price was applied but remote `PRICE_UPDATE` enqueue was skipped, typically because the listing is still a local draft with no BrickLink inventory id. |
+| `bricklink.pricing.apply.sync_enqueued` | A durable `PRICE_UPDATE` `marketplace_listing_sync_request` row was inserted or refreshed for an existing BrickLink inventory row. |
+| `bricklink.pricing.apply.listing_create_sync_enqueued` | A durable `LISTING_CREATE` `marketplace_listing_sync_request` row was inserted or refreshed for a priced local `DRAFT` listing with no BrickLink inventory id. |
+| `bricklink.pricing.apply.sync_skipped` | Local price was applied but remote sync enqueue was skipped, typically because the listing has no BrickLink inventory id and is not a local `DRAFT`. |
 | `bricklink.pricing.apply.failed` | One selected readiness row failed defensive re-checks or sync-request preconditions. |
 | `bricklink.pricing.apply.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyResult`. |
 
@@ -759,23 +760,36 @@ lego.bricklink.marketplace-sync.enabled: true
 lego.bricklink.marketplace-sync.scheduled.enabled: true
 ```
 
-The marketplace sync job consumes `marketplace_listing_sync_request` rows for BrickLink `PRICE_UPDATE` work only. It intentionally does not claim or mutate pending `LISTING_CREATE` rows; those are created by `lego-data-service` in Inventory Intake Phase 4 and are reserved for a future listing-create worker. The worker fetches the remote BrickLink inventory before any remote update and verifies the safety contract.
+The marketplace sync job consumes due `marketplace_listing_sync_request` rows for BrickLink `PRICE_UPDATE` and `LISTING_CREATE` work. This is the first LegoHunter path that can mutate the live BrickLink account from local system-of-record data, so every write path is guarded by final safety checks in the worker.
+
+`PRICE_UPDATE` verifies the existing remote BrickLink inventory before mutating price or remarks. `LISTING_CREATE` verifies local create eligibility, builds a BrickLink `Inventory` create payload, calls BrickLink `createInventory`, fetches the created remote inventory back, verifies the remote safety contract, and only then marks the local `marketplace_listing` `ACTIVE`.
+
+Local profile is always dry-run for marketplace sync. `BricklinkMarketplaceSyncProperties.effectiveMode()` returns `DRY_RUN` when `environment-code=local` even if the configured mode says `APPLY`.
 
 Modes:
 
 | Mode | Behavior |
 | --- | --- |
-| `DRY_RUN` | Selects due pending sync requests and fetches/verifies remote inventory. Does not claim request rows and does not call `updateInventory`. |
-| `APPLY` | Claims due pending rows, verifies remote inventory, calls BrickLink `updateInventory`, records local safety metadata, and completes or blocks/retries the sync request. |
+| `DRY_RUN` | Selects due pending sync requests. For `PRICE_UPDATE`, fetches/verifies remote inventory. For `LISTING_CREATE`, builds and logs the create payload. Does not claim request rows and does not call BrickLink mutation APIs. |
+| `APPLY` | Claims due pending rows. For `PRICE_UPDATE`, verifies remote inventory, calls BrickLink `updateInventory`, records local safety metadata, and completes or blocks/retries the sync request. For `LISTING_CREATE`, verifies local create safety, calls BrickLink `createInventory`, verifies the created remote inventory, records local safety metadata, and completes or blocks/retries the sync request. |
+
+Environment behavior:
+
+| Runtime | Behavior |
+| --- | --- |
+| `local` | Dry-run only. No BrickLink mutation API is called even if `mode=APPLY` is configured. |
+| `sandbox` | Applies to the live BrickLink account when configured, but `production=false` forces non-prod stockroom-only visibility and non-prod system remarks. |
+| `dev` | Applies to the live BrickLink account when configured, but `production=false` forces non-prod stockroom-only visibility and non-prod system remarks. |
+| `prod` | May create/update buyer-visible BrickLink inventory only when `production=true` and the sync request/listing request public visibility. |
 
 Non-prod safety contract:
 
 | Requirement | Meaning |
 | --- | --- |
 | Production flag | When `lego.bricklink.marketplace-sync.production=false` or the property is omitted, the worker treats the runtime as non-production and applies the non-prod safety requirements. |
-| Stockroom-only | In non-production, remote BrickLink inventory must have `is_stock_room=true`. |
+| Stockroom-only | In non-production, remote BrickLink inventory must have `is_stock_room=true`. `LISTING_CREATE` also forces the create payload to stockroom-only regardless of request visibility. |
 | Expected stockroom | `stock_room_id` must match `lego.bricklink.marketplace-sync.non-prod-stock-room-id`, default `A`. |
-| System remarks block | Remote `remarks` must contain exactly one valid `[SYSTEM_BEGIN] ... [SYSTEM_END]` block when `require-system-remarks-block=true`. |
+| System remarks block | Remote `remarks` must contain exactly one valid `[SYSTEM_BEGIN] ... [SYSTEM_END]` block when `require-system-remarks-block=true`. For `LISTING_CREATE`, the worker generates and merges this block into the create payload before calling BrickLink. |
 | Managed marker | `LEGOHUNTER_MANAGED=true` must be present in the system block. |
 | Environment match | `LEGOHUNTER_ENV` must match `lego.bricklink.marketplace-sync.environment-code`. |
 | Listing match | `MARKETPLACE_LISTING_ID` must match the local `marketplace_listing.marketplace_listing_id`. |
@@ -795,7 +809,7 @@ Settings:
 | Setting | Default | Valid values | Description |
 | --- | --- | --- | --- |
 | `lego.bricklink.marketplace-sync.enabled` | `false` | `true`, `false` | Creates the BrickLink marketplace sync service and imports the BrickLink REST client. |
-| `lego.bricklink.marketplace-sync.mode` | `DRY_RUN` | `DRY_RUN`, `APPLY` | Controls whether remote inventory is only verified or actually updated. |
+| `lego.bricklink.marketplace-sync.mode` | `DRY_RUN` | `DRY_RUN`, `APPLY` | Controls whether remote inventory is only verified or actually updated/created. The effective mode is forced to `DRY_RUN` when `environment-code=local`. |
 | `lego.bricklink.marketplace-sync.batch-size` | `5` | Integer; effective value at least `1` | Maximum due sync requests processed per run. |
 | `lego.bricklink.marketplace-sync.retry-backoff` | `6h` | Spring `Duration` | Delay before retrying transient sync failures. |
 | `lego.bricklink.marketplace-sync.environment-code` | `local` | Short environment code | Runtime environment used for safety checks and remarks block generation. |
@@ -814,7 +828,11 @@ Important logs:
 
 | Event | Meaning |
 | --- | --- |
-| `bricklink.marketplace_sync.dry_run_verified` | A due request passed remote safety verification, but sync mode is `DRY_RUN`. |
+| `bricklink.marketplace_sync.dry_run_verified` | A due `PRICE_UPDATE` request passed remote safety verification, but sync mode is `DRY_RUN`. |
+| `bricklink.marketplace_sync.listing_create_dry_run` | A due `LISTING_CREATE` request passed local create safety and mapped to a BrickLink create payload, but sync mode is `DRY_RUN`. |
+| `bricklink.marketplace_sync.listing_created` | BrickLink `createInventory` succeeded, remote safety verification passed, and the local listing was marked `ACTIVE`. |
+| `bricklink.marketplace_sync.listing_create_blocked` | A `LISTING_CREATE` request failed final local create safety checks. |
+| `bricklink.marketplace_sync.listing_create_remote_verification_blocked` | BrickLink inventory was created, but the read-back remote safety check failed. The local BrickLink inventory id is retained for investigation and the request is blocked. |
 | `bricklink.marketplace_sync.remote_updated` | BrickLink `updateInventory` was called for a price update. |
 | `bricklink.marketplace_sync.blocked` | A request failed safety checks and was marked blocked in apply mode. |
 | `bricklink.marketplace_sync.failed` | A transient or unexpected failure occurred. In apply mode, the request retries with backoff until max attempts is reached. |

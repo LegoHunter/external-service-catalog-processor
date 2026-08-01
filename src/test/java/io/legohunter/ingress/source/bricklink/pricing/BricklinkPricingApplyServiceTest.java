@@ -32,13 +32,15 @@ class BricklinkPricingApplyServiceTest {
     private final MarketplaceListingDao marketplaceListingDao = mock(MarketplaceListingDao.class);
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao = mock(BricklinkMarketplaceListingDao.class);
     private final MarketplaceListingSyncRequestDao marketplaceListingSyncRequestDao = mock(MarketplaceListingSyncRequestDao.class);
+    private final BricklinkMarketplaceSyncProperties marketplaceSyncProperties = new BricklinkMarketplaceSyncProperties();
     private final BricklinkPricingApplyService service = new BricklinkPricingApplyService(
             properties,
             pricingApplyReadinessDao,
             pricingDecisionDao,
             marketplaceListingDao,
             bricklinkMarketplaceListingDao,
-            marketplaceListingSyncRequestDao
+            marketplaceListingSyncRequestDao,
+            marketplaceSyncProperties
     );
 
     @Test
@@ -81,7 +83,7 @@ class BricklinkPricingApplyServiceTest {
     @Test
     void applyLocalAndEnqueueSyncUpdatesLocalDraftWithoutRemoteSyncWhenBricklinkMappingIsMissing() {
         properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
-        arrangeReadyCandidate();
+        arrangeReadyCandidate(listing("ACTIVE"));
         when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.empty());
         when(marketplaceListingDao.updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class)))
                 .thenReturn(Optional.of(listing()));
@@ -97,9 +99,34 @@ class BricklinkPricingApplyServiceTest {
         verify(marketplaceListingSyncRequestDao, never()).upsert(any());
     }
 
+    @Test
+    void applyLocalAndEnqueueSyncCreatesListingCreateRequestForPricedLocalDraft() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        marketplaceSyncProperties.setEnvironmentCode("sandbox");
+        marketplaceSyncProperties.setProduction(false);
+        marketplaceSyncProperties.setNonProdStockRoomId("C");
+        arrangeReadyCandidate(listing("DRAFT"));
+        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkDraftMapping()));
+        when(marketplaceListingDao.updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(listing("DRAFT")));
+        when(pricingDecisionDao.markApplied(eq(500L), any(ZonedDateTime.class))).thenReturn(Optional.of(decision()));
+        when(marketplaceListingSyncRequestDao.upsert(any(MarketplaceListingSyncRequest.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.localPricesUpdated()).isOne();
+        assertThat(result.syncRequestsEnqueued()).isOne();
+        verify(marketplaceListingSyncRequestDao).upsert(any(MarketplaceListingSyncRequest.class));
+    }
+
     private void arrangeReadyCandidate() {
+        arrangeReadyCandidate(listing());
+    }
+
+    private void arrangeReadyCandidate(MarketplaceListing listing) {
         when(pricingApplyReadinessDao.findLatestReadyToApplyReviews(25)).thenReturn(Set.of(review()));
-        when(marketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(listing()));
+        when(marketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(listing));
         when(pricingDecisionDao.findByPricingDecisionId(500L)).thenReturn(Optional.of(decision()));
     }
 
@@ -118,10 +145,15 @@ class BricklinkPricingApplyServiceTest {
     }
 
     private MarketplaceListing listing() {
+        return listing("ACTIVE");
+    }
+
+    private MarketplaceListing listing(String statusCode) {
         return MarketplaceListing.builder()
                 .marketplaceListingId(100)
                 .itemInventoryId(200)
                 .listingExternalServiceId(2)
+                .listingStatusCode(statusCode)
                 .unitPrice(new BigDecimal("225.00"))
                 .currencyCode("USD")
                 .fixedPrice(false)
@@ -144,6 +176,14 @@ class BricklinkPricingApplyServiceTest {
                 .bricklinkInventoryId(12345)
                 .isStockRoom(true)
                 .stockRoomId("A")
+                .build();
+    }
+
+    private BricklinkMarketplaceListing bricklinkDraftMapping() {
+        return BricklinkMarketplaceListing.builder()
+                .marketplaceListingId(100)
+                .isStockRoom(true)
+                .stockRoomId("C")
                 .build();
     }
 }
