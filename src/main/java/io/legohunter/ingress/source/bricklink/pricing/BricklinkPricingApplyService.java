@@ -104,6 +104,13 @@ public class BricklinkPricingApplyService {
                         );
                     }
                 }
+            } catch (AlreadyAppliedPricingDecisionException e) {
+                counters.skippedRows++;
+                log.info(
+                        "bricklink.pricing.apply.skipped marketplaceListingId={} pricingDecisionId={} reason=PRICING_DECISION_ALREADY_APPLIED",
+                        review.getMarketplaceListingId(),
+                        review.getPricingDecisionId()
+                );
             } catch (RuntimeException e) {
                 counters.failedRows++;
                 log.warn(
@@ -131,7 +138,7 @@ public class BricklinkPricingApplyService {
         PricingDecision decision = pricingDecisionDao.findByPricingDecisionId(review.getPricingDecisionId())
                 .orElseThrow(() -> new IllegalStateException("Pricing decision not found"));
         if (decision.getAppliedAt() != null) {
-            throw new IllegalStateException("Pricing decision is already applied");
+            throw new AlreadyAppliedPricingDecisionException();
         }
         if (!"PROPOSED".equals(normalize(decision.getDecisionStatusCode()))) {
             throw new IllegalStateException("Pricing decision is not PROPOSED");
@@ -298,6 +305,12 @@ public class BricklinkPricingApplyService {
             return listing.getUnitPrice() == null || decision.getFinalPrice() == null
                     || listing.getUnitPrice().setScale(2, RoundingMode.HALF_UP)
                     .compareTo(decision.getFinalPrice().setScale(2, RoundingMode.HALF_UP)) != 0;
+        }
+    }
+
+    private static final class AlreadyAppliedPricingDecisionException extends RuntimeException {
+        private AlreadyAppliedPricingDecisionException() {
+            super("Pricing decision is already applied");
         }
     }
 
