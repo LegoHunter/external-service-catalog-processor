@@ -694,7 +694,7 @@ GET /internal/bricklink/pricing/apply-preview?blockReasonCode=BELOW_MINIMUM_DELT
 GET /internal/bricklink/pricing/apply-selection/dry-run?limit=100
 ```
 
-These reports read `pricing_apply_readiness` and select readiness rows attached to the latest `pricing_decision` per marketplace listing. They do not update prices, mark decisions applied, or enqueue marketplace sync. `apply-preview` supports optional `readinessStatusCode` and `blockReasonCode` filters. `apply-selection/dry-run` returns the current `READY_TO_APPLY` rows that a future apply job would consume. If a newer failed or skipped pricing decision exists after an older ready row, that older readiness row is no longer current and will not appear eligible.
+These reports read `pricing_apply_readiness` and select readiness rows attached to the latest unapplied `pricing_decision` per marketplace listing. They do not update prices, mark decisions applied, or enqueue marketplace sync. `apply-preview` supports optional `readinessStatusCode` and `blockReasonCode` filters. `apply-selection/dry-run` returns the current unapplied `READY_TO_APPLY` rows that a future apply job would consume. If a newer failed, skipped, or already-applied pricing decision exists after an older ready row, that older readiness row is no longer current and will not appear eligible.
 
 The requested `limit` is bounded to the range `1..500`.
 
@@ -711,7 +711,7 @@ lego.bricklink.pricing.apply.enabled: true
 lego.bricklink.pricing.apply.scheduled.enabled: true
 ```
 
-The apply job is the first Pricing Plane job that can mutate the local marketplace listing gold copy. It consumes only current `READY_TO_APPLY` rows selected from `pricing_apply_readiness`, re-checks the current `marketplace_listing` and `pricing_decision`, and then applies according to `lego.bricklink.pricing.apply.mode`.
+The apply job is the first Pricing Plane job that can mutate the local marketplace listing gold copy. It consumes only current unapplied `READY_TO_APPLY` rows selected from `pricing_apply_readiness`, re-checks the current `marketplace_listing` and `pricing_decision`, and then applies according to `lego.bricklink.pricing.apply.mode`. If an already-applied decision is encountered during rollout or after stale data is produced, the row is skipped and does not count as a failed apply row.
 
 Modes:
 
@@ -746,6 +746,7 @@ Important logs:
 | `bricklink.pricing.apply.sync_enqueued` | A durable `PRICE_UPDATE` `marketplace_listing_sync_request` row was inserted or refreshed for an existing BrickLink inventory row. |
 | `bricklink.pricing.apply.listing_create_sync_enqueued` | A durable `LISTING_CREATE` `marketplace_listing_sync_request` row was inserted or refreshed for a priced local `DRAFT` listing with no BrickLink inventory id. |
 | `bricklink.pricing.apply.sync_skipped` | Local price was applied but remote sync enqueue was skipped, typically because the listing has no BrickLink inventory id and is not a local `DRAFT`. |
+| `bricklink.pricing.apply.skipped` | A selected row was intentionally skipped, such as an already-current price or a stale readiness row for a pricing decision that was already applied. |
 | `bricklink.pricing.apply.failed` | One selected readiness row failed defensive re-checks or sync-request preconditions. |
 | `bricklink.pricing.apply.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyResult`. |
 
@@ -780,7 +781,7 @@ Environment behavior:
 | `local` | Dry-run only. No BrickLink mutation API is called even if `mode=APPLY` is configured. |
 | `sandbox` | Applies to the live BrickLink account when configured, but `production=false` forces non-prod stockroom-only visibility and non-prod system remarks. |
 | `dev` | Applies to the live BrickLink account when configured, but `production=false` forces non-prod stockroom-only visibility and non-prod system remarks. |
-| `prod` | May create/update buyer-visible BrickLink inventory only when `production=true` and the sync request/listing request public visibility. |
+| `prod` | May create/update buyer-visible BrickLink inventory only when `production=true` and the sync request/listing request public visibility. Public production listings are expected to have `is_stock_room=false` and may have no `stock_room_id`. |
 
 Non-prod safety contract:
 
@@ -803,6 +804,8 @@ System block format:
 ```
 
 Human remarks outside the system block are preserved. The sync worker parses only the text between the markers and ignores unknown keys. Missing, malformed, duplicated, or mismatched system blocks block non-prod remote writes.
+
+`bricklink_marketplace_listing.stock_room_id` is nullable in the current schema. Sandbox and dev require the configured stockroom through application guardrails, while production public inventory must be able to omit a stockroom id so BrickLink can make the listing buyer-visible.
 
 Settings:
 
@@ -1697,7 +1700,7 @@ Healthy sandbox behavior:
 | Signal | Expected behavior |
 | --- | --- |
 | Apply-readiness runs | Counter increases when the dry-run job is enabled. |
-| Ready to apply | Indicates latest proposed decisions that would be eligible for a future apply phase. This still does not mutate listing prices. |
+| Ready to apply | Indicates latest unapplied proposed decisions that would be eligible for a future apply phase. This still does not mutate listing prices. |
 | Skipped fixed price | Expected for fixed-price listings. These are intentionally protected. |
 | Skipped below minimum delta | Expected when proposed and current prices are effectively the same. |
 | Skipped ineligible reason | Review if unexpectedly high. It means the proposed decision reason code is not configured as apply-eligible. |
@@ -2635,9 +2638,12 @@ join (
  and latest_decision.pricing_decision_id = par.pricing_decision_id
 join marketplace_listing ml
   on ml.marketplace_listing_id = par.marketplace_listing_id
+join pricing_decision pd
+  on pd.pricing_decision_id = par.pricing_decision_id
 left join external_catalog_item eci
   on eci.external_catalog_item_id = ml.external_catalog_item_id
 where par.readiness_status_code = 'READY_TO_APPLY'
+  and pd.applied_at is null
 order by par.delta_amount desc,
          par.pricing_apply_readiness_id desc
 limit 50;

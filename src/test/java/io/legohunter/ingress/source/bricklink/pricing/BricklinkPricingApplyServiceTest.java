@@ -120,6 +120,24 @@ class BricklinkPricingApplyServiceTest {
         verify(marketplaceListingSyncRequestDao).upsert(any(MarketplaceListingSyncRequest.class));
     }
 
+    @Test
+    void runOnceSkipsAlreadyAppliedPricingDecisionWithoutFailingRow() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        when(pricingApplyReadinessDao.findLatestReadyToApplyReviews(25)).thenReturn(Set.of(review()));
+        when(marketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(listing()));
+        when(pricingDecisionDao.findByPricingDecisionId(500L)).thenReturn(Optional.of(appliedDecision()));
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.skippedRows()).isOne();
+        assertThat(result.failedRows()).isZero();
+        assertThat(result.localPricesUpdated()).isZero();
+        assertThat(result.syncRequestsEnqueued()).isZero();
+        verify(marketplaceListingDao, never()).updateUnitPrice(any(), any(), any());
+        verify(pricingDecisionDao, never()).markApplied(any(), any());
+        verify(marketplaceListingSyncRequestDao, never()).upsert(any());
+    }
+
     private void arrangeReadyCandidate() {
         arrangeReadyCandidate(listing());
     }
@@ -168,6 +186,12 @@ class BricklinkPricingApplyServiceTest {
                 .finalPrice(new BigDecimal("219.00"))
                 .currencyCode("USD")
                 .build();
+    }
+
+    private PricingDecision appliedDecision() {
+        PricingDecision decision = decision();
+        decision.setAppliedAt(ZonedDateTime.parse("2026-07-29T12:00:00Z"));
+        return decision;
     }
 
     private BricklinkMarketplaceListing bricklinkListing() {
