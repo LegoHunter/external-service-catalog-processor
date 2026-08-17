@@ -27,6 +27,7 @@ class BricklinkListingCreateInventoryMapperTest {
 
         assertThat(inventory.getItem().getNo()).isEqualTo("6390-1");
         assertThat(inventory.getItem().getType()).isEqualTo("SET");
+        assertThat(inventory.getColor_id()).isZero();
         assertThat(inventory.getQuantity()).isOne();
         assertThat(inventory.getNew_or_used()).isEqualTo("U");
         assertThat(inventory.getCompleteness()).isEqualTo("B");
@@ -89,6 +90,7 @@ class BricklinkListingCreateInventoryMapperTest {
     private BricklinkListingCreateSafetyResult safety() {
         return BricklinkListingCreateSafetyResult.allowed(
                 "[SYSTEM_BEGIN] LEGOHUNTER_MANAGED=true [SYSTEM_END]",
+                0,
                 true,
                 "C",
                 false

@@ -23,7 +23,7 @@ class BricklinkListingCreateInventoryMapper {
     ) {
         Inventory inventory = new Inventory();
         inventory.setItem(item(listing.getExternalCatalogItem()));
-        inventory.setColor_id(bricklinkListing.getColorId());
+        inventory.setColor_id(safety.effectiveColorId());
         inventory.setQuantity(1);
         inventory.setNew_or_used(normalizeCondition(itemInventory.getNewOrUsed()));
         inventory.setCompleteness(normalizeCompleteness(itemInventory));
