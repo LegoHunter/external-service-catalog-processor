@@ -33,6 +33,7 @@ class BricklinkListingCreateSafetyServiceTest {
         assertThat(result.desiredRemarks()).contains("Human notes");
         assertThat(result.desiredRemarks()).contains("LEGOHUNTER_ENV=sandbox");
         assertThat(result.desiredRemarksHash()).hasSize(64);
+        assertThat(result.effectiveColorId()).isZero();
     }
 
     @Test
@@ -80,6 +81,23 @@ class BricklinkListingCreateSafetyServiceTest {
         assertThat(result.stockRoom()).isFalse();
         assertThat(result.publiclyAvailable()).isTrue();
         assertThat(result.stockRoomId()).isNull();
+    }
+
+    @Test
+    void blocksMissingColorForColorSpecificItemBeforeHttpMapping() {
+        MarketplaceListing partListing = listing();
+        partListing.getExternalCatalogItem().setItemTypeCode("PART");
+
+        BricklinkListingCreateSafetyResult result = service.verify(
+                properties(true),
+                partListing,
+                bricklinkListing(),
+                itemInventory(),
+                request(true)
+        );
+
+        assertThat(result.allowed()).isFalse();
+        assertThat(result.statusCode()).isEqualTo("MISSING_BRICKLINK_COLOR_ID");
     }
 
     private BricklinkMarketplaceSyncProperties properties(boolean production) {

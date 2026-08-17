@@ -797,6 +797,33 @@ Non-prod safety contract:
 | Inventory match | `ITEM_INVENTORY_UUID` must match the local `item_inventory.uuid`. |
 | Remarks length | Generated remarks, including preserved human remarks and the system block, must be at most `lego.bricklink.marketplace-sync.remarks-max-length`, default `1024`. |
 
+### BrickLink Listing Create Color Checks
+
+BrickLink requires `color_id=0` (Not Applicable) when creating SET inventory. The create preflight resolves a null
+SET color to `0`, rejects a nonzero SET color, and blocks color-specific item types when their color is missing or
+not positive. Blocked requests do not call the BrickLink mutation API.
+
+Before retrying a SET create that previously failed with `PARAMETER_MISSING_OR_INVALID`, confirm the database
+repair has run:
+
+```sql
+select ml.marketplace_listing_id,
+       eci.external_item_key,
+       eci.item_type_code,
+       bl.color_id
+from marketplace_listing ml
+join bricklink_marketplace_listing bl
+  on bl.marketplace_listing_id = ml.marketplace_listing_id
+join external_catalog_item eci
+  on eci.external_catalog_item_id = ml.external_catalog_item_id
+where upper(eci.item_type_code) in ('S', 'SET')
+  and bl.color_id is null;
+```
+
+The result must be empty. Deploying the repair does not reset terminal sync requests. Review the failed request,
+then explicitly create or reset one `LISTING_CREATE` request through the normal operator workflow. Start in
+`DRY_RUN` and verify the mapped payload includes `"color_id":0` before enabling `APPLY`.
+
 System block format:
 
 ```text
