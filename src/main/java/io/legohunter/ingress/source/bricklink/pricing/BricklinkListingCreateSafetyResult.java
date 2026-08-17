@@ -6,12 +6,14 @@ record BricklinkListingCreateSafetyResult(
         String message,
         String desiredRemarks,
         String desiredRemarksHash,
+        Integer effectiveColorId,
         boolean stockRoom,
         String stockRoomId,
         boolean publiclyAvailable
 ) {
     static BricklinkListingCreateSafetyResult allowed(
             String desiredRemarks,
+            Integer effectiveColorId,
             boolean stockRoom,
             String stockRoomId,
             boolean publiclyAvailable
@@ -22,6 +24,7 @@ record BricklinkListingCreateSafetyResult(
                 "Local listing passed BrickLink create safety checks",
                 desiredRemarks,
                 BricklinkInventorySystemRemarks.sha256(desiredRemarks),
+                effectiveColorId,
                 stockRoom,
                 stockRoomId,
                 publiclyAvailable
@@ -29,6 +32,6 @@ record BricklinkListingCreateSafetyResult(
     }
 
     static BricklinkListingCreateSafetyResult blocked(String statusCode, String message) {
-        return new BricklinkListingCreateSafetyResult(false, statusCode, message, null, null, false, null, false);
+        return new BricklinkListingCreateSafetyResult(false, statusCode, message, null, null, null, false, null, false);
     }
 }

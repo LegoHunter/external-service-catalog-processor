@@ -5,6 +5,7 @@ import io.legohunter.data.dto.ExternalCatalogItem;
 import io.legohunter.data.dto.ItemInventory;
 import io.legohunter.data.dto.MarketplaceListing;
 import io.legohunter.data.dto.MarketplaceListingSyncRequest;
+import io.legohunter.data.bricklink.BricklinkInventoryColorPolicy;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -61,6 +62,13 @@ class BricklinkListingCreateSafetyService {
         if (blank(catalogItem.getItemTypeCode())) {
             return blocked("MISSING_BRICKLINK_ITEM_TYPE", "BrickLink catalog item type is required before listing creation");
         }
+        BricklinkInventoryColorPolicy.Resolution color = BricklinkInventoryColorPolicy.resolve(
+                catalogItem.getItemTypeCode(),
+                bricklinkListing.getColorId()
+        );
+        if (!color.valid()) {
+            return blocked(color.errorCode(), color.message());
+        }
         if (blank(itemInventory.getNewOrUsed())) {
             return blocked("MISSING_NEW_OR_USED", "Inventory item newOrUsed is required before BrickLink listing creation");
         }
@@ -99,7 +107,13 @@ class BricklinkListingCreateSafetyService {
         if (desiredRemarks.length() > properties.effectiveRemarksMaxLength()) {
             return blocked("REMARKS_TOO_LONG", "Generated BrickLink remarks exceed configured maximum length");
         }
-        return BricklinkListingCreateSafetyResult.allowed(desiredRemarks, stockRoom, stockRoomId, publiclyAvailable);
+        return BricklinkListingCreateSafetyResult.allowed(
+                desiredRemarks,
+                color.effectiveColorId(),
+                stockRoom,
+                stockRoomId,
+                publiclyAvailable
+        );
     }
 
     private boolean requestedStockRoom(
