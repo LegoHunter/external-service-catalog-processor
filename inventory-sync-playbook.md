@@ -7,6 +7,8 @@ It describes the behavior implemented across:
 - `lego-data-service`: inventory intake, corrections, sale-intent changes, marketplace drafts, readiness, and local sync-request APIs.
 - `lego-data`: shared DTOs, DAOs, MyBatis mappings, and the shared BrickLink color policy.
 - `lego-data-ingress`: BrickLink pricing crawl, pricing decisions, apply-readiness, local price application, and the BrickLink marketplace-sync worker.
+- `lego-database-deployer`: the nullable `marketplace_listing.unit_price` schema prerequisite for unpriced draft onboarding.
+- `lego-data-migration`: the operational schema preflight and Liquibase rollout checkpoint.
 
 The [runbook](runbook.md) remains the detailed implementation reference. This document is the shorter, procedural map for answering: “What must be true before this item can become a BrickLink listing, and where did it stop?”
 
@@ -76,6 +78,7 @@ local listing: ACTIVE + bricklink_inventory_id + last synchronization metadata
 | Shared data model | `lego-data` | DTOs, DAOs, persistence mappings, sync-request persistence, and the `S`/`SET` color rule | It does not decide when to crawl, price, or sync |
 | Inventory and listing API | `lego-data-service` | Intake transaction, item state/sale intent, local BrickLink draft, readiness response, and local sync-request creation | It does not call BrickLink to create the remote inventory |
 | Scheduled automation and remote writes | `lego-data-ingress` | Crawl, snapshot, decision, readiness audit, apply, and final BrickLink API calls | It does not replace acquisition accounting or inventory correction APIs |
+| Database schema and rollout | `lego-database-deployer` / `lego-data-migration` | Nullable `unit_price` DDL and the operator verification/rollout instructions | It does not create prices or publish marketplace inventory |
 
 ## Part I — Inventory intake to a live BrickLink listing
 
