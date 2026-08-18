@@ -76,6 +76,31 @@ class BricklinkPricingApplyReadinessServiceTest {
     }
 
     @Test
+    void runOnceAllowsPricingPlaneToSetTheInitialPriceForAnUnpricedDraft() {
+        PricingDecisionReview initialPrice = review(null, "7.19", BricklinkPricingDecisionService.REASON_MATCHED_LOWEST_COMPETITOR);
+        initialPrice.setListingStatusCode("DRAFT");
+        initialPrice.setExternalListingId(null);
+        initialPrice.setComparableCount(15);
+        initialPrice.setConfidence(new BigDecimal("0.90"));
+        when(pricingDecisionDao.findLatestUnappliedDecisionReviewsByListingExternalServiceIdAndListingStatusCodesAndDecisionStatusCode(
+                2, Set.of("ACTIVE", "DRAFT"), "PROPOSED", 10
+        )).thenReturn(Set.of(initialPrice));
+
+        BricklinkPricingApplyReadinessResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.decisionsSelected()).isOne();
+        assertThat(result.readyToApply()).isOne();
+        ArgumentCaptor<PricingApplyReadiness> readinessCaptor = ArgumentCaptor.forClass(PricingApplyReadiness.class);
+        verify(pricingApplyReadinessDao).upsert(readinessCaptor.capture());
+        assertThat(readinessCaptor.getValue().getReadinessStatusCode()).isEqualTo("READY_TO_APPLY_INITIAL_PRICE");
+        assertThat(readinessCaptor.getValue().getCurrentPrice()).isNull();
+        assertThat(readinessCaptor.getValue().getProposedPrice()).isEqualByComparingTo("7.19");
+        assertThat(readinessCaptor.getValue().getDeltaAmount()).isNull();
+        assertThat(readinessCaptor.getValue().getDeltaPercent()).isNull();
+    }
+
+    @Test
     void runOnceSeparatesAllSkipBuckets() {
         PricingDecisionReview fixedPrice = review("100.00", "95.00", BricklinkPricingDecisionService.REASON_MEAN_PLUS_STDDEV);
         fixedPrice.setFixedPrice(true);

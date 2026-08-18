@@ -57,10 +57,12 @@ public class BricklinkPricingApplyPreviewService {
     private BricklinkPricingApplyPreviewSummary summary(Set<PricingApplyReadinessReview> reviews) {
         Map<String, Integer> statusCounts = countByStatus(reviews);
         Map<String, Integer> blockReasonCounts = countByBlockReason(reviews);
+        int readyToApplyCount = statusCounts.getOrDefault(BricklinkPricingApplyReadinessService.READY_TO_APPLY, 0)
+                + statusCounts.getOrDefault(BricklinkPricingApplyReadinessService.READY_TO_APPLY_INITIAL_PRICE, 0);
         return new BricklinkPricingApplyPreviewSummary(
                 reviews.size(),
-                statusCounts.getOrDefault("READY_TO_APPLY", 0),
-                reviews.size() - statusCounts.getOrDefault("READY_TO_APPLY", 0),
+                readyToApplyCount,
+                reviews.size() - readyToApplyCount,
                 statusCounts,
                 blockReasonCounts
         );

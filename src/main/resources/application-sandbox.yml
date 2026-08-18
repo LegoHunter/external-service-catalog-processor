@@ -31,6 +31,9 @@ lego:
       crawl:
         enabled: true
         bricklink-external-service-id: 2
+        priceable-listing-status-codes:
+          - ACTIVE
+          - DRAFT
         active-listing-status-code: ACTIVE
         catalog-item-type: S
         batch-size: 100
@@ -58,6 +61,9 @@ lego:
       decision:
         enabled: true
         bricklink-external-service-id: 2
+        priceable-listing-status-codes:
+          - ACTIVE
+          - DRAFT
         active-listing-status-code: ACTIVE
         batch-size: 100
         require-current-snapshot: true
@@ -74,6 +80,9 @@ lego:
       apply-readiness:
         enabled: true
         bricklink-external-service-id: 2
+        priceable-listing-status-codes:
+          - ACTIVE
+          - DRAFT
         active-listing-status-code: ACTIVE
         proposed-decision-status-code: PROPOSED
         batch-size: 100
