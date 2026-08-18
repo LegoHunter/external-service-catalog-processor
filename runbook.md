@@ -30,9 +30,9 @@ The service defaults to the `local,sandbox` profiles unless overridden by `sprin
 | Rebrickable catalog ingestion | Kafka/S3 event driven | Parse Rebrickable gzipped CSV catalog/theme files and upsert external catalog/category tables. |
 | Image-hosting sync | REST and scheduled job | Reconcile item inventory photos and albums to Flickr through `lego-imaging`. |
 | Image-hosting repair | REST | Repair DB links from current remote image-hosting state. |
-| BrickLink pricing crawl | Scheduled job | Crawl active BrickLink marketplace listings, hydrate missing BrickLink internal catalog ids, and persist immutable pricing snapshots/listings for later pricing decisions. |
-| BrickLink pricing decision | Scheduled job | Read latest BrickLink pricing snapshots, compute competitive prices with the legacy algorithm, and persist auditable non-applied pricing decisions. |
-| BrickLink pricing apply readiness | Scheduled job | Dry-run review of latest proposed pricing decisions that would change current marketplace listing prices; writes no listing prices and triggers no marketplace sync. |
+| BrickLink pricing crawl | Scheduled job | Crawl configured active and draft BrickLink marketplace listings, hydrate missing BrickLink internal catalog ids, and persist immutable pricing snapshots/listings for later pricing decisions. |
+| BrickLink pricing decision | Scheduled job | Read latest BrickLink pricing snapshots, compute competitive prices for active listings and unpriced drafts, and persist auditable non-applied pricing decisions. |
+| BrickLink pricing apply readiness | Scheduled job | Dry-run review of latest proposed pricing decisions, including first-price decisions for unpriced drafts; writes no listing prices and triggers no marketplace sync. |
 | BrickLink order sync | Scheduled job | Poll BrickLink open orders and, when apply mode is enabled, sync marketplace order staging tables. |
 | Fulfillment sync | Scheduled job | Map staged BrickLink marketplace orders to ShipStation orders, then reconcile shipped ShipStation orders back to BrickLink when apply mode is enabled. |
 
@@ -62,7 +62,7 @@ Related columns:
 
 Sale intent should not be confused with marketplace listing status. `sale_intent_code='SELLABLE'` means the owned inventory item is allowed to be listed; it does not mean there is already an active marketplace listing. Active sale exposure is represented by marketplace listing rows such as `marketplace_listing.listing_status_code='ACTIVE'`.
 
-Pricing Plane jobs currently operate from active `marketplace_listing` rows. Once an item has an active listing, pricing crawl, decision, readiness, apply, and sync behavior is driven mainly by listing state, condition/completeness, fixed-price settings, and Pricing Plane configuration. Sale intent remains important upstream because it should prevent non-sellable inventory from becoming listed in the first place.
+Pricing Plane jobs operate from configured `ACTIVE` and `DRAFT` `marketplace_listing` rows. An unpriced non-fixed `DRAFT` is an intentional first-price onboarding state; an active listing or a draft with a current price follows the normal repricing path. Once an item has an active listing, pricing crawl, decision, readiness, apply, and sync behavior is driven mainly by listing state, condition/completeness, fixed-price settings, and Pricing Plane configuration. Sale intent remains important upstream because it should prevent non-sellable inventory from becoming listed in the first place.
 
 ## Profiles And External Config
 
@@ -613,6 +613,8 @@ lego.bricklink.pricing.apply-readiness.scheduled.enabled: true
 
 This job is intentionally read-only. It does not update `marketplace_listing.unit_price`, does not mark `pricing_decision.applied_at`, and does not trigger marketplace sync. It writes one durable `pricing_apply_readiness` row per evaluated `pricing_decision`, keyed by decision, so the latest apply state can be reviewed without parsing logs. A readiness row is current only when it belongs to the latest `pricing_decision` for that marketplace listing; older readiness rows remain audit history but are excluded from current gauges, apply previews, and dry-run apply selection.
 
+An unpriced, non-fixed local `DRAFT` is evaluated through the initial-price path. It may become `READY_TO_APPLY_INITIAL_PRICE` when the decision has a positive final price, matching currency, an eligible reason, sufficient confidence, and sufficient exact comparables. Because no current price exists, the persisted readiness row intentionally has `current_price`, `delta_amount`, `delta_percent`, and `minimum_required_delta` set to null. Current-price movement guards apply only to active or already-priced listings.
+
 Schedule and selection settings:
 
 | Setting | Default | Valid values | Description |
@@ -622,6 +624,7 @@ Schedule and selection settings:
 | `lego.bricklink.pricing.apply-readiness.scheduled.lock-at-most-for` | `10m` | ShedLock duration | Maximum distributed lock duration. |
 | `lego.bricklink.pricing.apply-readiness.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
 | `lego.bricklink.pricing.apply-readiness.batch-size` | `25` | Integer; effective value is at least `1` | Maximum latest proposed decisions reviewed per run. |
+| `lego.bricklink.pricing.apply-readiness.priceable-listing-status-codes` | `ACTIVE,DRAFT` | Set of listing status codes | Listing statuses eligible for readiness evaluation. Include `DRAFT` to support initial pricing before BrickLink publication; blank/empty falls back to `active-listing-status-code`. |
 | `lego.bricklink.pricing.apply-readiness.minimum-price-delta` | `0.01` | Decimal money amount, zero or positive | Minimum absolute difference between current listing price and proposed final price required to count as ready. |
 | `lego.bricklink.pricing.apply-readiness.minimum-delta.enabled` | `false` | `true`, `false` | Enables the configurable percentage-based minimum movement guard. |
 | `lego.bricklink.pricing.apply-readiness.minimum-delta.percent` | `0.02` | Decimal ratio, zero or positive | Minimum relative movement required when enabled. `0.02` means 2%. The required money delta is computed with `BigDecimal` and rounded up to the penny. |
@@ -637,7 +640,7 @@ Candidate selection:
 | Requirement | Detail |
 | --- | --- |
 | Marketplace listing service | `marketplace_listing.listing_external_service_id` must equal `lego.bricklink.pricing.apply-readiness.bricklink-external-service-id`. |
-| Marketplace listing status | `marketplace_listing.listing_status_code` must equal `lego.bricklink.pricing.apply-readiness.active-listing-status-code` after trimming/uppercasing. |
+| Marketplace listing status | `marketplace_listing.listing_status_code` must be in `lego.bricklink.pricing.apply-readiness.priceable-listing-status-codes`, normally `ACTIVE,DRAFT`. |
 | Latest decision only | The query selects only the newest `pricing_decision` per `marketplace_listing_id`, using `pricing_decision_id` as the tiebreaker. |
 | Proposed only | The latest decision must match `lego.bricklink.pricing.apply-readiness.proposed-decision-status-code`, normally `PROPOSED`. |
 | Unapplied only | `pricing_decision.applied_at` must be null. Phase 6 never changes it, but the filter protects future phases. |
@@ -647,9 +650,10 @@ Readiness behavior:
 
 | Outcome bucket | Meaning |
 | --- | --- |
-| `readyToApply` | Latest proposed decision is non-fixed, has current and final prices, has matching current/decision currency, uses an eligible non-blocked reason code, meets the minimum price delta, meets the minimum confidence/comparable thresholds, and stays inside configured movement limits. |
+| `readyToApply` | Latest proposed decision is non-fixed, has a positive final price, has matching currency, uses an eligible non-blocked reason code, meets the confidence/comparable thresholds, and either follows the normal current-price movement guards or is an eligible initial-price DRAFT. |
+| `READY_TO_APPLY_INITIAL_PRICE` | An unpriced non-fixed local DRAFT has a positive algorithmic initial price. Delta and movement-limit checks are intentionally not evaluated because there is no current-price baseline. |
 | `skippedFixedPrice` | Listing is currently marked fixed price, so the proposed decision is not considered apply-ready. |
-| `skippedMissingCurrentPrice` | Current listing price is missing. |
+| `skippedMissingCurrentPrice` | Current listing price is missing on a listing that is not an eligible unpriced local DRAFT. |
 | `skippedMissingFinalPrice` | Proposed final price is missing. |
 | `skippedCurrencyMismatch` | Current listing currency and decision currency differ. |
 | `skippedUnsupportedDecisionStatus` | Defensive bucket for a selected decision whose status no longer matches the configured proposed status. |
@@ -667,7 +671,7 @@ Important logs:
 
 | Event | Meaning |
 | --- | --- |
-| `bricklink.pricing.apply_readiness.ready` | DEBUG-level detail for one latest proposed decision that would change a listing if a later apply phase existed. Logs listing id, decision id, current price, proposed price, delta, currency, reason, and algorithm version. |
+| `bricklink.pricing.apply_readiness.ready` | DEBUG-level detail for one latest proposed decision that would change a listing if a later apply phase existed. Logs listing id, decision id, readiness status, initial-price flag, current price, proposed price, delta, currency, reason, and algorithm version. Initial-price rows explicitly show a null current-price baseline. |
 | `bricklink.pricing.apply_readiness.job.completed` | Scheduled run completed and logs `BricklinkPricingApplyReadinessResult` with selected, ready, skipped, and elapsed counters. |
 
 ### BrickLink Pricing Maintenance Report
@@ -694,7 +698,7 @@ GET /internal/bricklink/pricing/apply-preview?blockReasonCode=BELOW_MINIMUM_DELT
 GET /internal/bricklink/pricing/apply-selection/dry-run?limit=100
 ```
 
-These reports read `pricing_apply_readiness` and select readiness rows attached to the latest unapplied `pricing_decision` per marketplace listing. They do not update prices, mark decisions applied, or enqueue marketplace sync. `apply-preview` supports optional `readinessStatusCode` and `blockReasonCode` filters. `apply-selection/dry-run` returns the current unapplied `READY_TO_APPLY` rows that a future apply job would consume. If a newer failed, skipped, or already-applied pricing decision exists after an older ready row, that older readiness row is no longer current and will not appear eligible.
+These reports read `pricing_apply_readiness` and select readiness rows attached to the latest unapplied `pricing_decision` per marketplace listing. They do not update prices, mark decisions applied, or enqueue marketplace sync. `apply-preview` supports optional `readinessStatusCode` and `blockReasonCode` filters. `apply-selection/dry-run` returns the current unapplied `READY_TO_APPLY` and `READY_TO_APPLY_INITIAL_PRICE` rows that a future apply job would consume. If a newer failed, skipped, or already-applied pricing decision exists after an older ready row, that older readiness row is no longer current and will not appear eligible.
 
 The requested `limit` is bounded to the range `1..500`.
 
@@ -711,7 +715,7 @@ lego.bricklink.pricing.apply.enabled: true
 lego.bricklink.pricing.apply.scheduled.enabled: true
 ```
 
-The apply job is the first Pricing Plane job that can mutate the local marketplace listing gold copy. It consumes only current unapplied `READY_TO_APPLY` rows selected from `pricing_apply_readiness`, re-checks the current `marketplace_listing` and `pricing_decision`, and then applies according to `lego.bricklink.pricing.apply.mode`. If an already-applied decision is encountered during rollout or after stale data is produced, the row is skipped and does not count as a failed apply row.
+The apply job is the first Pricing Plane job that can mutate the local marketplace listing gold copy. It consumes only current unapplied `READY_TO_APPLY` and `READY_TO_APPLY_INITIAL_PRICE` rows selected from `pricing_apply_readiness`, re-checks the current `marketplace_listing` and `pricing_decision`, and then applies according to `lego.bricklink.pricing.apply.mode`. An initial-price row must still point to an unpriced local DRAFT with no external listing ID; if the draft was manually priced or published after readiness evaluation, the row is rejected as stale rather than overwriting the newer state. If an already-applied decision is encountered during rollout or after stale data is produced, the row is skipped and does not count as a failed apply row.
 
 Modes:
 
@@ -719,7 +723,7 @@ Modes:
 | --- | --- |
 | `DRY_RUN` | Logs the decisions that would be applied. Does not update `marketplace_listing`, does not mark `pricing_decision.applied_at`, and does not enqueue sync requests. |
 | `APPLY_LOCAL_ONLY` | Updates `marketplace_listing.unit_price` and marks `pricing_decision.applied_at`. Does not enqueue remote marketplace sync. |
-| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Updates the local listing price and marks the pricing decision applied. For listings with an existing BrickLink inventory id, it upserts a `PRICE_UPDATE` sync request. For priced local `DRAFT` listings without a BrickLink inventory id, it upserts a `LISTING_CREATE` sync request so the marketplace sync worker can create the stockroom/public listing according to environment guardrails. |
+| `APPLY_LOCAL_AND_ENQUEUE_SYNC` | Updates the local listing price and marks the pricing decision applied. For listings with an existing BrickLink inventory id, it upserts a `PRICE_UPDATE` sync request. For priced local `DRAFT` listings without a BrickLink inventory id, it upserts a `LISTING_CREATE` sync request so the marketplace sync worker can create the stockroom/public listing according to environment guardrails. Initial-price requests use `previous_unit_price=NULL`, a positive `requested_unit_price`, and sync reason `INITIAL_PRICE_APPLIED`. |
 
 Settings:
 
@@ -1710,7 +1714,7 @@ Healthy sandbox behavior:
 | `bricklink_pricing_apply_readiness_job` | Counter | `outcome` | One count per apply-readiness dry-run job. |
 | `bricklink_pricing_apply_readiness_job_duration` | Timer | `outcome` | Apply-readiness dry-run duration. |
 | `bricklink_pricing_apply_readiness_decision` | Counter | `result` | Decision review counts by `selected`, `ready_to_apply`, `skipped_fixed_price`, `skipped_missing_current_price`, `skipped_missing_final_price`, `skipped_currency_mismatch`, `skipped_unsupported_decision_status`, `skipped_blocked_reason_code`, `skipped_ineligible_reason`, `skipped_below_minimum_delta`, `skipped_below_minimum_delta_percent`, `skipped_below_minimum_confidence`, `skipped_below_minimum_comparable_count`, `skipped_above_maximum_absolute_delta`, `skipped_above_maximum_percent_delta`, and `skipped_stale_decision`. |
-| `bricklink_pricing_apply_readiness_current` | Gauge | `status` | Current apply-readiness count by persisted status, limited to readiness rows attached to each listing's latest pricing decision. Registered status tags are `ready_to_apply`, `blocked_fixed_price`, `blocked_missing_current_price`, `blocked_missing_final_price`, `blocked_currency_mismatch`, `blocked_unsupported_decision_status`, `blocked_reason_code`, `blocked_ineligible_reason`, `blocked_below_minimum_delta`, `blocked_below_minimum_delta_percent`, `blocked_below_minimum_confidence`, `blocked_below_minimum_comparable_count`, `blocked_above_maximum_absolute_delta`, `blocked_above_maximum_percent_delta`, and `blocked_stale_decision`. |
+| `bricklink_pricing_apply_readiness_current` | Gauge | `status` | Current apply-readiness count by persisted status, limited to readiness rows attached to each listing's latest pricing decision. Registered status tags are `ready_to_apply`, `ready_to_apply_initial_price`, `blocked_fixed_price`, `blocked_missing_current_price`, `blocked_missing_final_price`, `blocked_currency_mismatch`, `blocked_unsupported_decision_status`, `blocked_reason_code`, `blocked_ineligible_reason`, `blocked_below_minimum_delta`, `blocked_below_minimum_delta_percent`, `blocked_below_minimum_confidence`, `blocked_below_minimum_comparable_count`, `blocked_above_maximum_absolute_delta`, `blocked_above_maximum_percent_delta`, and `blocked_stale_decision`. |
 | `bricklink_pricing_apply_readiness_block_reason_current` | Gauge | `reason` | Current apply-readiness count by persisted block reason, limited to readiness rows attached to each listing's latest pricing decision. Registered reason tags are `fixed_price`, `missing_current_price`, `missing_final_price`, `currency_mismatch`, `unsupported_decision_status`, `blocked_reason_code`, `ineligible_reason`, `below_minimum_delta`, `below_minimum_delta_percent`, `below_minimum_confidence`, `below_minimum_comparable_count`, `above_maximum_absolute_delta`, `above_maximum_percent_delta`, and `stale_decision`. |
 
 Prometheus examples:

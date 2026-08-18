@@ -143,6 +143,7 @@ class BricklinkPricingMetricsServiceTest {
 
         List<String> statusTags = List.of(
                 "ready_to_apply",
+                "ready_to_apply_initial_price",
                 "blocked_fixed_price",
                 "blocked_missing_current_price",
                 "blocked_missing_final_price",

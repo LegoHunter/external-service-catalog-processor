@@ -29,11 +29,17 @@ lego:
     pricing:
       crawl:
         enabled: true
+        priceable-listing-status-codes:
+          - ACTIVE
+          - DRAFT
         batch-size: 100
         scheduled:
           enabled: true
       decision:
         enabled: true
+        priceable-listing-status-codes:
+          - ACTIVE
+          - DRAFT
         batch-size: 100
         scheduled:
           enabled: true
@@ -41,6 +47,9 @@ lego:
           fixed-delay-ms: 600000
       apply-readiness:
         enabled: true
+        priceable-listing-status-codes:
+          - ACTIVE
+          - DRAFT
         batch-size: 100
         minimum-delta:
           enabled: true

@@ -25,6 +25,7 @@ public class BricklinkPricingMetricsService {
     private static final String STATUS_TAG = "status";
     private static final List<String> APPLY_READINESS_STATUS_CODES = List.of(
             "READY_TO_APPLY",
+            "READY_TO_APPLY_INITIAL_PRICE",
             "BLOCKED_FIXED_PRICE",
             "BLOCKED_MISSING_CURRENT_PRICE",
             "BLOCKED_MISSING_FINAL_PRICE",
