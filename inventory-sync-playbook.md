@@ -85,6 +85,10 @@ Before starting, confirm:
 
 - The item exists in the BrickLink catalog and the service can resolve its catalog mapping.
 - The target runtime has the correct database, BrickLink credentials, Kafka/config imports, and ingress deployment.
+- The target database allows `marketplace_listing.unit_price` to be null. Fresh schemas get this from
+  `lego-database-deployer`; existing environments must apply Liquibase
+  `1.0.3-marketplace-listing-unit-price-nullable.yaml`. Verify `information_schema.columns.is_nullable = 'YES'`
+  before creating an unpriced draft. Do not seed a fake price to work around a schema mismatch.
 - You know whether this is a manual-price path or a Pricing Plane path.
 - You know the target environment and its stockroom. Never infer the stockroom from memory; verify the active ingress configuration.
 - If this is a new listing in a non-production environment, the intended visibility is stockroom-only.
