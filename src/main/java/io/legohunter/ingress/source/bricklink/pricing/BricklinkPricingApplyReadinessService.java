@@ -20,6 +20,10 @@ import java.util.Set;
 @Slf4j
 @ConditionalOnProperty(prefix = "lego.bricklink.pricing.apply-readiness", name = "enabled", havingValue = "true")
 public class BricklinkPricingApplyReadinessService {
+    static final String READY_TO_APPLY = "READY_TO_APPLY";
+    static final String READY_TO_APPLY_INITIAL_PRICE = "READY_TO_APPLY_INITIAL_PRICE";
+    private static final String LISTING_STATUS_DRAFT = "DRAFT";
+
     private final BricklinkPricingApplyReadinessProperties properties;
     private final PricingDecisionDao pricingDecisionDao;
     private final PricingApplyReadinessDao pricingApplyReadinessDao;
@@ -43,11 +47,13 @@ public class BricklinkPricingApplyReadinessService {
             ApplyReadinessEvaluation evaluation = evaluate(review);
             counters.record(evaluation.status());
             persistReadiness(review, evaluation);
-            if (evaluation.status() == ApplyReadinessStatus.READY_TO_APPLY) {
+            if (evaluation.status().readyToApply()) {
                 log.debug(
-                        "bricklink.pricing.apply_readiness.ready marketplaceListingId={} pricingDecisionId={} externalListingId={} currentPrice={} proposedPrice={} delta={} currencyCode={} reasonCode={} algorithmVersion={} confidence={} comparableCount={}",
+                        "bricklink.pricing.apply_readiness.ready marketplaceListingId={} pricingDecisionId={} readinessStatus={} initialPrice={} externalListingId={} currentPrice={} proposedPrice={} delta={} currencyCode={} reasonCode={} algorithmVersion={} confidence={} comparableCount={}",
                         review.getMarketplaceListingId(),
                         review.getPricingDecisionId(),
+                        evaluation.status().readinessStatusCode(),
+                        isInitialPriceCandidate(review),
                         review.getExternalListingId(),
                         money(review.getCurrentUnitPrice()),
                         money(review.getFinalPrice()),
@@ -86,11 +92,15 @@ public class BricklinkPricingApplyReadinessService {
         if (!properties.effectiveProposedDecisionStatusCode().equals(cleanStatusCode(review.getDecisionStatusCode()))) {
             return evaluation(ApplyReadinessStatus.SKIPPED_UNSUPPORTED_DECISION_STATUS);
         }
-        if (review.getCurrentUnitPrice() == null) {
-            return evaluation(ApplyReadinessStatus.SKIPPED_MISSING_CURRENT_PRICE);
-        }
         if (review.getFinalPrice() == null) {
             return evaluation(ApplyReadinessStatus.SKIPPED_MISSING_FINAL_PRICE);
+        }
+        if (review.getFinalPrice().signum() <= 0) {
+            return evaluation(ApplyReadinessStatus.SKIPPED_MISSING_FINAL_PRICE);
+        }
+        boolean initialPriceCandidate = isInitialPriceCandidate(review);
+        if (!initialPriceCandidate && review.getCurrentUnitPrice() == null) {
+            return evaluation(ApplyReadinessStatus.SKIPPED_MISSING_CURRENT_PRICE);
         }
         if (!sameCurrency(review)) {
             return evaluation(ApplyReadinessStatus.SKIPPED_CURRENCY_MISMATCH);
@@ -102,6 +112,16 @@ public class BricklinkPricingApplyReadinessService {
         }
         if (!properties.effectiveApplyEligibleReasonCodes().contains(reasonCode)) {
             return evaluation(ApplyReadinessStatus.SKIPPED_INELIGIBLE_REASON);
+        }
+
+        if (initialPriceCandidate) {
+            if (confidence(review).compareTo(properties.effectiveMinimumConfidence()) < 0) {
+                return evaluation(ApplyReadinessStatus.SKIPPED_BELOW_MINIMUM_CONFIDENCE);
+            }
+            if (comparableCount(review) < properties.effectiveMinimumComparableCount()) {
+                return evaluation(ApplyReadinessStatus.SKIPPED_BELOW_MINIMUM_COMPARABLE_COUNT);
+            }
+            return evaluation(ApplyReadinessStatus.READY_TO_APPLY_INITIAL_PRICE);
         }
 
         BigDecimal absoluteDelta = delta(review);
@@ -141,6 +161,12 @@ public class BricklinkPricingApplyReadinessService {
         }
 
         return evaluation(ApplyReadinessStatus.READY_TO_APPLY, absoluteDelta, percentDeltaOrNull(review, absoluteDelta), minimumPercentDelta);
+    }
+
+    private boolean isInitialPriceCandidate(PricingDecisionReview review) {
+        return LISTING_STATUS_DRAFT.equals(cleanStatusCode(review.getListingStatusCode()))
+                && review.getCurrentUnitPrice() == null
+                && blank(review.getExternalListingId());
     }
 
     private void persistReadiness(PricingDecisionReview review, ApplyReadinessEvaluation evaluation) {
@@ -193,6 +219,10 @@ public class BricklinkPricingApplyReadinessService {
             return "";
         }
         return statusCode.trim().toUpperCase();
+    }
+
+    private boolean blank(String value) {
+        return value == null || value.isBlank();
     }
 
     private BigDecimal delta(PricingDecisionReview review) {
@@ -260,7 +290,8 @@ public class BricklinkPricingApplyReadinessService {
     }
 
     private enum ApplyReadinessStatus {
-        READY_TO_APPLY("READY_TO_APPLY", null),
+        READY_TO_APPLY(BricklinkPricingApplyReadinessService.READY_TO_APPLY, null),
+        READY_TO_APPLY_INITIAL_PRICE(BricklinkPricingApplyReadinessService.READY_TO_APPLY_INITIAL_PRICE, null),
         SKIPPED_FIXED_PRICE("BLOCKED_FIXED_PRICE", "FIXED_PRICE"),
         SKIPPED_MISSING_CURRENT_PRICE("BLOCKED_MISSING_CURRENT_PRICE", "MISSING_CURRENT_PRICE"),
         SKIPPED_MISSING_FINAL_PRICE("BLOCKED_MISSING_FINAL_PRICE", "MISSING_FINAL_PRICE"),
@@ -290,6 +321,10 @@ public class BricklinkPricingApplyReadinessService {
 
         private String blockReasonCode() {
             return blockReasonCode;
+        }
+
+        private boolean readyToApply() {
+            return this == READY_TO_APPLY || this == READY_TO_APPLY_INITIAL_PRICE;
         }
     }
 
@@ -326,6 +361,7 @@ public class BricklinkPricingApplyReadinessService {
         private void record(ApplyReadinessStatus status) {
             switch (status) {
                 case READY_TO_APPLY -> readyToApply++;
+                case READY_TO_APPLY_INITIAL_PRICE -> readyToApply++;
                 case SKIPPED_FIXED_PRICE -> skippedFixedPrice++;
                 case SKIPPED_MISSING_CURRENT_PRICE -> skippedMissingCurrentPrice++;
                 case SKIPPED_MISSING_FINAL_PRICE -> skippedMissingFinalPrice++;

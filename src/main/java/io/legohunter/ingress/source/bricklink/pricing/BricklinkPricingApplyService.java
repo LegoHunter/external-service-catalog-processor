@@ -26,11 +26,13 @@ import java.util.Set;
 @Slf4j
 @ConditionalOnProperty(prefix = "lego.bricklink.pricing.apply", name = "enabled", havingValue = "true")
 public class BricklinkPricingApplyService {
-    static final String READY_TO_APPLY = "READY_TO_APPLY";
+    static final String READY_TO_APPLY = BricklinkPricingApplyReadinessService.READY_TO_APPLY;
+    static final String READY_TO_APPLY_INITIAL_PRICE = BricklinkPricingApplyReadinessService.READY_TO_APPLY_INITIAL_PRICE;
     static final String SYNC_TYPE_LISTING_CREATE = "LISTING_CREATE";
     static final String SYNC_TYPE_PRICE_UPDATE = "PRICE_UPDATE";
     static final String SYNC_STATUS_PENDING = "PENDING";
     static final String SYNC_REASON_PRICING_DECISION_APPLIED = "PRICING_DECISION_APPLIED";
+    static final String SYNC_REASON_INITIAL_PRICE_APPLIED = "INITIAL_PRICE_APPLIED";
     static final String REMOTE_SCOPE_STOCKROOM = "STOCKROOM";
     static final String REMOTE_SCOPE_PUBLIC = "PUBLIC";
     static final String LISTING_STATUS_DRAFT = "DRAFT";
@@ -86,6 +88,9 @@ public class BricklinkPricingApplyService {
                 BricklinkMarketplaceListing bricklinkListing = mode == BricklinkPricingApplyMode.APPLY_LOCAL_AND_ENQUEUE_SYNC
                         ? bricklinkMarketplaceListingDao.findByMarketplaceListingId(candidate.listing().getMarketplaceListingId()).orElse(null)
                         : null;
+                if (isInitialPriceReadiness(review) && hasRemoteInventoryMapping(bricklinkListing)) {
+                    throw new IllegalStateException("Initial pricing readiness cannot apply to a listing with remote BrickLink inventory");
+                }
                 applyLocalPrice(candidate, review);
                 counters.localPricesUpdated++;
 
@@ -127,7 +132,7 @@ public class BricklinkPricingApplyService {
     }
 
     private ApplyCandidate candidate(PricingApplyReadinessReview review) {
-        if (!READY_TO_APPLY.equals(normalize(review.getReadinessStatusCode()))) {
+        if (!isReadyToApply(review)) {
             throw new IllegalStateException("Readiness row is not READY_TO_APPLY");
         }
         if (Boolean.TRUE.equals(review.getFixedPrice())) {
@@ -146,7 +151,8 @@ public class BricklinkPricingApplyService {
         if (!review.getPricingDecisionId().equals(decision.getPricingDecisionId())) {
             throw new IllegalStateException("Readiness row does not match pricing decision");
         }
-        if (review.getProposedPrice() == null || decision.getFinalPrice() == null) {
+        if (review.getProposedPrice() == null || decision.getFinalPrice() == null
+                || review.getProposedPrice().signum() <= 0 || decision.getFinalPrice().signum() <= 0) {
             throw new IllegalStateException("Proposed price is missing");
         }
         if (!money(review.getProposedPrice()).equals(money(decision.getFinalPrice()))) {
@@ -157,6 +163,12 @@ public class BricklinkPricingApplyService {
         }
         if (listing.getFixedPrice() != null && listing.getFixedPrice()) {
             throw new IllegalStateException("Marketplace listing was changed to fixed-price after readiness review");
+        }
+        if (isInitialPriceReadiness(review)
+                && (!LISTING_STATUS_DRAFT.equals(normalize(listing.getListingStatusCode()))
+                || listing.getUnitPrice() != null
+                || !blank(listing.getExternalListingId()))) {
+            throw new IllegalStateException("Initial pricing readiness is stale because the draft now has a listing price or remote listing id");
         }
         return new ApplyCandidate(listing, decision);
     }
@@ -193,7 +205,7 @@ public class BricklinkPricingApplyService {
                 .pricingApplyReadinessId(review.getPricingApplyReadinessId())
                 .syncRequestTypeCode(SYNC_TYPE_PRICE_UPDATE)
                 .syncRequestStatusCode(SYNC_STATUS_PENDING)
-                .syncReasonCode(SYNC_REASON_PRICING_DECISION_APPLIED)
+                .syncReasonCode(syncReasonCode(review))
                 .previousUnitPrice(money(candidate.listing().getUnitPrice()))
                 .requestedUnitPrice(money(review.getProposedPrice()))
                 .currencyCode(review.getCurrencyCode())
@@ -232,7 +244,7 @@ public class BricklinkPricingApplyService {
                 .pricingApplyReadinessId(review.getPricingApplyReadinessId())
                 .syncRequestTypeCode(SYNC_TYPE_LISTING_CREATE)
                 .syncRequestStatusCode(SYNC_STATUS_PENDING)
-                .syncReasonCode(SYNC_REASON_PRICING_DECISION_APPLIED)
+                .syncReasonCode(syncReasonCode(review))
                 .previousUnitPrice(money(candidate.listing().getUnitPrice()))
                 .requestedUnitPrice(money(review.getProposedPrice()))
                 .currencyCode(review.getCurrencyCode())
@@ -261,6 +273,23 @@ public class BricklinkPricingApplyService {
 
     private boolean hasRemoteInventoryMapping(BricklinkMarketplaceListing bricklinkListing) {
         return bricklinkListing != null && bricklinkListing.getBricklinkInventoryId() != null;
+    }
+
+    private boolean isReadyToApply(PricingApplyReadinessReview review) {
+        String statusCode = normalize(review.getReadinessStatusCode());
+        return READY_TO_APPLY.equals(statusCode) || READY_TO_APPLY_INITIAL_PRICE.equals(statusCode);
+    }
+
+    private boolean isInitialPriceReadiness(PricingApplyReadinessReview review) {
+        return READY_TO_APPLY_INITIAL_PRICE.equals(normalize(review.getReadinessStatusCode()));
+    }
+
+    private String syncReasonCode(PricingApplyReadinessReview review) {
+        return isInitialPriceReadiness(review) ? SYNC_REASON_INITIAL_PRICE_APPLIED : SYNC_REASON_PRICING_DECISION_APPLIED;
+    }
+
+    private boolean blank(String value) {
+        return value == null || value.isBlank();
     }
 
     private String requestedVisibilityScope(BricklinkMarketplaceListing bricklinkListing) {

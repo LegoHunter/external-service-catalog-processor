@@ -121,6 +121,39 @@ class BricklinkPricingApplyServiceTest {
     }
 
     @Test
+    void applyLocalAndEnqueueSyncPricesAnUnpricedDraftBeforeCreatingBricklinkListing() {
+        properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
+        marketplaceSyncProperties.setEnvironmentCode("sandbox");
+        marketplaceSyncProperties.setProduction(false);
+        marketplaceSyncProperties.setNonProdStockRoomId("C");
+        PricingApplyReadinessReview initialReview = review();
+        initialReview.setReadinessStatusCode("READY_TO_APPLY_INITIAL_PRICE");
+        initialReview.setCurrentPrice(null);
+        MarketplaceListing unpricedDraft = listing("DRAFT");
+        unpricedDraft.setUnitPrice(null);
+        arrangeReadyCandidate(initialReview, unpricedDraft);
+        when(bricklinkMarketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(bricklinkDraftMapping()));
+        when(marketplaceListingDao.updateUnitPrice(eq(100), eq(new BigDecimal("219.00")), any(ZonedDateTime.class)))
+                .thenReturn(Optional.of(listing("DRAFT")));
+        when(pricingDecisionDao.markApplied(eq(500L), any(ZonedDateTime.class))).thenReturn(Optional.of(decision()));
+        when(marketplaceListingSyncRequestDao.upsert(any(MarketplaceListingSyncRequest.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        BricklinkPricingApplyResult result = service.runOnce();
+
+        assertThat(result.failedRows()).isZero();
+        assertThat(result.localPricesUpdated()).isOne();
+        assertThat(result.syncRequestsEnqueued()).isOne();
+        org.mockito.ArgumentCaptor<MarketplaceListingSyncRequest> requestCaptor =
+                org.mockito.ArgumentCaptor.forClass(MarketplaceListingSyncRequest.class);
+        verify(marketplaceListingSyncRequestDao).upsert(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().getSyncRequestTypeCode()).isEqualTo("LISTING_CREATE");
+        assertThat(requestCaptor.getValue().getSyncReasonCode()).isEqualTo("INITIAL_PRICE_APPLIED");
+        assertThat(requestCaptor.getValue().getPreviousUnitPrice()).isNull();
+        assertThat(requestCaptor.getValue().getRequestedUnitPrice()).isEqualByComparingTo("219.00");
+    }
+
+    @Test
     void runOnceSkipsAlreadyAppliedPricingDecisionWithoutFailingRow() {
         properties.setMode("APPLY_LOCAL_AND_ENQUEUE_SYNC");
         when(pricingApplyReadinessDao.findLatestReadyToApplyReviews(25)).thenReturn(Set.of(review()));
@@ -143,7 +176,11 @@ class BricklinkPricingApplyServiceTest {
     }
 
     private void arrangeReadyCandidate(MarketplaceListing listing) {
-        when(pricingApplyReadinessDao.findLatestReadyToApplyReviews(25)).thenReturn(Set.of(review()));
+        arrangeReadyCandidate(review(), listing);
+    }
+
+    private void arrangeReadyCandidate(PricingApplyReadinessReview readinessReview, MarketplaceListing listing) {
+        when(pricingApplyReadinessDao.findLatestReadyToApplyReviews(25)).thenReturn(Set.of(readinessReview));
         when(marketplaceListingDao.findByMarketplaceListingId(100)).thenReturn(Optional.of(listing));
         when(pricingDecisionDao.findByPricingDecisionId(500L)).thenReturn(Optional.of(decision()));
     }

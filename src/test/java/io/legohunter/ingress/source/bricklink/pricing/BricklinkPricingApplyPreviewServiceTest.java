@@ -64,6 +64,28 @@ class BricklinkPricingApplyPreviewServiceTest {
     }
 
     @Test
+    void buildPreviewCountsInitialPriceReadinessAsActionable() {
+        PricingApplyReadinessReview initialPrice = PricingApplyReadinessReview.builder()
+                .readinessStatusCode("READY_TO_APPLY_INITIAL_PRICE")
+                .build();
+        PricingApplyReadinessReview blocked = PricingApplyReadinessReview.builder()
+                .readinessStatusCode("BLOCKED_MISSING_FINAL_PRICE")
+                .blockReasonCode("MISSING_FINAL_PRICE")
+                .build();
+        when(pricingApplyReadinessDao.findLatestReviews(null, null, 100))
+                .thenReturn(Set.of(initialPrice, blocked));
+
+        BricklinkPricingApplyPreviewReport report = service.buildPreview(null, null, 100);
+
+        assertThat(report.summary().returnedCount()).isEqualTo(2);
+        assertThat(report.summary().readyToApplyCount()).isOne();
+        assertThat(report.summary().blockedCount()).isOne();
+        assertThat(report.summary().readinessStatusCounts())
+                .containsEntry("READY_TO_APPLY_INITIAL_PRICE", 1)
+                .containsEntry("BLOCKED_MISSING_FINAL_PRICE", 1);
+    }
+
+    @Test
     void buildDryRunApplySelectionSelectsOnlyLatestReadyRows() {
         PricingApplyReadinessReview review = PricingApplyReadinessReview.builder()
                 .readinessStatusCode("READY_TO_APPLY")
