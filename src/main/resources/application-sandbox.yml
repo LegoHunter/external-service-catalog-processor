@@ -117,7 +117,7 @@ lego:
         bricklink-external-service-id: 2
         batch-size: 25
         sync-request-max-attempts: 3
-        mode: APPLY
+        mode: APPLY_LOCAL_AND_ENQUEUE_SYNC
         environment-code: sandbox
         scheduled:
           enabled: true
