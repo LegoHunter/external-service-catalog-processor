@@ -337,7 +337,7 @@ The service blocks when any of these are true:
 | `MISSING_PRIMARY_BRICKLINK_CATALOG_LINK` | Repair the catalog mapping |
 | `MISSING_MARKETPLACE_LISTING_DRAFT` | Create an open local BrickLink draft |
 | `INITIAL_PRICE_PENDING` | Leave the non-fixed DRAFT unpriced and wait for Pricing Plane crawl, decision, readiness, and apply; do not create a fake seed price |
-| `MISSING_UNIT_PRICE` / `INVALID_UNIT_PRICE` | Supply a positive unit price for an active/fixed listing or repair the applied Pricing Plane price |
+| `MISSING_FIXED_UNIT_PRICE` / `INVALID_UNIT_PRICE` | Supply a positive unit price for an active/fixed listing or repair the applied Pricing Plane price |
 | `MISSING_BRICKLINK_LISTING_DETAILS` | Supply BrickLink details for a non-production draft |
 | `NON_PROD_BRICKLINK_STOCKROOM_REQUIRED` | Set `isStockRoom=true` |
 | `NON_PROD_BRICKLINK_STOCKROOM_ID_REQUIRED` | Use the configured non-production stockroom |
@@ -886,7 +886,7 @@ INVENTORY_NOT_SELLABLE
 INVENTORY_NOT_AVAILABLE
 MISSING_PRIMARY_BRICKLINK_CATALOG_LINK
 MISSING_MARKETPLACE_LISTING_DRAFT
-MISSING_UNIT_PRICE
+MISSING_FIXED_UNIT_PRICE
 INVALID_UNIT_PRICE
 MISSING_BRICKLINK_LISTING_DETAILS
 NON_PROD_BRICKLINK_STOCKROOM_REQUIRED
@@ -1203,7 +1203,224 @@ Use this order when an item is not appearing in BrickLink:
 11. If the request is `FAILED`, inspect attempt count/error and retry only after determining whether it is transient.
 12. If BrickLink create returned success but the local row is not `ACTIVE`, inspect remote read-back safety and the retained remote ID before doing anything else.
 
+## Context consolidation: operator checkpoints from the completed workflow
+
+Use [`lego-data-service/runbook.md`](../lego-data-service/runbook.md) for the full
+service API contract and this playbook for the end-to-end ingress sequence. The
+following points capture the operational lessons that caused the most confusion during
+the initial sandbox listings.
+
+### Canonical initial-price request
+
+For an item that should receive its first price algorithmically, create the local draft
+with a nullable price and `fixedPrice=false`:
+
+```http
+POST {{lego_data_service_base_url}}/api/v1/marketplace-listings
+Content-Type: application/json
+
+{
+  "itemInventoryId": <item_inventory_id>,
+  "marketplaceCode": "BRICKLINK",
+  "externalCatalogItemId": <linked_external_catalog_item_id>,
+  "updateSaleIntentToSellable": false,
+  "saleIntentNote": "Approved for BrickLink listing",
+  "title": "Optional listing title",
+  "description": "Optional buyer-facing description",
+  "privateNotes": "Optional operator notes",
+  "unitPrice": null,
+  "currencyCode": "USD",
+  "fixedPrice": false,
+  "bricklink": {
+    "colorId": 0,
+    "bulk": 1,
+    "isRetain": false,
+    "isStockRoom": true,
+    "stockRoomId": "C",
+    "saleRate": 0,
+    "remarks": "Optional human remarks"
+  }
+}
+```
+
+The live database must have `marketplace_listing.unit_price` nullable. A 500 containing
+`Column 'unit_price' cannot be null` means the schema is behind the application
+contract; apply the database migration/deployer change and verify
+`information_schema.columns.is_nullable='YES'`. Do not put a fake `$0.01` or `$1.00`
+price into the request merely to bypass the schema.
+
+The local response should be a `DRAFT` with readiness blocker
+`INITIAL_PRICE_PENDING`. That blocker is expected until apply writes the first positive
+price. The service code currently uses `INITIAL_PRICE_PENDING`; the discussed
+`INITIAL_FIXED_PRICE_PENDING` spelling is not implemented.
+
+### Catalog link and BrickLink internal ID
+
+The requested `externalCatalogItemId` must be linked to the inventory item and must
+identify a BrickLink catalog row. Check the mapping with:
+
+```sql
+select iieci.item_inventory_id,
+       iieci.external_catalog_item_id,
+       iieci.is_primary,
+       eci.external_item_key as bricklink_item_number,
+       eci.item_type_code,
+       eci.external_unique_key as bricklink_internal_id
+from item_inventory_external_catalog_item iieci
+join external_catalog_item eci
+  on eci.external_catalog_item_id = iieci.external_catalog_item_id
+where iieci.item_inventory_id in (<item_inventory_id>)
+  and eci.external_service_id = 2
+order by iieci.item_inventory_id, iieci.is_primary desc;
+```
+
+`external_item_key` is the user-facing item number. `external_unique_key` is BrickLink's
+internal `idItem` used by `catalogifs.ajax`. A null internal key can be hydrated by the
+ingress crawler through `searchproduct.ajax`; it is not a reason to invent a key or to
+assume the draft API will perform the lookup. If the lookup has no match, is ambiguous,
+or fails over HTTP, inspect the crawl work-item status and error message.
+
+### How to read the pricing stages
+
+Trace one `marketplace_listing_id` through the tables in this order:
+
+```text
+pricing_crawl_work_item
+    -> pricing_snapshot / pricing_snapshot_listing
+    -> pricing_decision
+    -> pricing_apply_readiness
+    -> marketplace_listing.unit_price
+    -> marketplace_listing_sync_request
+    -> BrickLink remote inventory
+```
+
+The meanings are different:
+
+| Observation | What it proves | What it does not prove |
+| --- | --- | --- |
+| Crawl work `SUCCEEDED` | BrickLink source data was captured and persisted. | No price was necessarily calculated, applied, or synced. |
+| Decision `PROPOSED` with positive `final_price` | A price recommendation exists. | The local listing price has not necessarily changed. |
+| `READY_TO_APPLY_INITIAL_PRICE` | An unpriced local DRAFT passed initial-price gates. | The apply job has not necessarily run. |
+| `marketplace_listing.unit_price` is positive | Local price apply occurred or an operator set it. | BrickLink has not necessarily received it. |
+| Sync request `PENDING` | Remote work is queued. | The remote call has not completed. |
+| Sync request `SUCCEEDED` + listing `ACTIVE` + remote ID | Remote create/update passed read-back safety. | Nothing further is implied about future repricing. |
+
+For an initial price, `current_price`, `delta_amount`, and `delta_percent` are normally
+null because there is no baseline. The proposed positive amount is the value to explain
+to an operator.
+
+Useful read-only trace query:
+
+```sql
+select marketplace_listing_id, listing_status_code, unit_price,
+       fixed_price, external_listing_id
+from marketplace_listing
+where marketplace_listing_id = <marketplace_listing_id>;
+
+select pricing_decision_id, decision_status_code, reason_code,
+       computed_price, final_price, comparable_count, confidence, applied_at
+from pricing_decision
+where marketplace_listing_id = <marketplace_listing_id>
+order by pricing_decision_id desc;
+
+select pricing_apply_readiness_id, readiness_status_code, block_reason_code,
+       current_price, proposed_price, delta_amount, delta_percent,
+       comparable_count, confidence
+from pricing_apply_readiness
+where marketplace_listing_id = <marketplace_listing_id>
+order by pricing_apply_readiness_id desc;
+```
+
+### Manual sync and batching
+
+Manual sync is one listing per request:
+
+```http
+GET  {{lego_data_service_base_url}}/api/v1/marketplace-listings/{marketplaceListingId}/sync-request-preview
+POST {{lego_data_service_base_url}}/api/v1/marketplace-listings/{marketplaceListingId}/sync-requests
+Content-Type: application/json
+
+{}
+```
+
+An empty body defaults to `LISTING_CREATE`. The service endpoint cannot accept multiple
+item inventory IDs; a batch client must loop over listing IDs and must not skip the
+readiness/duplicate check for any item.
+
+If the body-less POST returns HTTP 500, query
+`marketplace_listing_sync_request` before retrying. A previous null-safe logging bug
+could return an error after the transaction committed, so blindly retrying can create a
+duplicate pending request.
+
+### Description and BrickLink My Remarks
+
+Before the first create:
+
+```http
+PATCH {{lego_data_service_base_url}}/api/v1/marketplace-listings/{marketplaceListingId}
+Content-Type: application/json
+
+{
+  "description": "Updated buyer-facing description",
+  "bricklink": {
+    "colorId": 0,
+    "bulk": 1,
+    "isRetain": false,
+    "isStockRoom": true,
+    "stockRoomId": "C",
+    "saleRate": 0,
+    "remarks": "Updated human remarks"
+  }
+}
+```
+
+Omit `bricklink` for a description-only PATCH. If it is present, send the complete
+writable nested block so omitted fields are not cleared. Never hand-author the managed
+`[SYSTEM_BEGIN] ... [SYSTEM_END]` block. Preview and queue `LISTING_CREATE` after the
+PATCH; the ingress mapper will include the local description and human remarks.
+
+After the listing is `ACTIVE`, the PATCH remains local-only. The pricing `PRICE_UPDATE`
+path can change price and preserve/repair managed system remarks, but it does not
+propagate local description, title, private notes, or a newly edited human-remarks
+value. There is no current metadata-only sync request workflow, and changing an active
+listing back to `DRAFT` is unsafe.
+
+### Sandbox timing and mode checkpoint
+
+The sandbox redeploy branch used for the verified end-to-end test had:
+
+```text
+crawl:             enabled, initial delay 30s, fixed delay 10m
+decision:          enabled, initial delay 120s, fixed delay 10m
+apply-readiness:   enabled, initial delay 180s, fixed delay 10m
+apply:             APPLY_LOCAL_AND_ENQUEUE_SYNC, initial delay 240s, fixed delay 10m
+marketplace-sync:  APPLY, production=false, stockroom C, initial delay 300s, fixed delay 10m
+```
+
+This means a newly created DRAFT is not expected to appear in BrickLink immediately.
+The crawl spread/jitter, blackout window, decision gates, apply gates, queue due time,
+and remote read-back all still apply. Local is always effectively `DRY_RUN`; sandbox
+and dev use the real account but must remain stockroom-only with managed non-production
+remarks.
+
+Verify the active ConfigMap/environment and pod image after each redeploy. A checked-in
+profile or force-redeploy branch is not proof of what Kubernetes loaded.
+
+### Operator sequence when a listing is missing
+
+1. Confirm the item is active, `AVAILABLE`, and `SELLABLE`.
+2. Confirm the primary BrickLink link and selected catalog link.
+3. Confirm the listing is an open local `DRAFT` or the expected `ACTIVE` row.
+4. If the DRAFT is non-fixed and unpriced, expect `INITIAL_PRICE_PENDING`; do not seed a
+   price or manually queue a sync request.
+5. Check the latest crawl, snapshot, decision, and readiness rows.
+6. Confirm apply mode and marketplace-sync mode from the running ingress configuration.
+7. Inspect the sync queue, `next_attempt_at`, attempts, and last error.
+8. If a remote create may have succeeded, inspect the stored BrickLink inventory ID and
+   remote safety state before retrying.
+
 ## References and related context
+
 
 - [Ingress runbook](runbook.md) — full configuration tables, maintenance reports, SQL checks, and failure modes.
 - [lego-data-service README](../lego-data-service/README.md) — intake, correction, listing, readiness, and sync-request API contracts.
