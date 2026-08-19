@@ -2976,3 +2976,201 @@ order by ai.sort_order;
 - Before enabling write-side marketplace sync, confirm the marketplace sync tables and constraints exist in the target database.
 - Before enabling fulfillment apply mode, confirm BrickLink order sync has written current staged payloads and start with a small fulfillment batch size.
 - Do not use fulfillment sync as the source of local accounting truth yet; transaction finalization, payment/cost/shipping rows, and marketplace order transaction links remain deferred.
+
+## Context consolidation: inventory intake and initial-price operations
+
+The following checkpoints capture the end-to-end behavior verified while exercising the
+inventory intake and Pricing Plane workflow. They are deliberately kept here with the
+ingress operational runbook because the service creates local state while ingress owns
+the scheduled and remote side effects.
+
+### Service-to-ingress contract
+
+`lego-data-service` is responsible for:
+
+```text
+POST /api/v1/inventory
+    -> item_inventory and primary BrickLink catalog link
+PATCH .../sale-intent
+    -> explicit SELLABLE inventory intent
+POST /api/v1/marketplace-listings
+    -> local DRAFT and BrickLink draft details
+GET .../marketplace-readiness
+    -> local blockers and warnings
+POST .../sync-requests
+    -> one durable LISTING_CREATE request for one listing
+```
+
+Ingress is responsible for:
+
+```text
+pricing_crawl_work_item
+    -> BrickLink AJAX lookup/hydration
+    -> pricing_snapshot + pricing_snapshot_listing
+    -> pricing_decision
+    -> pricing_apply_readiness
+    -> local unit_price apply
+    -> LISTING_CREATE or PRICE_UPDATE queue consumption
+    -> BrickLink REST call and remote read-back safety
+```
+
+The service endpoint is intentionally one listing at a time. It does not accept an
+array of inventory IDs. Batch operators must enumerate IDs, run readiness/preview per
+listing, and create only the requests whose individual blockers are empty.
+
+### Initial-price state names and handoff
+
+The current service blocker is `INITIAL_PRICE_PENDING`. This is the implemented name;
+`INITIAL_FIXED_PRICE_PENDING` was discussed but is not a current status. It means a
+non-fixed local `DRAFT` has `unit_price=NULL` and is waiting for the Pricing Plane. It
+does not mean that the crawl failed.
+
+The current ingress readiness/apply chain is:
+
+```text
+pricing_decision.status_code = PROPOSED
+        |
+        +--> pricing_apply_readiness.readiness_status_code
+                = READY_TO_APPLY_INITIAL_PRICE
+        |
+        +--> apply rechecks unpriced DRAFT + no remote inventory id
+        |
+        +--> marketplace_listing.unit_price becomes positive
+        +--> LISTING_CREATE request is queued
+        +--> marketplace sync creates and verifies BrickLink inventory
+```
+
+`pricing_crawl_work_item.work_status_code=SUCCEEDED` proves only that source market
+data was captured. It does not prove that a pricing decision exists, that the decision
+passed readiness, that local price apply ran, or that BrickLink was called. Always
+inspect the latest row in each stage when a listing still shows an old manual price.
+
+### Catalog internal-ID hydration
+
+The catalog mapping contains both the user-facing BrickLink item number
+(`external_item_key`) and BrickLink's internal `idItem` (`external_unique_key`). When
+the internal key is null, the pricing crawler can call BrickLink
+`searchproduct.ajax`, using the catalog item number and the catalog row's item type,
+then persist the resolved key. The catalog row's type is preferred; the configured
+`catalog-item-type` is only a fallback when the row type is blank.
+
+Use the following query before diagnosing a crawl:
+
+```sql
+select iieci.item_inventory_id,
+       iieci.external_catalog_item_id,
+       iieci.is_primary,
+       eci.external_item_key as bricklink_item_number,
+       eci.item_type_code,
+       eci.external_unique_key as bricklink_internal_id
+from item_inventory_external_catalog_item iieci
+join external_catalog_item eci
+  on eci.external_catalog_item_id = iieci.external_catalog_item_id
+where iieci.item_inventory_id in (<item_inventory_id>)
+  and eci.external_service_id = 2
+order by iieci.item_inventory_id, iieci.is_primary desc;
+```
+
+A null internal key is a recoverable hydration state, not permission to invent an ID.
+If hydration fails, use the work-item status/error (`NO_MATCH`, `AMBIGUOUS`, HTTP
+error, or parse error) and the item type to determine the next action.
+
+### Database preflight for unpriced drafts
+
+The algorithmic onboarding path requires the database column
+`marketplace_listing.unit_price` to allow null. Verify the live database rather than
+assuming that a checked-in migration has been deployed:
+
+```sql
+select table_name, column_name, is_nullable, column_type
+from information_schema.columns
+where table_schema = database()
+  and table_name = 'marketplace_listing'
+  and column_name = 'unit_price';
+```
+
+If this returns `NO`, the draft insert can fail with `Column 'unit_price' cannot be
+null`. Apply the database deployment/migration and verify again. Do not seed a fake
+price; doing so defeats the initial-price workflow.
+
+### Current sandbox execution checkpoint
+
+The recent sandbox redeploy branch was intentionally used to run the complete path:
+
+| Stage | Effective sandbox intent |
+| --- | --- |
+| Crawl | enabled; eligible statuses include `ACTIVE` and `DRAFT`; initial delay 30 seconds; fixed delay 10 minutes |
+| Decision | enabled; current snapshot required; initial delay 120 seconds; fixed delay 10 minutes |
+| Apply-readiness | enabled; initial delay 180 seconds; fixed delay 10 minutes |
+| Apply | `APPLY_LOCAL_AND_ENQUEUE_SYNC`; initial delay 240 seconds; fixed delay 10 minutes |
+| Marketplace sync | `APPLY`; `production=false`; stockroom-only; initial delay 300 seconds; fixed delay 10 minutes |
+
+The redeploy branch used stockroom `C` for sandbox. The checked-in `develop` profile
+and the running Kubernetes ConfigMap can differ from a force-redeploy branch, so verify
+the bound profile and pod environment before relying on this table. Local remains
+effectively `DRY_RUN`; sandbox/dev are real BrickLink account operations constrained to
+non-public stockroom inventory and managed system remarks.
+
+### Remote metadata behavior
+
+Before the first create, a local PATCH to the listing description or
+`bricklink.remarks` is included in the `LISTING_CREATE` payload. After the listing is
+`ACTIVE`, the same service PATCH changes local state only. The current pricing
+`PRICE_UPDATE` path can update price and preserve/repair the managed system remarks
+block, but it does not propagate a local description, title, private note, or new human
+remarks value. There is no current description-only or remarks-only sync request type.
+
+Never hand-author the `[SYSTEM_BEGIN] ... [SYSTEM_END]` remarks block, and never change
+an active listing back to `DRAFT` to force a create; both actions bypass remote ownership
+safety.
+
+### Safe retry after a sync-request HTTP 500
+
+The body-less service call is supported:
+
+```http
+POST /api/v1/marketplace-listings/{marketplaceListingId}/sync-requests
+Content-Type: application/json
+
+{}
+```
+
+An older null-safe logging defect could return HTTP 500 after the local transaction had
+already inserted the request. Before retrying, query the listing's pending/claimed
+requests:
+
+```sql
+select marketplace_listing_sync_request_id,
+       sync_request_type_code,
+       sync_request_status_code,
+       attempt_count,
+       next_attempt_at,
+       last_error_message
+from marketplace_listing_sync_request
+where marketplace_listing_id = <marketplace_listing_id>
+order by marketplace_listing_sync_request_id desc;
+```
+
+If a request exists, do not create a duplicate. Inspect ingress logs and let the
+existing request proceed or cancel it only when the service rules allow cancellation.
+
+### Kubernetes and GitHub Actions monitoring
+
+For a sandbox rollout triggered by a feature-branch push, verify the GitHub Action first,
+then inspect the application deployment:
+
+```text
+GitHub Action build/deploy completed
+    -> lego-data-ingress pod rolled out
+    -> scheduled-job startup logs appear
+    -> pricing/sync logs show the listing ID
+    -> database rows advance through each stage
+    -> BrickLink account shows stockroom inventory after remote read-back
+```
+
+If an action does not start, inspect ARC runner pod status, labels, image-pull events,
+and runner logs before debugging application code. If the action completes but no job
+logs appear, inspect the ingress deployment, active profile/configuration, scheduled
+flags, and pod restart/readiness events. Use the stage-specific metrics and the SQL
+queries in this runbook rather than treating a single successful crawl log as proof of
+end-to-end completion.
