@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: services-prod
+
+labels:
+  - pairs:
+      app.kubernetes.io/instance: dev
+
+resources:
+  - ../../base
+  - default-headers.yaml
+
+images:
+  - name: quay.io/tvattima/lego-data-ingress
+    newTag: snapshot
+
+replicas:
+  - name: lego-data-ingress
+    count: 1
+
+patches:
+  - path: deployment-env-patch.yaml
+  - path: deployment-resources-patch.yaml
+  - path: deployment-dev-patch.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: lego-data-ingress
+  - path: ingress-patch.yaml
+    target:
+      group: traefik.io
+      version: v1alpha1
+      kind: IngressRoute
+      name: lego-data-ingress

@@ -1,4 +1,4 @@
-name: Build Test Deploy CronJob
+name: Build Test Deploy
 
 on:
   push:
@@ -7,72 +7,77 @@ on:
   pull_request:
     branches:
       - develop
+      - main
     types:
+      - opened
+      - reopened
+      - synchronize
       - closed
 
 jobs:
-
-  # -----------------------------------------
-  # 1️⃣ Maven Build & Deploy
-  # -----------------------------------------
-  maven-build:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop')
+  feature-test:
+    name: Feature branch tests
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           java-version: '22'
-          distribution: 'temurin'
+          distribution: temurin
           cache: maven
+      - name: Run Maven tests
+        run: mvn --batch-mode test
 
-      - name: Build and deploy Maven snapshot
-        run: mvn --update-snapshots deploy
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-jar
-          path: target/*.jar
-
-  # -----------------------------------------
-  # 2️⃣ Container Build & Push
-  # -----------------------------------------
-  container-build:
+  sandbox-maven-build:
+    name: Sandbox Maven deploy
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
     runs-on: ubuntu-latest
-    needs: maven-build
     permissions:
       contents: read
       packages: write
-
-    outputs:
-      image-tag: ${{ github.sha }}
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download JAR artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/setup-java@v4
         with:
-          name: app-jar
-          path: target
+          java-version: '22'
+          distribution: temurin
+          cache: maven
+      - name: Build and deploy Maven snapshot
+        run: mvn --batch-mode --update-snapshots deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-app-jar
+          path: target/*.jar
 
-      - name: Buildah Build
-        id: buildah-build
+  sandbox-container-build:
+    name: Sandbox container build and push
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    needs: sandbox-maven-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sandbox-app-jar
+          path: target
+      - name: Buildah build
         uses: redhat-actions/buildah-build@v2
         with:
           image: quay.io/tvattima/lego-data-ingress
           tags: ${{ github.sha }}
           platforms: linux/arm64
           containerfiles: ./kubernetes/Containerfile
-
       - name: Push to Quay
         uses: redhat-actions/push-to-registry@v2
         with:
@@ -82,49 +87,180 @@ jobs:
           username: ${{ vars.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_TOKEN }}
 
-  # -----------------------------------------
-  # 3️⃣ Deploy
-  # -----------------------------------------
-  deploy:
-    needs: container-build
+  deploy-sandbox:
+    name: Deploy sandbox
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    needs: sandbox-container-build
     runs-on: [arc-runner]
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Deploy via Kustomize
+        env:
+          IMAGE_TAG: ${{ needs.sandbox-container-build.outputs.image-tag }}
         run: |
           set -euo pipefail
-
-          IMAGE_TAG="${{ needs.container-build.outputs.image-tag }}"
-
-          OVERLAY=""
-          NAMESPACE=""
-
-          if [[ "${GITHUB_REF}" == refs/heads/feature/* ]]; then
-            OVERLAY="sandbox"
-            NAMESPACE="services-sandbox"
-
-          elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" ]]; then
-
-            if [[ "${{ github.event.pull_request.base.ref }}" == "develop" ]]; then
-              OVERLAY="dev"
-              NAMESPACE="services-dev"
-            fi
-
-          else
-            echo "No deployment needed for ref $GITHUB_REF"
-            exit 0
-          fi
-
-          echo "Deploying overlay '$OVERLAY' to namespace '$NAMESPACE' with image tag '$IMAGE_TAG'"
-
-          # Ensure kustomize output uses correct image tag
-          kubectl kustomize "kubernetes/overlays/$OVERLAY" \
+          kubectl kustomize kubernetes/overlays/sandbox \
             | sed "s|quay.io/tvattima/lego-data-ingress:.*|quay.io/tvattima/lego-data-ingress:$IMAGE_TAG|g" \
-            | kubectl apply -n "$NAMESPACE" -f -
+            | kubectl apply -n services-sandbox -f -
+          kubectl rollout restart deployment lego-data-ingress -n services-sandbox
+          kubectl rollout status deployment lego-data-ingress -n services-sandbox --timeout=5m
 
-          # Force rollout if needed (guarantees update even if caching occurs)
-          kubectl rollout restart deployment lego-data-ingress -n "$NAMESPACE"
+  dev-maven-build:
+    name: DEV Maven deploy
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '22'
+          distribution: temurin
+          cache: maven
+      - name: Build and deploy Maven snapshot
+        run: mvn --batch-mode --update-snapshots deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-app-jar
+          path: target/*.jar
 
-          echo "Deployment complete!"
+  dev-container-build:
+    name: DEV container build and push
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    needs: dev-maven-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ github.event.pull_request.merge_commit_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dev-app-jar
+          path: target
+      - name: Buildah build
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: quay.io/tvattima/lego-data-ingress
+          tags: ${{ github.event.pull_request.merge_commit_sha }}
+          platforms: linux/arm64
+          containerfiles: ./kubernetes/Containerfile
+      - name: Push to Quay
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          registry: quay.io
+          image: tvattima/lego-data-ingress
+          tags: ${{ github.event.pull_request.merge_commit_sha }}
+          username: ${{ vars.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_TOKEN }}
+
+  deploy-dev:
+    name: Deploy DEV
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'develop' && startsWith(github.head_ref, 'feature/')
+    needs: dev-container-build
+    runs-on: [arc-runner]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Deploy via Kustomize
+        env:
+          IMAGE_TAG: ${{ needs.dev-container-build.outputs.image-tag }}
+        run: |
+          set -euo pipefail
+          kubectl kustomize kubernetes/overlays/dev \
+            | sed "s|quay.io/tvattima/lego-data-ingress:.*|quay.io/tvattima/lego-data-ingress:$IMAGE_TAG|g" \
+            | kubectl apply -n services-dev -f -
+          kubectl rollout restart deployment lego-data-ingress -n services-dev
+          kubectl rollout status deployment lego-data-ingress -n services-dev --timeout=5m
+
+  prod-maven-build:
+    name: PROD Maven deploy
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '22'
+          distribution: temurin
+          cache: maven
+      - name: Build and deploy Maven snapshot
+        run: mvn --batch-mode --update-snapshots deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-app-jar
+          path: target/*.jar
+
+  prod-container-build:
+    name: PROD container build and push
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop'
+    needs: prod-maven-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ github.event.pull_request.merge_commit_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: prod-app-jar
+          path: target
+      - name: Buildah build
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: quay.io/tvattima/lego-data-ingress
+          tags: ${{ github.event.pull_request.merge_commit_sha }}
+          platforms: linux/arm64
+          containerfiles: ./kubernetes/Containerfile
+      - name: Push to Quay
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          registry: quay.io
+          image: tvattima/lego-data-ingress
+          tags: ${{ github.event.pull_request.merge_commit_sha }}
+          username: ${{ vars.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_TOKEN }}
+
+  deploy-prod:
+    name: Deploy PROD
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main' && github.head_ref == 'develop'
+    needs: prod-container-build
+    runs-on: [arc-runner]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Deploy via Kustomize
+        env:
+          IMAGE_TAG: ${{ needs.prod-container-build.outputs.image-tag }}
+        run: |
+          set -euo pipefail
+          kubectl kustomize kubernetes/overlays/prod \
+            | sed "s|quay.io/tvattima/lego-data-ingress:.*|quay.io/tvattima/lego-data-ingress:$IMAGE_TAG|g" \
+            | kubectl apply -n services-prod -f -
+          kubectl rollout restart deployment lego-data-ingress -n services-prod
+          kubectl rollout status deployment lego-data-ingress -n services-prod --timeout=5m
