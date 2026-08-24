@@ -195,7 +195,10 @@ kafka:
       topic: sandbox-upload-photo
       consumer:
         group-id: sandbox-upload-photo-group
-        concurrency: 1
+        # Image scaling and MinIO/MySQL I/O are performed synchronously per listener.
+        # The topic has 12 partitions; four consumers provide bounded parallelism
+        # without increasing the in-flight batch size per consumer.
+        concurrency: 4
         properties:
           max-poll-records: 1
           max-poll-interval-ms: 1800000
