@@ -67,6 +67,7 @@ public class BricklinkOpenOrderProbeService {
     private final BricklinkMarketplaceListingDao bricklinkMarketplaceListingDao;
     private final MarketplaceListingDao marketplaceListingDao;
     private final ItemInventoryDao itemInventoryDao;
+    private final BricklinkOrderProjectionService projectionService;
     private final ObjectMapper objectMapper;
 
     public BricklinkOrderProbeResult runOnce() {
@@ -249,6 +250,19 @@ public class BricklinkOpenOrderProbeService {
         ));
 
         int orderItemsWritten = syncOrderItems(persistedOrder.getMarketplaceOrderId(), order.getOrder_id(), order.getStatus(), orderItems);
+        BricklinkOrderProjectionResult projection = projectionService.project(
+                persistedOrder,
+                marketplaceOrderItemDao.findByMarketplaceOrderId(persistedOrder.getMarketplaceOrderId()),
+                order
+        );
+        log.info(
+                "bricklink.order_sync.probe.projected externalOrderId={} transactionId={} invoiced={} projectedItems={} projectedCosts={}",
+                persistedOrder.getExternalOrderId(),
+                projection.transactionId(),
+                projection.invoiced(),
+                projection.projectedItems(),
+                projection.projectedCosts()
+        );
         return new BricklinkOrderWriteResult(1, orderItemsWritten, 2);
     }
 

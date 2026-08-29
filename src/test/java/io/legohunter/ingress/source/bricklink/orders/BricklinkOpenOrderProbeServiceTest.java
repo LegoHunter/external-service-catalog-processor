@@ -40,6 +40,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -62,6 +63,8 @@ class BricklinkOpenOrderProbeServiceTest {
     private MarketplaceListingDao marketplaceListingDao;
     @Mock
     private ItemInventoryDao itemInventoryDao;
+    @Mock
+    private BricklinkOrderProjectionService projectionService;
 
     private BricklinkOrderSyncProperties properties;
     private SimpleMeterRegistry meterRegistry;
@@ -82,8 +85,11 @@ class BricklinkOpenOrderProbeServiceTest {
                 bricklinkMarketplaceListingDao,
                 marketplaceListingDao,
                 itemInventoryDao,
+                projectionService,
                 new ObjectMapper().findAndRegisterModules()
         );
+        lenient().when(projectionService.project(any(MarketplaceOrder.class), any(Set.class), any(Order.class)))
+                .thenReturn(new BricklinkOrderProjectionResult(1L, false, 1, 0));
     }
 
     @Test
