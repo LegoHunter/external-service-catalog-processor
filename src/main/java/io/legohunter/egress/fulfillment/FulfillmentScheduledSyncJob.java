@@ -15,7 +15,7 @@ public class FulfillmentScheduledSyncJob {
     private final FulfillmentSyncService fulfillmentSyncService;
 
     @Scheduled(
-            fixedDelayString = "${lego.fulfillment.sync.scheduled.fixed-delay-ms:300000}",
+            fixedDelayString = "${lego.fulfillment.sync.scheduled.fixed-delay-ms:3600000}",
             initialDelayString = "${lego.fulfillment.sync.scheduled.initial-delay-ms:30000}"
     )
     @SchedulerLock(

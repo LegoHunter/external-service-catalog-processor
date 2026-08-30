@@ -15,7 +15,7 @@ public class BricklinkOpenOrderProbeJob {
     private final BricklinkOpenOrderProbeService probeService;
 
     @Scheduled(
-            fixedDelayString = "${lego.bricklink.orders.sync.scheduled.fixed-delay-ms:300000}",
+            fixedDelayString = "${lego.bricklink.orders.sync.scheduled.fixed-delay-ms:3600000}",
             initialDelayString = "${lego.bricklink.orders.sync.scheduled.initial-delay-ms:30000}"
     )
     @SchedulerLock(

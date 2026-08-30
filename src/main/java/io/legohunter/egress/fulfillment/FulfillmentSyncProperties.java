@@ -60,7 +60,7 @@ public class FulfillmentSyncProperties {
         private boolean apply = false;
         private boolean enabled = false;
         private int batchSize = 25;
-        private long fixedDelayMs = 300_000L;
+        private long fixedDelayMs = 3_600_000L;
         private long initialDelayMs = 30_000L;
         private String lockAtMostFor = "10m";
         private String lockAtLeastFor = "0s";
