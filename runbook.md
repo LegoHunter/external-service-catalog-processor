@@ -34,7 +34,7 @@ The service defaults to the `local,sandbox` profiles unless overridden by `sprin
 | BrickLink pricing decision | Scheduled job | Read latest BrickLink pricing snapshots, compute competitive prices for active listings and unpriced drafts, and persist auditable non-applied pricing decisions. |
 | BrickLink pricing apply readiness | Scheduled job | Dry-run review of latest proposed pricing decisions, including first-price decisions for unpriced drafts; writes no listing prices and triggers no marketplace sync. |
 | BrickLink order sync | Scheduled job | Poll BrickLink open orders and, when apply mode is enabled, sync marketplace order staging tables. |
-| Fulfillment sync | Scheduled job | Map staged BrickLink marketplace orders to ShipStation orders, then reconcile shipped ShipStation orders back to BrickLink when apply mode is enabled. |
+| Fulfillment sync | Scheduled job | Map canonically projected, invoiced BrickLink orders to ShipStation drafts, then persist confirmed shipments and reconcile them back to BrickLink when apply mode is enabled. |
 
 ## Core Data Semantics
 
@@ -1004,6 +1004,7 @@ Candidate requirements:
 | Requirement | Detail |
 | --- | --- |
 | Marketplace order status | `marketplace_order.external_status_code` must match `lego.fulfillment.statuses`. |
+| Canonical invoice projection | Candidate selection starts from `transactions` and requires the matching order-level `marketplace_order_transaction_link` to be `INVOICED`, the staged `is_invoiced` flag to be true, and at least one staged order item. Open orders are not sent to ShipStation. |
 | Raw payloads | Latest `ORDER_RESPONSE` and `ORDER_ITEMS_RESPONSE` payloads must exist in `marketplace_order_payload`. |
 | Order item image URLs | Uses the configured image-hosting external service id. Primary photo wins; otherwise any available photo is used; if no photo exists, no image URL is assigned. |
 
@@ -1018,18 +1019,20 @@ Live fulfillment behavior when `apply=true`:
 
 | ShipStation state | Behavior |
 | --- | --- |
-| No existing order for `BL-{orderId}` | Creates the ShipStation order from the staged BrickLink order/items payloads. |
-| Exactly one existing unshipped order | Updates that ShipStation order by setting the existing ShipStation `orderId` on the mapped order. |
-| Exactly one existing shipped order | Fetches ShipStation shipments, chooses the first non-voided shipment with tracking, writes tracking/date shipped to BrickLink, marks the BrickLink order `SHIPPED`, sends Drive Thru when needed, and marks the local marketplace order as shipped. |
+| No existing order for `BL-{orderId}` | Creates the ShipStation draft from the preserved BrickLink order/items payloads after the canonical invoice projection is confirmed. |
+| Exactly one existing unshipped order | Updates that ShipStation draft by setting the existing ShipStation `orderId` on the mapped order. |
+| Exactly one existing shipped order | Fetches ShipStation shipments, chooses the first non-voided shipment with both an ID and tracking, maps its carrier to an authoritative local carrier code, persists its ID/service/date/tracking and active canonical transaction-item links, then writes tracking/date shipped to BrickLink, marks the BrickLink order `SHIPPED`, sends Drive Thru when needed, and marks the local marketplace order as shipped. |
 | More than one existing order | Fails that candidate and leaves other candidates running. |
-| Shipped order without tracking | Fails that candidate because BrickLink cannot be safely reconciled. |
+| Shipped order without a non-voided tracked shipment ID | Fails that candidate because neither canonical shipment persistence nor BrickLink reconciliation can be performed safely. |
 
 Important boundaries:
 
 | Boundary | Detail |
 | --- | --- |
-| ShipStation linkage | Linkage is currently idempotent by `orderNumber`/`orderKey`, using the configured prefix plus BrickLink order id. No ShipStation id is persisted in `lego-data` yet. |
-| Source of order details | Fulfillment maps from staged `marketplace_order_payload` JSON captured by the BrickLink order sync. |
+| ShipStation linkage | Draft linkage is idempotent by `orderNumber`/`orderKey`, using the configured prefix plus BrickLink order id. A confirmed label is additionally persisted by ShipStation `shipmentId` in the canonical `shipment` table. |
+| Canonical lifecycle gate | Candidate selection requires the Phase 2 transaction projection to be invoiced. The active canonical transaction-item links receive the confirmed shipment association. |
+| Carrier authority | ShipStation carrier values resolve only to configured `carrier` table codes. The built-in aliases cover `stamps*`/`usps*` → `USPS`, `ups*` → `UPS`, `fedex*` → `FEDEX`, and `dhl*` → `DHL`; an unmapped value fails safely before local or BrickLink updates. |
+| Source of order details | Fulfillment maps ShipStation's integration document from staged `marketplace_order_payload` JSON captured by the BrickLink order sync; the canonical transaction controls eligibility and shipment persistence. |
 | Inventory state | BrickLink order sync marks linked active order items as `RESERVED_FOR_ORDER`. Fulfillment shipped reconciliation marks linked item inventory rows as `SOLD`. |
 | Deferred accounting work | Local transaction finalization, payment/cost/shipping rows, and marketplace order transaction links are intentionally not performed by this job yet. |
 
@@ -1395,7 +1398,7 @@ Backed by `FulfillmentSyncProperties`.
 | --- | --- | --- | --- |
 | `lego.fulfillment.marketplace-code` | `BRICKLINK` | Non-blank string; normalized to uppercase | Marketplace code used to select staged orders. |
 | `lego.fulfillment.metrics-tag` | `fulfillment` | Non-blank string | Low-cardinality provider tag for metrics. |
-| `lego.fulfillment.statuses` | `PENDING`, `UPDATED`, `READY`, `PROCESSING`, `PAID`, `PACKED` | Marketplace external status strings; code trims, uppercases, and de-duplicates | Candidate marketplace order statuses. |
+| `lego.fulfillment.statuses` | `PENDING`, `UPDATED`, `READY`, `PROCESSING`, `PAID`, `PACKED` | Marketplace external status strings; code trims, uppercases, and de-duplicates | Candidate marketplace-order statuses after the canonical-invoice eligibility gate. |
 | `lego.fulfillment.sync.scheduled.enabled` | `false` | `true`, `false` | Creates scheduled fulfillment job/service beans when true. |
 | `lego.fulfillment.sync.scheduled.apply` | `false` | `true`, `false` | Enables ShipStation and BrickLink writes when true. Keep false for dry-run mapping validation. |
 | `lego.fulfillment.sync.scheduled.batch-size` | `25` | Integer; effective value at least `1` | Candidate marketplace order limit per run. |
@@ -2070,12 +2073,12 @@ Set `enabled=false` if the job should stop entirely.
 2. Confirm BrickLink credentials and ShipStation credentials are present in runtime config. For sandbox/local profile runs, ShipStation credentials normally come from `${import-path}/shipstation-client-api-keys.yml`.
 3. Set `lego.fulfillment.sync.scheduled.enabled=true`.
 4. Keep `lego.fulfillment.sync.scheduled.apply=false` for initial validation.
-5. Watch `fulfillment.sync_job.order_mapped` and confirm `orderNumber=BL-{bricklinkOrderId}`, item counts, image URLs, insurance options, international options, and shipping service choices are correct.
+5. Confirm the selected order has an `INVOICED` canonical order link and active canonical transaction-item links, then watch `fulfillment.sync_job.order_mapped` and confirm `orderNumber=BL-{bricklinkOrderId}`, item counts, image URLs, insurance options, international options, and shipping service choices are correct.
 6. Confirm `/actuator/prometheus` exposes `fulfillment_sync`, `fulfillment_sync_duration`, and `fulfillment_sync_order`.
 7. Set a small `lego.fulfillment.sync.scheduled.batch-size` before first live apply validation.
 8. Set `lego.fulfillment.sync.scheduled.apply=true` only after dry-run mapping and credentials are verified.
 9. Watch `fulfillment.sync_job.completed` for `ordersCreated`, `ordersUpdated`, `ordersShippedReconciled`, `ordersSkipped`, and `ordersFailed`.
-10. Confirm ShipStation contains one order per BrickLink order number and BrickLink is updated only after ShipStation reports the order shipped with tracking.
+10. Confirm ShipStation contains one order per BrickLink order number, the local canonical shipment has the ShipStation shipment ID/carrier/service/tracking and transaction-item links, and BrickLink is updated only after ShipStation reports the order shipped with tracking.
 
 Rollback:
 

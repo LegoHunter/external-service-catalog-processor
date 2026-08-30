@@ -21,6 +21,8 @@ import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
+import io.legohunter.data.dto.Carrier;
+import io.legohunter.data.dto.Transactions;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,6 +47,7 @@ class FulfillmentSyncServiceApplyTest {
     private MarketplaceOrderItemDao marketplaceOrderItemDao;
     private MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
     private ItemInventoryDao itemInventoryDao;
+    private CanonicalShipmentReconciliationService canonicalShipmentReconciliationService;
     private FulfillmentOrderItemImageResolver orderItemImageResolver;
     private ShipStationRestClient shipStationRestClient;
     private BricklinkRestClient bricklinkRestClient;
@@ -58,12 +61,20 @@ class FulfillmentSyncServiceApplyTest {
         marketplaceOrderItemDao = mock(MarketplaceOrderItemDao.class);
         marketplaceOrderPayloadDao = mock(MarketplaceOrderPayloadDao.class);
         itemInventoryDao = mock(ItemInventoryDao.class);
+        canonicalShipmentReconciliationService = mock(CanonicalShipmentReconciliationService.class);
         orderItemImageResolver = mock(FulfillmentOrderItemImageResolver.class);
         shipStationRestClient = mock(ShipStationRestClient.class);
         bricklinkRestClient = mock(BricklinkRestClient.class);
         properties = new FulfillmentSyncProperties();
         properties.getSync().getScheduled().setApply(true);
         objectMapper = new ObjectMapper().findAndRegisterModules();
+        when(canonicalShipmentReconciliationService.findInvoicedOrder(any(MarketplaceOrder.class)))
+                .thenReturn(Optional.of(canonicalOrder()));
+        when(canonicalShipmentReconciliationService.persistTrackedShipment(
+                any(CanonicalShipmentReconciliationService.CanonicalFulfillmentOrder.class),
+                any(Shipment.class),
+                any(ShipStationOrder.class)
+        )).thenAnswer(invocation -> canonicalShipment(invocation.getArgument(1)));
         service = new FulfillmentSyncService(
                 shipStationRestClient,
                 bricklinkRestClient,
@@ -71,6 +82,7 @@ class FulfillmentSyncServiceApplyTest {
                 marketplaceOrderItemDao,
                 marketplaceOrderPayloadDao,
                 itemInventoryDao,
+                canonicalShipmentReconciliationService,
                 new BricklinkShipStationOrderMapper(),
                 orderItemImageResolver,
                 new FulfillmentSyncMetricsService(new SimpleMeterRegistry()),
@@ -146,6 +158,7 @@ class FulfillmentSyncServiceApplyTest {
         when(shipStationRestClient.getShipments(Map.of("orderId", 42L)))
                 .thenReturn(ShipmentsList.builder()
                         .shipments(List.of(Shipment.builder()
+                                .shipmentId(901L)
                                 .orderId(42L)
                                 .trackingNumber("9400111899223855555555")
                                 .shipDate(OffsetDateTime.parse("2026-06-09T14:00:00Z"))
@@ -258,5 +271,24 @@ class FulfillmentSyncServiceApplyTest {
         BricklinkResource<T> resource = new BricklinkResource<>();
         resource.setData(data);
         return resource;
+    }
+
+    private static CanonicalShipmentReconciliationService.CanonicalFulfillmentOrder canonicalOrder() {
+        return new CanonicalShipmentReconciliationService.CanonicalFulfillmentOrder(
+                Transactions.builder().transactionId(701L).build(),
+                List.of(702L)
+        );
+    }
+
+    private static CanonicalShipmentReconciliationService.CanonicalShipment canonicalShipment(Shipment shipStationShipment) {
+        return new CanonicalShipmentReconciliationService.CanonicalShipment(
+                io.legohunter.data.dto.Shipment.builder()
+                        .shipmentId(801L)
+                        .shipmentTrackingNumber(shipStationShipment.getTrackingNumber())
+                        .build(),
+                Carrier.builder().carrierCode("USPS")
+                        .trackingUrlPattern("https://tools.usps.com/go/TrackConfirmAction.action?tLabels=%s")
+                        .build()
+        );
     }
 }
