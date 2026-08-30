@@ -61,7 +61,7 @@ public class BricklinkOrderSyncProperties {
     public static class Scheduled {
         private boolean apply = false;
         private boolean enabled = false;
-        private long fixedDelayMs = 300_000L;
+        private long fixedDelayMs = 3_600_000L;
         private long initialDelayMs = 30_000L;
         private String lockAtMostFor = "10m";
         private String lockAtLeastFor = "0s";

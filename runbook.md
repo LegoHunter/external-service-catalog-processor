@@ -73,10 +73,12 @@ Pricing Plane jobs operate from configured `ACTIVE` and `DRAFT` `marketplace_lis
 ```yaml
 spring:
   profiles:
-    default: local,sandbox
+    default: sandbox,local
 ```
 
-If no profile is supplied, Spring loads `application.yml`, `application-local.yml`, and `application-sandbox.yml`.
+If no profile is supplied, Spring loads `application.yml`, `application-sandbox.yml`, and `application-local.yml`.
+`local` is intentionally last so its one-minute worker cadence overrides the
+shared SANDBOX settings used by local development.
 
 ### Local Profile
 
@@ -199,6 +201,25 @@ Operational notes:
 
 Scheduling is enabled globally by `io.legohunter.ingress.scheduling.config.SchedulingConfiguration` using `@EnableScheduling`. ShedLock is configured by `SchedulerConfiguration`, so scheduled jobs should have lock rows available in the database configured by the application.
 
+### BrickLink Order and Fulfillment Cadence
+
+Both the BrickLink order-ingestion and ShipStation fulfillment jobs use a fixed
+delay measured from the end of the preceding run. Their effective schedules are
+profile-owned; `application-kubernetes.yml` deliberately does not override
+either cadence.
+
+| Active profile(s) | Order-ingestion delay | Fulfillment delay | Scheduled apply mode |
+| --- | --- | --- | --- |
+| Base configuration before a profile override | 1 hour | 1 hour | Disabled (safe base default) |
+| Default local `sandbox,local` | 1 minute | 1 minute | Enabled |
+| `sandbox,kubernetes` | 5 minutes | 5 minutes | Enabled |
+| `dev,kubernetes` | 5 minutes | 5 minutes | Enabled |
+| `prod,kubernetes` | 1 hour | 1 hour | Enabled |
+
+`application-prod.yml` makes the production cadence explicit. For a controlled
+dry run, override either job's `apply` property to `false`; setting `enabled` to
+`false` stops that job entirely.
+
 ### `BricklinkOpenOrderProbeJob`
 
 Class: `io.legohunter.ingress.source.bricklink.orders.BricklinkOpenOrderProbeJob`
@@ -213,8 +234,8 @@ Schedule:
 
 | Setting | Default | Valid values | Description |
 | --- | --- | --- | --- |
-| `lego.bricklink.orders.sync.scheduled.fixed-delay-ms` | `300000` in code, `60000` in base YAML | Long milliseconds, >= 0 | Delay between the end of one run and the start of the next. |
-| `lego.bricklink.orders.sync.scheduled.initial-delay-ms` | `30000` in code, `5000` in base YAML | Long milliseconds, >= 0 | Delay after app startup before first run. |
+| `lego.bricklink.orders.sync.scheduled.fixed-delay-ms` | `3600000` in code and base YAML; profile cadence above overrides it | Long milliseconds, >= 0 | Delay between the end of one run and the start of the next. |
+| `lego.bricklink.orders.sync.scheduled.initial-delay-ms` | `30000` in code and base YAML | Long milliseconds, >= 0 | Delay after app startup before first run. |
 | `lego.bricklink.orders.sync.scheduled.lock-at-most-for` | `10m` | ShedLock duration, for example `30s`, `10m`, `1h` | Maximum distributed lock duration. |
 | `lego.bricklink.orders.sync.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
 
@@ -992,7 +1013,7 @@ Schedule and selection settings:
 
 | Setting | Default | Valid values | Description |
 | --- | --- | --- | --- |
-| `lego.fulfillment.sync.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between job runs. |
+| `lego.fulfillment.sync.scheduled.fixed-delay-ms` | `3600000` in code and base YAML; profile cadence above overrides it | Long milliseconds, >= 0 | Delay between job runs. |
 | `lego.fulfillment.sync.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | Delay after startup before first run. |
 | `lego.fulfillment.sync.scheduled.lock-at-most-for` | `10m` | ShedLock duration | Maximum distributed lock duration. |
 | `lego.fulfillment.sync.scheduled.lock-at-least-for` | `0s` | ShedLock duration | Minimum distributed lock duration. |
@@ -1166,10 +1187,10 @@ Backed by `BricklinkOrderSyncProperties`.
 | `lego.bricklink.orders.sync.direction` | `in` | BrickLink API direction, normally `in` for seller/inbound orders or `out` for buyer/outbound orders | Direction sent to BrickLink order list calls and written to marketplace orders. |
 | `lego.bricklink.orders.sync.statuses` | `PENDING`, `UPDATED`, `READY`, `PROCESSING`, `PAID`, `PACKED` | BrickLink API order status strings; code trims, uppercases, and de-duplicates | Statuses queried every run. |
 | `lego.bricklink.orders.sync.include-unfiled-cancelled` | `true` | `true`, `false` | Also query unfiled cancelled orders using `filed=false&status=CANCELLED`. |
-| `lego.bricklink.orders.sync.scheduled.enabled` | `false` in code, `true` in base YAML | `true`, `false` | Creates scheduled job/service beans when true. |
+| `lego.bricklink.orders.sync.scheduled.enabled` | `false` in code and base YAML; environment profiles enable it | `true`, `false` | Creates scheduled job/service beans when true. |
 | `lego.bricklink.orders.sync.scheduled.apply` | `false` | `true`, `false` | Enables database writes when true. Keep false for probe-only validation. |
-| `lego.bricklink.orders.sync.scheduled.fixed-delay-ms` | `300000` in code, `60000` in base YAML | Long milliseconds, >= 0 | Delay between runs. |
-| `lego.bricklink.orders.sync.scheduled.initial-delay-ms` | `30000` in code, `5000` in base YAML | Long milliseconds, >= 0 | First-run startup delay. |
+| `lego.bricklink.orders.sync.scheduled.fixed-delay-ms` | `3600000` in code and base YAML; profile cadence above overrides it | Long milliseconds, >= 0 | Delay between runs. |
+| `lego.bricklink.orders.sync.scheduled.initial-delay-ms` | `30000` in code and base YAML | Long milliseconds, >= 0 | First-run startup delay. |
 | `lego.bricklink.orders.sync.scheduled.lock-at-most-for` | `10m` | ShedLock duration string | Maximum distributed lock time. |
 | `lego.bricklink.orders.sync.scheduled.lock-at-least-for` | `0s` | ShedLock duration string | Minimum distributed lock time. |
 
@@ -1402,7 +1423,7 @@ Backed by `FulfillmentSyncProperties`.
 | `lego.fulfillment.sync.scheduled.enabled` | `false` | `true`, `false` | Creates scheduled fulfillment job/service beans when true. |
 | `lego.fulfillment.sync.scheduled.apply` | `false` | `true`, `false` | Enables ShipStation and BrickLink writes when true. Keep false for dry-run mapping validation. |
 | `lego.fulfillment.sync.scheduled.batch-size` | `25` | Integer; effective value at least `1` | Candidate marketplace order limit per run. |
-| `lego.fulfillment.sync.scheduled.fixed-delay-ms` | `300000` | Long milliseconds, >= 0 | Delay between runs. |
+| `lego.fulfillment.sync.scheduled.fixed-delay-ms` | `3600000` in code and base YAML; profile cadence above overrides it | Long milliseconds, >= 0 | Delay between runs. |
 | `lego.fulfillment.sync.scheduled.initial-delay-ms` | `30000` | Long milliseconds, >= 0 | First-run startup delay. |
 | `lego.fulfillment.sync.scheduled.lock-at-most-for` | `10m` | ShedLock duration string | Maximum distributed lock time. |
 | `lego.fulfillment.sync.scheduled.lock-at-least-for` | `0s` | ShedLock duration string | Minimum distributed lock time. |

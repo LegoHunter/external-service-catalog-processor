@@ -27,6 +27,12 @@ lego:
     buckets:
       final-photo: lego-photos-sandbox
   bricklink:
+    orders:
+      sync:
+        scheduled:
+          enabled: true
+          apply: true
+          fixed-delay-ms: 300000
     pricing:
       crawl:
         enabled: true
@@ -143,6 +149,12 @@ lego:
         initial-delay-ms: 300000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
+  fulfillment:
+    sync:
+      scheduled:
+        enabled: true
+        apply: true
+        fixed-delay-ms: 300000
 
 kafka:
   bootstrap-servers: redpanda-dev-0.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-1.redpanda-dev.redpanda-dev.svc.cluster.local:9092,redpanda-dev-2.redpanda-dev.redpanda-dev.svc.cluster.local:9092

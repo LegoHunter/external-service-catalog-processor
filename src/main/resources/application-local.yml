@@ -26,6 +26,8 @@ lego:
         scheduled:
           enabled: true
           apply: true
+          fixed-delay-ms: 60000
+          initial-delay-ms: 5000
     pricing:
       crawl:
         enabled: true
@@ -89,6 +91,7 @@ lego:
       scheduled:
         enabled: true
         apply: true
+        fixed-delay-ms: 60000
 
 kafka:
   bootstrap-servers: redpanda-dev-0.dev.internal.legohunter.io:31092,redpanda-dev-1.dev.internal.legohunter.io:31092,redpanda-dev-2.dev.internal.legohunter.io:31092

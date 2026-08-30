@@ -1,0 +1,14 @@
+lego:
+  bricklink:
+    orders:
+      sync:
+        scheduled:
+          enabled: true
+          apply: true
+          fixed-delay-ms: 3600000
+  fulfillment:
+    sync:
+      scheduled:
+        enabled: true
+        apply: true
+        fixed-delay-ms: 3600000

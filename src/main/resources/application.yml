@@ -1,6 +1,6 @@
 spring:
   profiles:
-    default: local,sandbox
+    default: sandbox,local
   application:
     name: Lego Data Ingress Service
 
@@ -120,10 +120,10 @@ lego:
           - PACKED
         include-unfiled-cancelled: true
         scheduled:
-          enabled: true
+          enabled: false
           apply: false
-          fixed-delay-ms: 60000
-          initial-delay-ms: 5000
+          fixed-delay-ms: 3600000
+          initial-delay-ms: 30000
           lock-at-most-for: 10m
           lock-at-least-for: 0s
   image-hosting:
@@ -181,7 +181,7 @@ lego:
         enabled: false
         apply: false
         batch-size: 25
-        fixed-delay-ms: 300000
+        fixed-delay-ms: 3600000
         initial-delay-ms: 30000
         lock-at-most-for: 10m
         lock-at-least-for: 0s
