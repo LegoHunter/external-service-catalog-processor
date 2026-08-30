@@ -42,7 +42,14 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/** Projects a staged inbound BrickLink order into the canonical accounting tables. */
+/**
+ * Projects a staged inbound BrickLink order into the canonical accounting tables.
+ *
+ * <p>The projection follows four lifecycle steps: resolve the parties and transaction header,
+ * capture immutable party snapshots, reconcile active order lines and their revenue/cost facts,
+ * then freeze the projection when BrickLink reports the order invoiced. Later polls of a frozen
+ * order intentionally make no accounting changes.</p>
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -68,6 +75,14 @@ public class BricklinkOrderProjectionService {
     private final MarketplaceOrderTransactionLinkDao linkDao;
 
     @Transactional
+    /**
+     * Projects one staged BrickLink order and its current staged line items.
+     *
+     * @param marketplaceOrder the durable staged order header
+     * @param marketplaceOrderItems the current durable staged order lines
+     * @param bricklinkOrder the current API payload, including buyer and shipping details
+     * @return the projected transaction and lifecycle counts
+     */
     public BricklinkOrderProjectionResult project(
             MarketplaceOrder marketplaceOrder,
             Collection<MarketplaceOrderItem> marketplaceOrderItems,
@@ -111,6 +126,14 @@ public class BricklinkOrderProjectionService {
         return new BricklinkOrderProjectionResult(transaction.getTransactionId(), Boolean.TRUE.equals(bricklinkOrder.getIs_invoiced()), projectedItems, projectedCosts);
     }
 
+    /**
+     * Resolves the buyer's reusable local party from the BrickLink username, creating both when absent.
+     *
+     * @param platformId the BrickLink transaction platform identifier
+     * @param order the API order containing the buyer username
+     * @param staged the staged order fallback data
+     * @return the reusable local buyer party
+     */
     private Party buyer(int platformId, Order order, MarketplaceOrder staged) {
         String buyerName = buyerName(order, staged);
         Optional<PartyExternalIdentity> identity = partyExternalIdentityDao.findByPlatformAndExternalPartyId(platformId, buyerName);
@@ -126,6 +149,15 @@ public class BricklinkOrderProjectionService {
         return party;
     }
 
+    /**
+     * Creates the canonical transaction header for a previously unseen BrickLink order.
+     *
+     * @param platformId the BrickLink transaction platform identifier
+     * @param sellerPartyId the store-owner party identifier
+     * @param buyerPartyId the resolved buyer party identifier
+     * @param order the staged order from which to derive header facts
+     * @return the newly persisted transaction
+     */
     private Transactions createTransaction(int platformId, Long sellerPartyId, Long buyerPartyId, MarketplaceOrder order) {
         Transactions transaction = Transactions.builder().transactionDate(order.getOrderedAt() == null ? LocalDate.now(ZoneOffset.UTC) : order.getOrderedAt().toLocalDate())
                 .notes("BrickLink order " + order.getExternalOrderId()).fromPartyId(sellerPartyId).toPartyId(buyerPartyId)
@@ -134,12 +166,29 @@ public class BricklinkOrderProjectionService {
         return transaction;
     }
 
+    /**
+     * Creates the order-level link that records whether the canonical projection remains mutable.
+     *
+     * @param order the staged marketplace order
+     * @param transaction the canonical transaction
+     * @return the new OPEN order-level link
+     */
     private MarketplaceOrderTransactionLink createHeaderLink(MarketplaceOrder order, Transactions transaction) {
         return linkDao.insert(MarketplaceOrderTransactionLink.builder().marketplaceOrderId(order.getMarketplaceOrderId())
                 .transactionId(transaction.getTransactionId()).linkTypeCode(ORDER_LINK).linkStatusCode(OPEN)
                 .linkedAt(ZonedDateTime.now(ZoneOffset.UTC)).build());
     }
 
+    /**
+     * Writes an idempotent immutable party snapshot for a transaction role.
+     *
+     * @param transaction the canonical transaction
+     * @param party the reusable party supplying fallback contact data
+     * @param role the transaction role, such as SELLER or BUYER
+     * @param displayName the order-time display name
+     * @param address the normalized BrickLink shipping address when available
+     * @param email the order-time email address
+     */
     private void snapshot(Transactions transaction, Party party, String role, String displayName, Address address, String email) {
         transactionPartySnapshotDao.upsert(TransactionPartySnapshot.builder().transactionId(transaction.getTransactionId())
                 .partyId(party.getPartyId()).partyRoleCode(role).displayName(displayName)
@@ -149,6 +198,15 @@ public class BricklinkOrderProjectionService {
                 .country(address == null ? party.getPartyCountry() : null).phone(party.getPartyPhone()).email(email).capturedAt(ZonedDateTime.now(ZoneOffset.UTC)).build());
     }
 
+    /**
+     * Reconciles current staged order lines to canonical sale items and final-price revenue.
+     *
+     * @param transaction the canonical transaction
+     * @param order the staged marketplace order
+     * @param items the current staged order lines
+     * @param links existing order-item links indexed by staged line identifier
+     * @return the number of current lines projected
+     */
     private int reconcileItems(Transactions transaction, MarketplaceOrder order, Collection<MarketplaceOrderItem> items, Map<Integer, MarketplaceOrderTransactionLink> links) {
         int count = 0;
         for (MarketplaceOrderItem item : items) {
@@ -175,6 +233,12 @@ public class BricklinkOrderProjectionService {
         return count;
     }
 
+    /**
+     * Marks formerly active lines absent from the current open order as unlinked without deleting history.
+     *
+     * @param items the current staged order lines
+     * @param links existing order-item links indexed by staged line identifier
+     */
     private void unlinkRemovedOpenItems(Collection<MarketplaceOrderItem> items, Map<Integer, MarketplaceOrderTransactionLink> links) {
         Set<Integer> currentIds = items.stream().map(MarketplaceOrderItem::getMarketplaceOrderItemId).collect(Collectors.toSet());
         links.values().stream()
@@ -187,6 +251,14 @@ public class BricklinkOrderProjectionService {
                 });
     }
 
+    /**
+     * Replaces mutable open-order cost facts with the detailed BrickLink cost components.
+     *
+     * @param transaction the canonical transaction
+     * @param cost the BrickLink order-cost payload
+     * @param fallbackCurrency staged order currency used when the cost payload omits one
+     * @return the number of non-null cost facts persisted
+     */
     private int replaceCosts(Transactions transaction, Cost cost, String fallbackCurrency) {
         transactionCostDao.deleteTransactionCosts(transaction.getTransactionId());
         if (cost == null) return 0;
@@ -200,9 +272,16 @@ public class BricklinkOrderProjectionService {
         return count;
     }
 
+    /** Returns the required stable BrickLink buyer username, using staged data only as a fallback. */
     private String buyerName(Order order, MarketplaceOrder staged) { return required(order.getBuyer_name() == null ? staged.getBuyerDisplayName() : order.getBuyer_name(), "buyer username", null); }
+
+    /** Returns the seller display name supplied by BrickLink or the configured seller party fallback. */
     private String sellerName(Order order, Party seller) { return order.getSeller_name() == null ? seller.getPartyLastName() : order.getSeller_name(); }
+
+    /** Converts a BrickLink ISO currency string to the canonical supported currency enum. */
     private CurrencyCode currency(String value) { try { return CurrencyCode.valueOf(value.trim().toUpperCase()); } catch (IllegalArgumentException e) { throw new IllegalStateException("Unsupported BrickLink currency: " + value, e); } }
+
+    /** Validates a required BrickLink fact and identifies the source order line when applicable. */
     private <T> T required(T value, String field, MarketplaceOrderItem item) { if (value == null || value instanceof String text && text.isBlank()) throw new IllegalStateException("Missing BrickLink " + field + (item == null ? "" : " for " + item.getExternalOrderItemId())); return value; }
     private record CostFact(String type, Double amount, String notes) { }
 }
