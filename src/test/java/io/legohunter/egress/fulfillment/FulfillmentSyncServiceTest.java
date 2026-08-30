@@ -21,6 +21,8 @@ import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
+import io.legohunter.data.dto.Carrier;
+import io.legohunter.data.dto.Transactions;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -50,6 +52,7 @@ class FulfillmentSyncServiceTest {
     private MarketplaceOrderItemDao marketplaceOrderItemDao;
     private MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
     private ItemInventoryDao itemInventoryDao;
+    private CanonicalShipmentReconciliationService canonicalShipmentReconciliationService;
     private FulfillmentOrderItemImageResolver orderItemImageResolver;
     private FulfillmentSyncProperties properties;
     private ObjectMapper objectMapper;
@@ -63,9 +66,17 @@ class FulfillmentSyncServiceTest {
         marketplaceOrderItemDao = mock(MarketplaceOrderItemDao.class);
         marketplaceOrderPayloadDao = mock(MarketplaceOrderPayloadDao.class);
         itemInventoryDao = mock(ItemInventoryDao.class);
+        canonicalShipmentReconciliationService = mock(CanonicalShipmentReconciliationService.class);
         orderItemImageResolver = mock(FulfillmentOrderItemImageResolver.class);
         properties = new FulfillmentSyncProperties();
         objectMapper = new ObjectMapper().findAndRegisterModules();
+        when(canonicalShipmentReconciliationService.findInvoicedOrder(any(MarketplaceOrder.class)))
+                .thenReturn(Optional.of(canonicalOrder()));
+        when(canonicalShipmentReconciliationService.persistTrackedShipment(
+                any(CanonicalShipmentReconciliationService.CanonicalFulfillmentOrder.class),
+                any(Shipment.class),
+                any(ShipStationOrder.class)
+        )).thenAnswer(invocation -> canonicalShipment(invocation.getArgument(1)));
         service = new FulfillmentSyncService(
                 shipStationRestClient,
                 bricklinkRestClient,
@@ -73,6 +84,7 @@ class FulfillmentSyncServiceTest {
                 marketplaceOrderItemDao,
                 marketplaceOrderPayloadDao,
                 itemInventoryDao,
+                canonicalShipmentReconciliationService,
                 new BricklinkShipStationOrderMapper(),
                 orderItemImageResolver,
                 new FulfillmentSyncMetricsService(new SimpleMeterRegistry()),
@@ -92,6 +104,24 @@ class FulfillmentSyncServiceTest {
         assertThat(result.ordersDiscovered()).isZero();
         assertThat(result.applied()).isFalse();
         verifyNoInteractions(shipStationRestClient, bricklinkRestClient);
+    }
+
+    @Test
+    void runOnceSkipsOrderUntilItsCanonicalProjectionIsInvoiced() {
+        MarketplaceOrder marketplaceOrder = marketplaceOrder(20, "100");
+        when(marketplaceOrderDao.findFulfillmentCandidates("BRICKLINK", properties.effectiveStatuses(), 25))
+                .thenReturn(new LinkedHashSet<>(List.of(marketplaceOrder)));
+        when(canonicalShipmentReconciliationService.findInvoicedOrder(marketplaceOrder))
+                .thenReturn(Optional.empty());
+
+        FulfillmentSyncResult result = service.runOnce();
+
+        assertThat(result.outcome()).isEqualTo("SUCCESS");
+        assertThat(result.ordersDiscovered()).isEqualTo(1);
+        assertThat(result.ordersLoaded()).isZero();
+        assertThat(result.ordersMapped()).isZero();
+        assertThat(result.ordersSkipped()).isEqualTo(1);
+        verifyNoInteractions(shipStationRestClient, bricklinkRestClient, marketplaceOrderPayloadDao);
     }
 
     @Test
@@ -231,6 +261,7 @@ class FulfillmentSyncServiceTest {
         when(shipStationRestClient.getShipments(Map.of("orderId", 42L)))
                 .thenReturn(ShipmentsList.builder()
                         .shipments(List.of(Shipment.builder()
+                                .shipmentId(901L)
                                 .orderId(42L)
                                 .trackingNumber("940011120621")
                                 .voided(false)
@@ -445,6 +476,7 @@ class FulfillmentSyncServiceTest {
         when(shipStationRestClient.getShipments(Map.of("orderId", 42L)))
                 .thenReturn(ShipmentsList.builder()
                         .shipments(List.of(Shipment.builder()
+                                .shipmentId(901L)
                                 .orderId(42L)
                                 .trackingNumber("940011120621")
                                 .voided(false)
@@ -499,5 +531,24 @@ class FulfillmentSyncServiceTest {
                 .marketplaceOrderId(20)
                 .itemInventoryId(itemInventoryId)
                 .build();
+    }
+
+    private static CanonicalShipmentReconciliationService.CanonicalFulfillmentOrder canonicalOrder() {
+        return new CanonicalShipmentReconciliationService.CanonicalFulfillmentOrder(
+                Transactions.builder().transactionId(701L).build(),
+                List.of(702L)
+        );
+    }
+
+    private static CanonicalShipmentReconciliationService.CanonicalShipment canonicalShipment(Shipment shipStationShipment) {
+        return new CanonicalShipmentReconciliationService.CanonicalShipment(
+                io.legohunter.data.dto.Shipment.builder()
+                        .shipmentId(801L)
+                        .shipmentTrackingNumber(shipStationShipment.getTrackingNumber())
+                        .build(),
+                Carrier.builder().carrierCode("USPS")
+                        .trackingUrlPattern("https://tools.usps.com/go/TrackConfirmAction.action?tLabels=%s")
+                        .build()
+        );
     }
 }

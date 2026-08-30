@@ -16,6 +16,7 @@ import io.legohunter.data.dao.ItemInventoryDao;
 import io.legohunter.data.dao.MarketplaceOrderDao;
 import io.legohunter.data.dao.MarketplaceOrderItemDao;
 import io.legohunter.data.dao.MarketplaceOrderPayloadDao;
+import io.legohunter.data.dto.Carrier;
 import io.legohunter.data.dto.MarketplaceOrder;
 import io.legohunter.data.dto.MarketplaceOrderItem;
 import io.legohunter.data.dto.MarketplaceOrderPayload;
@@ -57,6 +58,7 @@ public class FulfillmentSyncService {
     private final MarketplaceOrderItemDao marketplaceOrderItemDao;
     private final MarketplaceOrderPayloadDao marketplaceOrderPayloadDao;
     private final ItemInventoryDao itemInventoryDao;
+    private final CanonicalShipmentReconciliationService canonicalShipmentReconciliationService;
     private final BricklinkShipStationOrderMapper shipStationOrderMapper;
     private final FulfillmentOrderItemImageResolver orderItemImageResolver;
     private final FulfillmentSyncMetricsService metricsService;
@@ -107,6 +109,18 @@ public class FulfillmentSyncService {
 
         for (MarketplaceOrder candidate : candidates) {
             try {
+                Optional<CanonicalShipmentReconciliationService.CanonicalFulfillmentOrder> canonicalOrder =
+                        canonicalShipmentReconciliationService.findInvoicedOrder(candidate);
+                if (canonicalOrder.isEmpty()) {
+                    counters.add(FulfillmentOrderAction.skipped("SKIPPED_NOT_INVOICED", null, false));
+                    log.info(
+                            "fulfillment.sync_job.order_skipped provider={} marketplaceOrderId={} externalOrderId={} reason=not_invoiced_or_not_projected",
+                            properties.effectiveMetricsTag(),
+                            candidate.getMarketplaceOrderId(),
+                            candidate.getExternalOrderId()
+                    );
+                    continue;
+                }
                 Optional<LoadedBricklinkOrder> loadedOrder = loadOrder(candidate);
                 if (loadedOrder.isEmpty()) {
                     payloadsMissing++;
@@ -122,12 +136,19 @@ public class FulfillmentSyncService {
                 );
                 ordersMapped++;
                 mappedOrderNumbers.add(shipStationOrder.getOrderNumber());
-                FulfillmentOrderAction action = fulfillOrder(candidate, loadedOrder.get(), shipStationOrder, apply);
+                FulfillmentOrderAction action = fulfillOrder(
+                        candidate,
+                        canonicalOrder.get(),
+                        loadedOrder.get(),
+                        shipStationOrder,
+                        apply
+                );
                 counters.add(action);
                 log.info(
-                        "fulfillment.sync_job.order_mapped provider={} marketplaceOrderId={} externalOrderId={} orderNumber={} orderStatus={} itemCount={} action={} shipStationOrderId={} trackingPresent={} apply={}",
+                        "fulfillment.sync_job.order_mapped provider={} marketplaceOrderId={} transactionId={} externalOrderId={} orderNumber={} orderStatus={} itemCount={} action={} shipStationOrderId={} trackingPresent={} apply={}",
                         properties.effectiveMetricsTag(),
                         candidate.getMarketplaceOrderId(),
+                        canonicalOrder.get().transaction().getTransactionId(),
                         candidate.getExternalOrderId(),
                         shipStationOrder.getOrderNumber(),
                         shipStationOrder.getOrderStatus(),
@@ -197,6 +218,7 @@ public class FulfillmentSyncService {
 
     private FulfillmentOrderAction fulfillOrder(
             MarketplaceOrder marketplaceOrder,
+            CanonicalShipmentReconciliationService.CanonicalFulfillmentOrder canonicalOrder,
             LoadedBricklinkOrder loadedOrder,
             ShipStationOrder desiredOrder,
             boolean apply
@@ -207,7 +229,18 @@ public class FulfillmentSyncService {
 
         Optional<ShipStationOrder> existingOrder = findExistingShipStationOrder(desiredOrder.getOrderNumber());
         if (existingOrder.isPresent() && existingOrder.get().isShipped()) {
-            TrackingDetails tracking = findTracking(existingOrder.get());
+            TrackedShipment trackedShipment = findTrackedShipment(existingOrder.get());
+            CanonicalShipmentReconciliationService.CanonicalShipment canonicalShipment =
+                    canonicalShipmentReconciliationService.persistTrackedShipment(
+                            canonicalOrder,
+                            trackedShipment.shipment(),
+                            existingOrder.get()
+                    );
+            TrackingDetails tracking = new TrackingDetails(
+                    canonicalShipment.shipment().getShipmentTrackingNumber(),
+                    trackingUrl(canonicalShipment.carrier(), existingOrder.get(), trackedShipment.shipment().getTrackingNumber()),
+                    trackedShipment.dateShipped()
+            );
             reconcileShippedOrder(marketplaceOrder, loadedOrder.order(), tracking);
             return FulfillmentOrderAction.shippedReconciled(existingOrder.get().getOrderId(), true);
         }
@@ -233,7 +266,7 @@ public class FulfillmentSyncService {
         return Optional.of(orders.getFirst());
     }
 
-    private TrackingDetails findTracking(ShipStationOrder shipStationOrder) {
+    private TrackedShipment findTrackedShipment(ShipStationOrder shipStationOrder) {
         Long orderId = shipStationOrder.getOrderId();
         if (orderId == null) {
             throw new IllegalStateException("Cannot fetch tracking for shipped ShipStation order without orderId [%s]".formatted(shipStationOrder.getOrderNumber()));
@@ -244,13 +277,10 @@ public class FulfillmentSyncService {
         return shipments.stream()
                 .filter(shipment -> !Boolean.TRUE.equals(shipment.getVoided()))
                 .filter(shipment -> present(shipment.getTrackingNumber()))
-                .map(shipment -> new TrackingDetails(
-                        shipment.getTrackingNumber(),
-                        trackingUrl(shipStationOrder, shipment.getTrackingNumber()),
-                        shippedAt(shipment)
-                ))
+                .filter(shipment -> shipment.getShipmentId() != null)
+                .map(shipment -> new TrackedShipment(shipment, shippedAt(shipment)))
                 .findFirst()
-                .orElseThrow(() -> new IllegalStateException("Unable to find non-voided tracking for shipped ShipStation orderId [%s]".formatted(orderId)));
+                .orElseThrow(() -> new IllegalStateException("Unable to find non-voided tracked ShipStation shipment with an id for orderId [%s]".formatted(orderId)));
     }
 
     private void reconcileShippedOrder(MarketplaceOrder marketplaceOrder, Order order, TrackingDetails tracking) {
@@ -349,8 +379,10 @@ public class FulfillmentSyncService {
         }
     }
 
-    private String trackingUrl(ShipStationOrder shipStationOrder, String trackingNumber) {
-        String pattern = isDomestic(shipStationOrder) ? DOMESTIC_TRACKING_URL : INTERNATIONAL_TRACKING_URL;
+    private String trackingUrl(Carrier carrier, ShipStationOrder shipStationOrder, String trackingNumber) {
+        String pattern = carrier == null || !present(carrier.getTrackingUrlPattern())
+                ? (isDomestic(shipStationOrder) ? DOMESTIC_TRACKING_URL : INTERNATIONAL_TRACKING_URL)
+                : carrier.getTrackingUrlPattern();
         try {
             return URI.create(pattern.formatted(trackingNumber)).toString();
         } catch (IllegalArgumentException e) {
@@ -469,6 +501,9 @@ public class FulfillmentSyncService {
     }
 
     private record LoadedBricklinkOrder(Order order, List<OrderItem> orderItems) {
+    }
+
+    private record TrackedShipment(Shipment shipment, ZonedDateTime dateShipped) {
     }
 
     private record TrackingDetails(String trackingNumber, String trackingUrl, ZonedDateTime dateShipped) {
